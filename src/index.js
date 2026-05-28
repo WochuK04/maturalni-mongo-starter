@@ -21,6 +21,13 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+console.log('ENV CHECK', {
+  hasMongoUri: Boolean(process.env.MONGO_URI),
+  hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+  mongoDbName: process.env.MONGO_DB_NAME || null,
+  nodeEnv: process.env.NODE_ENV
+});
+
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'change-me',
