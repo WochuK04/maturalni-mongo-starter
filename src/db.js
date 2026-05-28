@@ -13,4 +13,9 @@ export async function connectToDatabase() {
   return db;
 }
 
-export default client;
+export function getDb() {
+  if (!db) {
+    throw new Error('Database not connected yet');
+  }
+  return db;
+}
