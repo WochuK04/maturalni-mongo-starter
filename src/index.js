@@ -1,43 +1,22 @@
-import express from 'express';
 import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
 import session from 'express-session';
+import MongoStore from 'connect-mongo';
 import passport from 'passport';
 import { ObjectId } from 'mongodb';
 
 import { getDb } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin } from './auth.js';
-import session from 'express-session';
-import MongoStore from 'connect-mongo';
-
-app.set('trust proxy', 1);
-
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({
-      mongoUrl: process.env.MONGO_URI,
-      dbName: process.env.MONGO_DB_NAME || 'equipment_db',
-      collectionName: 'sessions'
-    }),
-    cookie: {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7
-    }
-  })
-);
-
-
-dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
 setupPassport();
+
+app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -47,10 +26,16 @@ app.use(
     secret: process.env.SESSION_SECRET || 'change-me',
     resave: false,
     saveUninitialized: false,
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URI,
+      dbName: process.env.MONGO_DB_NAME || 'equipment_db',
+      collectionName: 'sessions'
+    }),
     cookie: {
       httpOnly: true,
-      secure: false,
-      sameSite: 'lax'
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 24 * 7
     }
   })
 );
@@ -427,21 +412,21 @@ app.post('/loans/borrow', requireAuth, async (req, res) => {
   }
 
   const loan = {
-  itemId: item._id,
-  itemCode: normalizedItemCode,
-  userEmail,
-  quantity: 1,
-  fromLocation: item.currentLocation,
-  targetUseLocation: String(targetUseLocation || '').trim(),
-  status: 'active',
-  borrowedAt: new Date(),
-  dueAt: null,
-  returnedAt: null,
-  borrowNote: String(borrowNote || '').trim(),
-  returnNote: null,
-  createdByEmail: req.user.email,
-  closedByEmail: null
-};
+    itemId: item._id,
+    itemCode: normalizedItemCode,
+    userEmail,
+    quantity: 1,
+    fromLocation: item.currentLocation,
+    targetUseLocation: String(targetUseLocation || '').trim(),
+    status: 'active',
+    borrowedAt: new Date(),
+    dueAt: null,
+    returnedAt: null,
+    borrowNote: String(borrowNote || '').trim(),
+    returnNote: null,
+    createdByEmail: req.user.email,
+    closedByEmail: null
+  };
 
   const loanResult = await db.collection(collections.loans).insertOne(loan);
 
@@ -510,29 +495,29 @@ app.post('/loans/return/:id', requireAuth, async (req, res) => {
   );
 
   const itemUpdateResult = await db.collection(collections.items).updateOne(
-  { itemCode: String(loan.itemCode || '').trim().toUpperCase() },
-  {
-    $set: {
-      operationalStatus: 'available',
-      currentLocation: String(returnLocation || 'Magazyn').trim(),
-      assignedToEmail: null,
-      assignedToName: null,
-      updatedAt: new Date()
+    { itemCode: String(loan.itemCode || '').trim().toUpperCase() },
+    {
+      $set: {
+        operationalStatus: 'available',
+        currentLocation: String(returnLocation || 'Magazyn').trim(),
+        assignedToEmail: null,
+        assignedToName: null,
+        updatedAt: new Date()
+      }
     }
-  }
-);
+  );
 
-console.log('RETURN ITEM UPDATE RESULT', {
-  loanItemCode: loan.itemCode,
-  matchedCount: itemUpdateResult.matchedCount,
-  modifiedCount: itemUpdateResult.modifiedCount
-});
-
-if (itemUpdateResult.matchedCount === 0) {
-  return res.status(500).json({
-    message: `Nie znaleziono sprzętu do zwrotu dla itemCode ${loan.itemCode}`
+  console.log('RETURN ITEM UPDATE RESULT', {
+    loanItemCode: loan.itemCode,
+    matchedCount: itemUpdateResult.matchedCount,
+    modifiedCount: itemUpdateResult.modifiedCount
   });
-}
+
+  if (itemUpdateResult.matchedCount === 0) {
+    return res.status(500).json({
+      message: `Nie znaleziono sprzętu do zwrotu dla itemCode ${loan.itemCode}`
+    });
+  }
 
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
@@ -817,21 +802,21 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
   }
 
   const loan = {
-  itemId: item._id,
-  itemCode: requestDoc.itemCode,
-  userEmail: requestDoc.requesterEmail,
-  quantity: 1,
-  fromLocation: item.currentLocation,
-  targetUseLocation: requestDoc.targetUseLocation || 'Dom',
-  status: 'active',
-  borrowedAt: new Date(),
-  dueAt: requestDoc.requestedReturnDate ? new Date(requestDoc.requestedReturnDate) : null,
-  returnedAt: null,
-  borrowNote: requestDoc.note || requestDoc.purpose || '',
-  returnNote: null,
-  createdByEmail: req.user.email,
-  closedByEmail: null
-};
+    itemId: item._id,
+    itemCode: requestDoc.itemCode,
+    userEmail: requestDoc.requesterEmail,
+    quantity: 1,
+    fromLocation: item.currentLocation,
+    targetUseLocation: requestDoc.targetUseLocation || 'Dom',
+    status: 'active',
+    borrowedAt: new Date(),
+    dueAt: requestDoc.requestedReturnDate ? new Date(requestDoc.requestedReturnDate) : null,
+    returnedAt: null,
+    borrowNote: requestDoc.note || requestDoc.purpose || '',
+    returnNote: null,
+    createdByEmail: req.user.email,
+    closedByEmail: null
+  };
 
   const loanResult = await db.collection(collections.loans).insertOne(loan);
 
