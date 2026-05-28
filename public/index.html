@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maturalni Sprzęt — demo</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="topbar-copy">
+        <p class="eyebrow">Demo lokalne</p>
+        <h1>Maturalni — obieg sprzętu</h1>
+        <p class="muted intro">
+          Frontend z logowaniem Google, sesją po stronie backendu i nowym widokiem kart sprzętu.
+        </p>
+      </div>
+
+      <div class="topbar-actions">
+        <div id="adminQuickActions" class="admin-quick-actions" hidden>
+          <button
+            id="toggleWorkspaceBtn"
+            class="btn btn-secondary"
+            type="button"
+            aria-pressed="false"
+          >
+            Pokaż panel admina
+          </button>
+        </div>
+
+        <div class="user-switcher card" id="authBox">
+          <p class="muted">Sprawdzanie sesji...</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="grid stats" id="stats"></section>
+
+    <nav class="view-switcher" id="viewSwitcher" hidden aria-label="Przełączanie widoków">
+      <button class="view-tab active" data-view="available" type="button">
+        Dostępny sprzęt
+      </button>
+      <button class="view-tab" data-view="requests" type="button">
+        Moje wnioski
+      </button>
+      <button class="view-tab" data-view="returns" type="button">
+        Zwróć sprzęt
+      </button>
+      <button class="view-tab" data-view="admin" type="button" id="adminViewTab" hidden>
+        Panel admina
+      </button>
+    </nav>
+
+    <section class="view-panel active" id="availablePanel" data-panel="available" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Użytkownik</p>
+            <h2>Dostępny sprzęt</h2>
+          </div>
+          <button id="loadAvailableBtn" class="btn btn-secondary" type="button">
+            Odśwież listę
+          </button>
+        </div>
+
+        <div class="toolbar">
+          <input
+            id="availableSearchInput"
+            class="search-input"
+            type="search"
+            placeholder="Szukaj po nazwie, kodzie, kategorii, tagu..."
+          />
+        </div>
+
+        <div id="availableList" class="equipment-grid"></div>
+      </section>
+    </section>
+
+    <section class="view-panel" id="requestsPanel" data-panel="requests" hidden>
+      <section class="grid two request-layout">
+        <section class="card card-section">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Użytkownik</p>
+              <h2>Moje wnioski</h2>
+            </div>
+            <button id="loadMyRequestsBtn" class="btn btn-secondary" type="button">
+              Odśwież wnioski
+            </button>
+          </div>
+          <div id="myRequestsList" class="list"></div>
+        </section>
+
+        <section class="card card-section" id="requestFormCard" hidden>
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Nowy wniosek</p>
+              <h2>Formularz wypożyczenia</h2>
+            </div>
+          </div>
+
+          <form id="loanRequestForm" class="stack-form">
+            <input type="hidden" id="requestItemCode" name="itemCode" />
+
+            <label class="field">
+              <span>Sprzęt</span>
+              <input id="requestItemName" name="itemName" type="text" disabled />
+            </label>
+
+            <label class="field">
+              <span>Cel wypożyczenia</span>
+              <input
+                id="purpose"
+                name="purpose"
+                type="text"
+                placeholder="Np. webinar, nagranie, praca zdalna"
+                required
+              />
+            </label>
+
+            <label class="field">
+              <span>Miejsce użycia</span>
+              <input
+                id="targetUseLocation"
+                name="targetUseLocation"
+                type="text"
+                value="Dom"
+              />
+            </label>
+
+            <label class="field">
+              <span>Planowana data zwrotu</span>
+              <input id="requestedReturnDate" name="requestedReturnDate" type="date" />
+            </label>
+
+            <label class="field">
+              <span>Notatka</span>
+              <textarea
+                id="requestNote"
+                name="note"
+                rows="4"
+                placeholder="Dodatkowe informacje dla admina"
+              ></textarea>
+            </label>
+
+            <div class="actions-inline">
+              <button class="btn btn-primary" type="submit">Wyślij wniosek</button>
+              <button class="btn btn-secondary" id="cancelRequestFormBtn" type="button">
+                Anuluj
+              </button>
+            </div>
+          </form>
+        </section>
+      </section>
+    </section>
+
+    <section class="view-panel" id="returnsPanel" data-panel="returns" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Użytkownik</p>
+            <h2>Zwróć sprzęt</h2>
+          </div>
+          <button id="loadMyLoansBtn" class="btn btn-secondary" type="button">
+            Odśwież moje rzeczy
+          </button>
+        </div>
+        <div id="myLoansList" class="list"></div>
+      </section>
+    </section>
+
+    <section class="view-panel" id="adminPanel" data-panel="admin" hidden>
+      <section class="card admin-card" id="adminSection">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Podgląd całości</h2>
+          </div>
+
+          <div class="actions-inline actions-wrap">
+            <button id="loadAdminItemsBtn" class="btn btn-secondary" type="button">Sprzęt</button>
+            <button id="loadAdminLoansBtn" class="btn btn-secondary" type="button">Wypożyczenia</button>
+            <button id="loadAdminRequestsBtn" class="btn btn-secondary" type="button">Wnioski</button>
+            <button id="loadAuditLogsBtn" class="btn btn-secondary" type="button">Historia</button>
+          </div>
+        </div>
+
+        <form id="createItemForm" class="admin-form">
+          <input name="itemCode" placeholder="Kod, np. CAM-001" required />
+          <input name="category" placeholder="Kategoria, np. Kamera" required />
+          <input name="name" placeholder="Nazwa sprzętu" required />
+          <input name="currentLocation" placeholder="Lokalizacja" value="Magazyn" />
+          <input name="conditionStatus" placeholder="Stan techniczny" value="ok" />
+          <input name="notes" placeholder="Uwagi" />
+          <button type="submit" class="btn btn-primary">Dodaj sprzęt</button>
+        </form>
+
+        <form id="auditFilterForm" class="admin-form audit-form" hidden>
+          <input name="actorEmail" placeholder="Mail wykonującego" />
+          <input name="entityType" placeholder="Typ encji, np. item / loan / loan_request" />
+          <input name="actionType" placeholder="Akcja, np. loan_request_created" />
+          <input name="itemCode" placeholder="Kod sprzętu" />
+          <input name="limit" placeholder="Limit" value="100" />
+          <button type="submit" class="btn btn-primary">Filtruj historię</button>
+        </form>
+
+        <div id="adminContent" class="admin-content"></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="itemDetailsModal" class="item-modal">
+    <form method="dialog" class="modal-shell">
+      <button
+        class="modal-close"
+        id="closeItemDetailsModalBtn"
+        type="submit"
+        aria-label="Zamknij okno"
+      >
+        ×
+      </button>
+    </form>
+
+    <div class="modal-layout">
+      <div class="modal-media">
+        <img
+          id="modalItemImage"
+          class="modal-image"
+          src=""
+          alt="Zdjęcie sprzętu"
+        />
+      </div>
+
+      <div class="modal-content">
+        <div class="modal-top">
+          <div class="badge-row">
+            <span id="modalItemStatus" class="badge badge-status">Status</span>
+            <span id="modalItemCategory" class="badge">Kategoria</span>
+          </div>
+
+          <h3 id="modalItemTitle" class="modal-title">Szczegóły sprzętu</h3>
+          <p id="modalItemSubtitle" class="modal-subtitle muted"></p>
+        </div>
+
+        <dl class="details-grid">
+          <div class="detail-item">
+            <dt>Kod</dt>
+            <dd id="modalItemCode">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Marka / model</dt>
+            <dd id="modalItemBrandModel">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Lokalizacja</dt>
+            <dd id="modalItemLocation">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Stan techniczny</dt>
+            <dd id="modalItemCondition">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>QR</dt>
+            <dd id="modalItemQr">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Przypisanie</dt>
+            <dd id="modalItemAssigned">-</dd>
+          </div>
+        </dl>
+
+        <div class="modal-block">
+          <h4>Opis</h4>
+          <p id="modalItemDetails" class="modal-paragraph muted">Brak opisu.</p>
+        </div>
+
+        <div class="modal-block">
+          <h4>Tagi</h4>
+          <div id="modalItemTags" class="tag-list"></div>
+        </div>
+
+        <div class="modal-block">
+          <h4>Aktywne wypożyczenie</h4>
+          <p id="modalActiveLoan" class="modal-paragraph muted">
+            Brak aktywnego wypożyczenia.
+          </p>
+        </div>
+
+        <div class="actions-inline modal-actions">
+          <button id="modalRequestBtn" class="btn btn-primary" type="button">
+            Złóż wniosek
+          </button>
+          <button id="modalCloseBtn" class="btn btn-secondary" type="button">
+            Zamknij
+          </button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <template id="availableItemTemplate">
+    <article class="equipment-card">
+      <div class="equipment-card-media">
+        <img class="equipment-image" src="" alt="Zdjęcie sprzętu" loading="lazy" />
+      </div>
+
+      <div class="equipment-card-body">
+        <div class="equipment-card-head">
+          <div>
+            <p class="equipment-category"></p>
+            <h3 class="equipment-title"></h3>
+          </div>
+          <span class="badge equipment-status"></span>
+        </div>
+
+        <p class="equipment-code muted"></p>
+        <p class="equipment-description muted"></p>
+
+        <div class="tag-list equipment-tags"></div>
+
+        <div class="equipment-meta">
+          <span class="meta-pill equipment-location"></span>
+          <span class="meta-pill equipment-condition"></span>
+        </div>
+      </div>
+
+      <div class="equipment-card-footer">
+        <button class="btn btn-secondary details-btn" type="button">Szczegóły</button>
+        <button class="btn btn-primary request-btn" type="button">Złóż wniosek</button>
+      </div>
+    </article>
+  </template>
+
+  <template id="requestItemTemplate">
+    <article class="item-row">
+      <div>
+        <h3 class="item-title"></h3>
+        <p class="item-meta"></p>
+      </div>
+
+      <div class="actions-inline">
+        <span class="request-status badge"></span>
+        <button class="btn btn-secondary cancel-request-btn" type="button">Anuluj</button>
+      </div>
+    </article>
+  </template>
+
+  <template id="loanItemTemplate">
+    <article class="item-row">
+      <div>
+        <h3 class="item-title"></h3>
+        <p class="item-meta"></p>
+      </div>
+
+      <form class="inline-form return-form">
+        <input
+          class="return-location"
+          type="text"
+          placeholder="Zwrot do"
+          value="Magazyn"
+        />
+        <button class="btn btn-primary" type="submit">Oddaj</button>
+      </form>
+    </article>
+  </template>
+
+  <template id="adminRequestTemplate">
+    <article class="item-row">
+      <div>
+        <h3 class="item-title"></h3>
+        <p class="item-meta"></p>
+      </div>
+
+      <form class="inline-form admin-request-form">
+        <input
+          class="decision-note"
+          type="text"
+          placeholder="Notatka do decyzji"
+        />
+        <button class="btn btn-primary approve-btn" type="button">Akceptuj</button>
+        <button class="btn btn-secondary reject-btn" type="button">Odrzuć</button>
+      </form>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>
