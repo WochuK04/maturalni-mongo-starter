@@ -7,13 +7,15 @@ import MongoStore from 'connect-mongo';
 import passport from 'passport';
 import { ObjectId } from 'mongodb';
 
-import { getDb } from './db.js';
+import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin } from './auth.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
+// najpierw łączymy się z bazą, potem konfigurujemy Passport
+await connectToDatabase();
 setupPassport();
 
 app.set('trust proxy', 1);
