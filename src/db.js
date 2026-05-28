@@ -1,18 +1,16 @@
 import { MongoClient } from 'mongodb';
-import dotenv from 'dotenv';
 
-dotenv.config();
-
-const uri = process.env.MONGODB_URI
-const dbName = process.env.DB_NAME
-
+const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
-export async function getDb() {
-  await client.connect();
-  return client.db(dbName);
+let db;
+
+export async function connectToDatabase() {
+  if (!db) {
+    await client.connect();
+    db = client.db(process.env.MONGO_DB_NAME || 'equipment_db');
+  }
+  return db;
 }
 
-export async function closeDb() {
-  await client.close();
-}
+export default client;
