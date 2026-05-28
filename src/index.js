@@ -7,6 +7,30 @@ import { ObjectId } from 'mongodb';
 import { getDb } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin } from './auth.js';
+import session from 'express-session';
+import MongoStore from 'connect-mongo';
+
+app.set('trust proxy', 1);
+
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URI,
+      dbName: process.env.MONGO_DB_NAME || 'equipment_db',
+      collectionName: 'sessions'
+    }),
+    cookie: {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 24 * 7
+    }
+  })
+);
+
 
 dotenv.config();
 
@@ -940,16 +964,25 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
   res.json(logs);
 });
 
-async function start() {
-  const db = await getDb();
-  await ensureIndexes(db);
+let bootPromise = null;
 
-  app.listen(port, () => {
-    console.log(`API listening on http://localhost:${port}`);
-  });
+function ensureBoot() {
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      const db = await getDb();
+      await ensureIndexes(db);
+    })();
+  }
+  return bootPromise;
 }
 
-start().catch((err) => {
-  console.error(err);
-  process.exit(1);
+app.use(async (req, res, next) => {
+  try {
+    await ensureBoot();
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
+
+export default app;
