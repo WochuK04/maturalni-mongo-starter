@@ -3,8 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
-const dbName = process.env.DB_NAME || 'maturalni_equipment';
+const uri = process.env.MONGODB_URI
+const dbName = process.env.DB_NAME
 
 const client = new MongoClient(uri);
 
