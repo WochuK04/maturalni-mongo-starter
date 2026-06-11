@@ -36,6 +36,7 @@ const addItemAssignee = document.getElementById('addItemAssignee');
 const addItemAssignHint = document.getElementById('addItemAssignHint');
 
 const requestFormCard = document.getElementById('requestFormCard');
+const requestLayout = document.getElementById('requestLayout');
 const loanRequestForm = document.getElementById('loanRequestForm');
 const cancelRequestFormBtn = document.getElementById('cancelRequestFormBtn');
 const requestItemCode = document.getElementById('requestItemCode');
@@ -294,6 +295,7 @@ function openRequestForm(item) {
   requestedReturnDateInput.value = '';
   requestNoteInput.value = '';
   requestFormCard.hidden = false;
+  if (requestLayout) requestLayout.classList.add('form-open');
   setActiveView('requests');
   requestFormCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -303,6 +305,7 @@ function closeRequestForm() {
   requestItemCode.value = '';
   requestItemName.value = '';
   requestFormCard.hidden = true;
+  if (requestLayout) requestLayout.classList.remove('form-open');
 }
 
 function setActiveView(view) {
@@ -890,6 +893,7 @@ async function loadUsers() {
         <th>E-mail</th>
         <th>Rola</th>
         <th>Wnioski trafiają do</th>
+        <th>Akcje</th>
       </tr>
     </thead>
   `;
@@ -956,7 +960,29 @@ async function loadUsers() {
     });
     mgrTd.appendChild(mgrSelect);
 
-    tr.append(nameTd, emailTd, roleTd, mgrTd);
+    // Akcje — usuwanie użytkownika (nie można usunąć samego siebie)
+    const actionsTd = document.createElement('td');
+    if (user.email === currentUser?.email) {
+      actionsTd.innerHTML = '<span class="muted">—</span>';
+    } else {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-danger';
+      delBtn.textContent = 'Usuń';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`Usunąć użytkownika ${user.email}? Tej operacji nie można cofnąć.`)) return;
+        try {
+          await api(`/admin/users/${encodeURIComponent(user.email)}`, { method: 'DELETE' });
+          showToast(`Usunięto: ${user.email}`);
+          await loadUsers();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+      actionsTd.appendChild(delBtn);
+    }
+
+    tr.append(nameTd, emailTd, roleTd, mgrTd, actionsTd);
     tbody.appendChild(tr);
   });
 

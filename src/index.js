@@ -814,6 +814,39 @@ app.patch('/admin/users/:email', requireAuth, requireAdmin, async (req, res) => 
   res.json({ message: 'Zaktualizowano użytkownika', user: updated });
 });
 
+app.delete('/admin/users/:email', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+
+  if (email === req.user.email) {
+    return res.status(400).json({ message: 'Nie możesz usunąć własnego konta' });
+  }
+
+  const user = await db.collection(collections.users).findOne({ email });
+  if (!user) {
+    return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+  }
+
+  await db.collection(collections.users).deleteOne({ email });
+
+  // Wyzeruj routing wniosków wskazujący na usuniętego użytkownika.
+  await db.collection(collections.users).updateMany(
+    { managerEmail: email },
+    { $set: { managerEmail: null } }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'user_deleted',
+    entityType: 'user',
+    entityId: email,
+    payload: { email, fullName: user.fullName || null, role: user.role || null },
+    createdAt: new Date()
+  });
+
+  res.json({ message: 'Usunięto użytkownika' });
+});
+
 app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
 
