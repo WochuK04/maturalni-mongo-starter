@@ -252,6 +252,21 @@ app.get('/items/available', requireAuth, async (_req, res) => {
   res.json(items);
 });
 
+// Lista lokalizacji dla list rozwijanych (np. miejsce zwrotu) — dostępna dla
+// każdego zalogowanego. Łączy lokalizacje z bazy ze stałą listą zapasową.
+app.get('/locations', requireAuth, async (_req, res) => {
+  const db = await getDb();
+
+  const locationDocs = await db.collection(collections.locations)
+    .find({ isActive: { $ne: false } })
+    .sort({ name: 1 })
+    .toArray();
+
+  const locationNames = locationDocs.map(loc => loc.name).filter(Boolean);
+
+  res.json([...new Set([...locationNames, ...FALLBACK_LOCATIONS])]);
+});
+
 app.get('/items/:itemCode', requireAuth, async (req, res) => {
   const db = await getDb();
   const normalizedItemCode = normalizeItemCode(req.params.itemCode);
@@ -466,6 +481,10 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
 
   if (!itemCode) {
     return res.status(400).json({ message: 'itemCode jest wymagane' });
+  }
+
+  if (!requestedReturnDate) {
+    return res.status(400).json({ message: 'Planowana data zwrotu jest wymagana' });
   }
 
   const normalizedItemCode = normalizeItemCode(itemCode);
@@ -1384,11 +1403,15 @@ app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res)
   res.json({ message: 'Sprzęt wycofany z magazynu' });
 });
 
-app.get('/admin/loans', requireAuth, requireAdmin, async (_req, res) => {
+app.get('/admin/loans', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
+  const { status } = req.query;
+
+  const query = {};
+  if (status) query.status = String(status).trim();
 
   const loans = await db.collection(collections.loans)
-    .find({})
+    .find(query)
     .sort({ borrowedAt: -1 })
     .toArray();
 
