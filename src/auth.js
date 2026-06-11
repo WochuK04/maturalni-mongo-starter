@@ -1,7 +1,6 @@
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { collections } from './schema.js';
-import { MANAGER_EMAILS } from './manager-map.js';
 
 export function setupPassport() {
   passport.serializeUser((user, done) => {
@@ -13,8 +12,17 @@ export function setupPassport() {
     });
   });
 
-  passport.deserializeUser((user, done) => {
-    done(null, user);
+  // Przy każdym żądaniu pobieramy świeży dokument użytkownika, żeby zmiany roli
+  // / przypisanego kierownika (panel „Użytkownicy") działały bez ponownego logowania.
+  passport.deserializeUser(async (sessionUser, done) => {
+    try {
+      const { getDb } = await import('./db.js');
+      const db = await getDb();
+      const fresh = await db.collection(collections.users).findOne({ email: sessionUser.email });
+      done(null, fresh || sessionUser);
+    } catch (err) {
+      done(null, sessionUser);
+    }
   });
 
   passport.use(
@@ -45,11 +53,9 @@ export function setupPassport() {
 
           let role = existingUser?.role || 'user';
 
-          // Twardo zdefiniowane role: admin oraz kierownicy działów.
+          // Bootstrapowy admin; pozostałe role (manager) nadaje admin w panelu „Użytkownicy".
           if (email === `k.woch@${allowedDomain}`) {
             role = 'admin';
-          } else if (MANAGER_EMAILS.includes(email) && role !== 'admin') {
-            role = 'manager';
           }
 
           const update = {

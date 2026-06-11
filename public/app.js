@@ -19,6 +19,9 @@ const toggleWorkspaceBtn = document.getElementById('toggleWorkspaceBtn');
 const managerViewTab = document.getElementById('managerViewTab');
 const managerRequestsList = document.getElementById('managerRequestsList');
 
+const usersViewTab = document.getElementById('usersViewTab');
+const usersContent = document.getElementById('usersContent');
+
 const openAddItemBtn = document.getElementById('openAddItemBtn');
 const addItemModal = document.getElementById('addItemModal');
 const addItemForm = document.getElementById('addItemForm');
@@ -337,6 +340,10 @@ async function handleViewChange(view) {
     await loadManagerRequests();
   }
 
+  if (view === 'users' && currentUser?.role === 'admin') {
+    await loadUsers();
+  }
+
   if (view === 'admin' && currentUser?.role === 'admin') {
     await loadAdminItems();
   }
@@ -355,6 +362,10 @@ function setWorkspaceMode(mode) {
 
   if (adminViewTab) {
     adminViewTab.hidden = currentUser?.role !== 'admin';
+  }
+
+  if (usersViewTab) {
+    usersViewTab.hidden = currentUser?.role !== 'admin';
   }
 
   if (isAdminMode) {
@@ -376,6 +387,7 @@ function applyRoleVisibility(user) {
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
     if (managerViewTab) managerViewTab.hidden = true;
+    if (usersViewTab) usersViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
     return;
@@ -389,11 +401,13 @@ function applyRoleVisibility(user) {
   if (user.role === 'admin') {
     if (adminQuickActions) adminQuickActions.hidden = false;
     if (adminViewTab) adminViewTab.hidden = false;
+    if (usersViewTab) usersViewTab.hidden = false;
     if (adminSection) adminSection.hidden = false;
     setWorkspaceMode('admin');
   } else {
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
+    if (usersViewTab) usersViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     setWorkspaceMode('user');
   }
@@ -840,6 +854,117 @@ async function loadManagerRequests() {
   });
 }
 
+function getRoleLabel(role) {
+  switch (role) {
+    case 'admin': return 'Administrator';
+    case 'manager': return 'Kierownik';
+    default: return 'Użytkownik';
+  }
+}
+
+async function patchUser(email, body) {
+  return api(`/admin/users/${encodeURIComponent(email)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body)
+  });
+}
+
+async function loadUsers() {
+  if (currentUser?.role !== 'admin') return;
+  hideAuditFilters();
+
+  const users = await api('/admin/users');
+
+  if (!users.length) {
+    usersContent.innerHTML = '<div class="empty">Brak użytkowników.</div>';
+    return;
+  }
+
+  const managers = users.filter(u => u.role === 'manager' || u.role === 'admin');
+
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Użytkownik</th>
+        <th>E-mail</th>
+        <th>Rola</th>
+        <th>Wnioski trafiają do</th>
+      </tr>
+    </thead>
+  `;
+
+  const tbody = document.createElement('tbody');
+
+  users.forEach(user => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = user.fullName || '—';
+
+    const emailTd = document.createElement('td');
+    emailTd.textContent = user.email;
+
+    // Rola
+    const roleTd = document.createElement('td');
+    const roleSelect = document.createElement('select');
+    [['user', 'Użytkownik'], ['manager', 'Kierownik'], ['admin', 'Administrator']].forEach(([value, label]) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if ((user.role || 'user') === value) opt.selected = true;
+      roleSelect.appendChild(opt);
+    });
+    roleSelect.addEventListener('change', async () => {
+      try {
+        await patchUser(user.email, { role: roleSelect.value });
+        showToast(`Zmieniono rolę: ${user.email}`);
+        await loadUsers(); // zmiana ról wpływa na listę dostępnych kierowników
+      } catch (err) {
+        showToast(err.message);
+        roleSelect.value = user.role || 'user';
+      }
+    });
+    roleTd.appendChild(roleSelect);
+
+    // Kierownik, do którego trafiają wnioski tego użytkownika
+    const mgrTd = document.createElement('td');
+    const mgrSelect = document.createElement('select');
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = '— bezpośrednio do administracji —';
+    mgrSelect.appendChild(noneOpt);
+
+    managers
+      .filter(m => m.email !== user.email)
+      .forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.email;
+        opt.textContent = `${m.fullName || m.email} (${getRoleLabel(m.role)})`;
+        if ((user.managerEmail || '') === m.email) opt.selected = true;
+        mgrSelect.appendChild(opt);
+      });
+
+    mgrSelect.addEventListener('change', async () => {
+      try {
+        await patchUser(user.email, { managerEmail: mgrSelect.value });
+        showToast(`Zaktualizowano routing wniosków: ${user.email}`);
+      } catch (err) {
+        showToast(err.message);
+        mgrSelect.value = user.managerEmail || '';
+      }
+    });
+    mgrTd.appendChild(mgrSelect);
+
+    tr.append(nameTd, emailTd, roleTd, mgrTd);
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  usersContent.innerHTML = '';
+  usersContent.appendChild(table);
+}
+
 function formatPayload(payload) {
   if (!payload) return '';
   try {
@@ -933,9 +1058,10 @@ viewTabs.forEach((tab) => {
     const view = button.dataset.view;
 
     if (view === 'admin' && currentUser?.role !== 'admin') return;
+    if (view === 'users' && currentUser?.role !== 'admin') return;
     if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
 
-    if (view === 'admin') {
+    if (view === 'admin' || view === 'users') {
       workspaceMode = 'admin';
     } else {
       workspaceMode = 'user';
@@ -966,6 +1092,10 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadManagerRequestsBtn') {
     await handleViewChange('approvals');
+  }
+
+  if (target.id === 'loadUsersBtn') {
+    await handleViewChange('users');
   }
 
   if (target.id === 'loadAdminItemsBtn') {

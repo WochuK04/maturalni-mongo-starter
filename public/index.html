@@ -7,17 +7,35 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main class="app">
-    <header class="topbar">
-      <div class="topbar-copy">
-        <p class="eyebrow">Demo lokalne</p>
-        <h1>Maturalni — obieg sprzętu</h1>
-        <p class="muted intro">
-          Frontend z logowaniem Google, sesją po stronie backendu i nowym widokiem kart sprzętu.
-        </p>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <p class="eyebrow">Maturalni</p>
+        <h1>Obieg sprzętu</h1>
       </div>
 
-      <div class="topbar-actions">
+      <nav class="view-switcher" id="viewSwitcher" hidden aria-label="Menu nawigacyjne">
+        <button class="view-tab active" data-view="available" type="button">
+          Dostępny sprzęt
+        </button>
+        <button class="view-tab" data-view="requests" type="button">
+          Moje wnioski
+        </button>
+        <button class="view-tab" data-view="returns" type="button">
+          Zwróć sprzęt
+        </button>
+        <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
+          Akceptacje
+        </button>
+        <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
+          Użytkownicy
+        </button>
+        <button class="view-tab" data-view="admin" type="button" id="adminViewTab" hidden>
+          Panel admina
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
         <div id="adminQuickActions" class="admin-quick-actions" hidden>
           <button
             id="toggleWorkspaceBtn"
@@ -33,27 +51,18 @@
           <p class="muted">Sprawdzanie sesji...</p>
         </div>
       </div>
-    </header>
+    </aside>
 
-    <section class="grid stats" id="stats"></section>
+    <main class="content">
+      <header class="content-head">
+        <p class="eyebrow">Demo lokalne</p>
+        <h1>Maturalni — obieg sprzętu</h1>
+        <p class="muted intro">
+          Frontend z logowaniem Google, sesją po stronie backendu i nowym widokiem kart sprzętu.
+        </p>
+      </header>
 
-    <nav class="view-switcher" id="viewSwitcher" hidden aria-label="Przełączanie widoków">
-      <button class="view-tab active" data-view="available" type="button">
-        Dostępny sprzęt
-      </button>
-      <button class="view-tab" data-view="requests" type="button">
-        Moje wnioski
-      </button>
-      <button class="view-tab" data-view="returns" type="button">
-        Zwróć sprzęt
-      </button>
-      <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
-        Akceptacje
-      </button>
-      <button class="view-tab" data-view="admin" type="button" id="adminViewTab" hidden>
-        Panel admina
-      </button>
-    </nav>
+      <section class="grid stats" id="stats"></section>
 
     <section class="view-panel active" id="availablePanel" data-panel="available" hidden>
       <section class="card card-section">
@@ -188,6 +197,24 @@
       </section>
     </section>
 
+    <section class="view-panel" id="usersPanel" data-panel="users" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Użytkownicy</h2>
+            <p class="muted">
+              Nadaj rolę kierownika i ustaw, do kogo trafiają wnioski danego użytkownika.
+            </p>
+          </div>
+          <button id="loadUsersBtn" class="btn btn-secondary" type="button">
+            Odśwież
+          </button>
+        </div>
+        <div id="usersContent" class="admin-content"></div>
+      </section>
+    </section>
+
     <section class="view-panel" id="adminPanel" data-panel="admin" hidden>
       <section class="card admin-card" id="adminSection">
         <div class="section-head">
@@ -220,7 +247,8 @@
         <div id="adminContent" class="admin-content"></div>
       </section>
     </section>
-  </main>
+    </main>
+  </div>
 
   <dialog id="itemDetailsModal" class="item-modal">
     <form method="dialog" class="modal-shell">
