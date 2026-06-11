@@ -18,6 +18,10 @@ const toggleWorkspaceBtn = document.getElementById('toggleWorkspaceBtn');
 
 const managerViewTab = document.getElementById('managerViewTab');
 const managerRequestsList = document.getElementById('managerRequestsList');
+const actionBadge = document.getElementById('actionBadge');
+
+const loginGate = document.getElementById('loginGate');
+const appLayout = document.getElementById('appLayout');
 
 const usersViewTab = document.getElementById('usersViewTab');
 const usersContent = document.getElementById('usersContent');
@@ -378,7 +382,7 @@ async function handleViewChange(view) {
   }
 
   if (view === 'approvals' && (currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
-    await loadManagerRequests();
+    await loadActionItems();
   }
 
   if (view === 'users' && currentUser?.role === 'admin') {
@@ -436,8 +440,11 @@ function applyRoleVisibility(user) {
 
   viewSwitcher.hidden = false;
 
+  // Zakładka „Wymagane działania" jest wspólna dla kierowników i adminów
+  // (jedni decydują na etapie kierownika, drudzy realizują wydania).
   const isManager = user.role === 'manager';
-  if (managerViewTab) managerViewTab.hidden = !isManager;
+  const isAdmin = user.role === 'admin';
+  if (managerViewTab) managerViewTab.hidden = !(isManager || isAdmin);
 
   if (user.role === 'admin') {
     if (adminQuickActions) adminQuickActions.hidden = false;
@@ -452,6 +459,60 @@ function applyRoleVisibility(user) {
     if (adminSection) adminSection.hidden = true;
     setWorkspaceMode('user');
   }
+}
+
+// ===== Brama logowania (UI ukryte do czasu zalogowania) =====
+
+function showApp() {
+  if (loginGate) loginGate.hidden = true;
+  if (appLayout) appLayout.hidden = false;
+}
+
+function showLoginGate() {
+  if (loginGate) loginGate.hidden = false;
+  if (appLayout) appLayout.hidden = true;
+}
+
+// ===== Badge „Wymagane działania" =====
+
+function setActionBadge(count) {
+  if (!actionBadge) return;
+
+  const role = currentUser?.role;
+  if (role !== 'manager' && role !== 'admin') {
+    actionBadge.hidden = true;
+    return;
+  }
+
+  actionBadge.textContent = String(count);
+  actionBadge.hidden = count <= 0;
+}
+
+async function refreshActionBadge() {
+  if (!actionBadge) return;
+
+  const role = currentUser?.role;
+  if (role !== 'manager' && role !== 'admin') {
+    setActionBadge(0);
+    return;
+  }
+
+  try {
+    const items = await api('/my/action-items');
+    setActionBadge(Array.isArray(items) ? items.length : 0);
+  } catch {
+    // W razie błędu zostawiamy ostatnią znaną wartość badge'a.
+  }
+}
+
+let actionBadgeTimer = null;
+
+// Lekki polling, żeby kierownik/admin zobaczył nowe wnioski bez odświeżania strony.
+function startActionBadgePolling() {
+  if (actionBadgeTimer) return;
+  const role = currentUser?.role;
+  if (role !== 'manager' && role !== 'admin') return;
+  actionBadgeTimer = setInterval(refreshActionBadge, 30000);
 }
 
 function getAvailableSearchSource(item) {
@@ -615,6 +676,7 @@ async function loadSession() {
   try {
     const session = await api('/me');
     currentUser = session.user;
+    showApp();
     renderAuthBox();
     applyRoleVisibility(currentUser);
 
@@ -628,9 +690,14 @@ async function loadSession() {
       await refreshAll();
       await handleViewChange('available');
     }
+
+    await refreshActionBadge();
+    startActionBadgePolling();
   } catch {
     currentUser = null;
+    showLoginGate();
     renderAuthBox();
+    setActionBadge(0);
     stats.innerHTML = '';
     if (viewSwitcher) viewSwitcher.hidden = true;
     if (adminSection) adminSection.hidden = true;
@@ -810,6 +877,7 @@ async function loadAdminRequests() {
         showToast(`Wydano sprzęt: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
+        await refreshActionBadge();
       } catch (err) {
         showToast(err.message);
       }
@@ -825,6 +893,7 @@ async function loadAdminRequests() {
         showToast(`Odrzucono wniosek: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
+        await refreshActionBadge();
       } catch (err) {
         showToast(err.message);
       }
@@ -836,14 +905,18 @@ async function loadAdminRequests() {
   adminContent.appendChild(wrap);
 }
 
-async function loadManagerRequests() {
+// Zunifikowana lista „Wymagane działania". Każdy wniosek dostaje przyciski
+// zależne od etapu: pending_manager -> decyzja kierownika, pending_admin ->
+// realizacja przez administrację. Endpointy backendu pilnują uprawnień.
+async function loadActionItems() {
   const role = currentUser?.role;
   if (role !== 'manager' && role !== 'admin') return;
 
-  const requests = await api('/manager/loan-requests');
+  const requests = await api('/my/action-items');
+  setActionBadge(Array.isArray(requests) ? requests.length : 0);
 
   if (!requests.length) {
-    return renderEmpty(managerRequestsList, 'Brak wniosków oczekujących na Twoją decyzję.');
+    return renderEmpty(managerRequestsList, 'Brak wniosków wymagających Twojej decyzji.');
   }
 
   managerRequestsList.innerHTML = '';
@@ -856,17 +929,25 @@ async function loadManagerRequests() {
     const approveBtn = node.querySelector('.approve-btn');
     const rejectBtn = node.querySelector('.reject-btn');
 
-    approveBtn.textContent = 'Przekaż do administracji';
+    const isManagerStage = req.status === 'pending_manager';
+    const basePath = isManagerStage ? '/manager/loan-requests' : '/admin/loan-requests';
+
+    approveBtn.textContent = isManagerStage
+      ? 'Przekaż do administracji'
+      : (req.kind === 'purchase' ? 'Zatwierdź zakup' : 'Wydaj sprzęt');
 
     approveBtn.addEventListener('click', async () => {
       try {
-        await api(`/manager/loan-requests/${req._id}/approve`, {
+        await api(`${basePath}/${req._id}/approve`, {
           method: 'POST',
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(`Przekazano do administracji: ${req.itemCode}`);
-        await loadManagerRequests();
+        showToast(isManagerStage
+          ? 'Przekazano do administracji'
+          : `Zaakceptowano: ${req.itemName || req.itemCode || 'wniosek'}`);
+        await loadActionItems();
+        await refreshStats();
       } catch (err) {
         showToast(err.message);
       }
@@ -874,13 +955,14 @@ async function loadManagerRequests() {
 
     rejectBtn.addEventListener('click', async () => {
       try {
-        await api(`/manager/loan-requests/${req._id}/reject`, {
+        await api(`${basePath}/${req._id}/reject`, {
           method: 'POST',
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(`Odrzucono wniosek: ${req.itemCode}`);
-        await loadManagerRequests();
+        showToast('Wniosek odrzucony');
+        await loadActionItems();
+        await refreshStats();
       } catch (err) {
         showToast(err.message);
       }
