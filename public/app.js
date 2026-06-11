@@ -222,6 +222,9 @@ function getRequestStatusLabel(status) {
     case 'pending': return 'Oczekuje';
     case 'pending_manager': return 'U kierownika';
     case 'pending_admin': return 'U administracji';
+    case 'to_order': return 'Do zamówienia';
+    case 'ordered': return 'Zamówiony';
+    case 'fulfilled': return 'Dodano do magazynu';
     case 'approved': return 'Zaakceptowany';
     case 'rejected': return 'Odrzucony';
     case 'cancelled': return 'Anulowany';
@@ -874,7 +877,9 @@ async function loadAdminRequests() {
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(`Wydano sprzęt: ${req.itemCode}`);
+        showToast(req.kind === 'purchase'
+          ? 'Zatwierdzono zakup — do zamówienia'
+          : `Wydano sprzęt: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
         await refreshActionBadge();
@@ -905,9 +910,57 @@ async function loadAdminRequests() {
   adminContent.appendChild(wrap);
 }
 
+// Konfiguracja przycisku akcji w „Wymagane działania" zależnie od etapu i typu
+// wniosku. Zwraca etykietę, endpoint akceptacji oraz (opcjonalnie) odrzucenia.
+function getActionConfig(req) {
+  const id = req._id;
+
+  if (req.status === 'pending_manager') {
+    return {
+      approveLabel: 'Przekaż do administracji',
+      approveUrl: `/manager/loan-requests/${id}/approve`,
+      rejectUrl: `/manager/loan-requests/${id}/reject`,
+      successMsg: 'Przekazano do administracji'
+    };
+  }
+
+  if (req.kind === 'purchase') {
+    if (req.status === 'to_order') {
+      return {
+        approveLabel: 'Oznacz jako zamówiony',
+        approveUrl: `/admin/purchase-requests/${id}/order`,
+        rejectUrl: null,
+        successMsg: 'Oznaczono jako zamówiony'
+      };
+    }
+    if (req.status === 'ordered') {
+      return {
+        approveLabel: 'Dodaj do magazynu',
+        approveUrl: `/admin/purchase-requests/${id}/stock`,
+        rejectUrl: null,
+        successMsg: 'Dodano do magazynu i przypisano wnioskodawcy'
+      };
+    }
+    // pending_admin / pending — pierwsza decyzja administracji o zakupie.
+    return {
+      approveLabel: 'Zatwierdź zakup',
+      approveUrl: `/admin/loan-requests/${id}/approve`,
+      rejectUrl: `/admin/loan-requests/${id}/reject`,
+      successMsg: 'Zatwierdzono — do zamówienia'
+    };
+  }
+
+  // Wypożyczenie na etapie administracji.
+  return {
+    approveLabel: 'Wydaj sprzęt',
+    approveUrl: `/admin/loan-requests/${id}/approve`,
+    rejectUrl: `/admin/loan-requests/${id}/reject`,
+    successMsg: 'Wydano sprzęt'
+  };
+}
+
 // Zunifikowana lista „Wymagane działania". Każdy wniosek dostaje przyciski
-// zależne od etapu: pending_manager -> decyzja kierownika, pending_admin ->
-// realizacja przez administrację. Endpointy backendu pilnują uprawnień.
+// zależne od etapu i typu (wypożyczenie / zakup). Endpointy pilnują uprawnień.
 async function loadActionItems() {
   const role = currentUser?.role;
   if (role !== 'manager' && role !== 'admin') return;
@@ -929,23 +982,17 @@ async function loadActionItems() {
     const approveBtn = node.querySelector('.approve-btn');
     const rejectBtn = node.querySelector('.reject-btn');
 
-    const isManagerStage = req.status === 'pending_manager';
-    const basePath = isManagerStage ? '/manager/loan-requests' : '/admin/loan-requests';
-
-    approveBtn.textContent = isManagerStage
-      ? 'Przekaż do administracji'
-      : (req.kind === 'purchase' ? 'Zatwierdź zakup' : 'Wydaj sprzęt');
+    const cfg = getActionConfig(req);
+    approveBtn.textContent = cfg.approveLabel;
 
     approveBtn.addEventListener('click', async () => {
       try {
-        await api(`${basePath}/${req._id}/approve`, {
+        await api(cfg.approveUrl, {
           method: 'POST',
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(isManagerStage
-          ? 'Przekazano do administracji'
-          : `Zaakceptowano: ${req.itemName || req.itemCode || 'wniosek'}`);
+        showToast(cfg.successMsg);
         await loadActionItems();
         await refreshStats();
       } catch (err) {
@@ -953,20 +1000,24 @@ async function loadActionItems() {
       }
     });
 
-    rejectBtn.addEventListener('click', async () => {
-      try {
-        await api(`${basePath}/${req._id}/reject`, {
-          method: 'POST',
-          body: JSON.stringify({ decisionNote: noteInput.value || '' })
-        });
+    if (cfg.rejectUrl) {
+      rejectBtn.addEventListener('click', async () => {
+        try {
+          await api(cfg.rejectUrl, {
+            method: 'POST',
+            body: JSON.stringify({ decisionNote: noteInput.value || '' })
+          });
 
-        showToast('Wniosek odrzucony');
-        await loadActionItems();
-        await refreshStats();
-      } catch (err) {
-        showToast(err.message);
-      }
-    });
+          showToast('Wniosek odrzucony');
+          await loadActionItems();
+          await refreshStats();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+    } else {
+      rejectBtn.remove();
+    }
 
     managerRequestsList.appendChild(node);
   });
@@ -1106,13 +1157,56 @@ async function loadUsers() {
   usersContent.appendChild(table);
 }
 
-function formatPayload(payload) {
-  if (!payload) return '';
+// Słownik akcji po polsku — historia ma być zrozumiała dla laika.
+const AUDIT_ACTION_LABELS = {
+  loan_request_created: 'Złożył wniosek o wypożyczenie',
+  purchase_request_created: 'Złożył wniosek o zakup',
+  loan_request_cancelled: 'Anulował swój wniosek',
+  loan_request_manager_approved: 'Zaakceptował wniosek (jako kierownik)',
+  loan_request_manager_rejected: 'Odrzucił wniosek (jako kierownik)',
+  loan_request_approved: 'Zatwierdził wniosek i wydał sprzęt',
+  loan_request_rejected: 'Odrzucił wniosek',
+  purchase_request_approved: 'Zatwierdził zakup (do zamówienia)',
+  purchase_request_ordered: 'Oznaczył zakup jako zamówiony',
+  purchase_request_stocked: 'Dodał zakup do magazynu i przypisał wnioskodawcy',
+  loan_created: 'Utworzył wypożyczenie',
+  loan_returned: 'Przyjął zwrot sprzętu',
+  item_created: 'Dodał sprzęt',
+  item_updated: 'Zaktualizował sprzęt',
+  item_deactivated: 'Wycofał sprzęt',
+  user_updated: 'Zmienił ustawienia użytkownika',
+  user_deleted: 'Usunął użytkownika'
+};
+
+// Czego dotyczyła akcja — sprzęt, zakup lub inny użytkownik.
+function getAuditSubject(log) {
+  const p = log.payload || {};
+  if (p.itemName && p.itemCode) return `${p.itemName} (${p.itemCode})`;
+  if (p.itemCode) return p.itemCode;
+  if (p.itemName) return p.itemName;
+  if (p.email) return p.email;
+  if (p.requesterEmail) return p.requesterEmail;
+  if (log.entityType === 'user' && log.entityId) return log.entityId;
+  return '';
+}
+
+function describeAudit(log) {
+  const label = AUDIT_ACTION_LABELS[log.actionType] || log.actionType || 'Wykonał akcję';
+  const subject = getAuditSubject(log);
+  return subject ? `${label} — ${subject}` : label;
+}
+
+// Mapa e-mail -> imię i nazwisko, żeby w historii pokazać człowieka, nie adres.
+async function getAuditUserNames() {
   try {
-    if (typeof payload === 'string') return payload;
-    return JSON.stringify(payload, null, 2);
+    const users = await api('/admin/users');
+    const map = {};
+    (Array.isArray(users) ? users : []).forEach(u => {
+      if (u.email) map[u.email] = u.fullName || u.email;
+    });
+    return map;
   } catch {
-    return '[payload]';
+    return {};
   }
 }
 
@@ -1128,10 +1222,13 @@ async function loadAuditLogs(filters = {}) {
   });
 
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const logs = await api(`/admin/audit-logs${suffix}`);
+  const [logs, userNames] = await Promise.all([
+    api(`/admin/audit-logs${suffix}`),
+    getAuditUserNames()
+  ]);
 
   if (!logs.length) {
-    adminContent.innerHTML = '<div class="empty">Brak logów dla podanych filtrów.</div>';
+    adminContent.innerHTML = '<div class="empty">Brak historii dla podanych filtrów.</div>';
     return;
   }
 
@@ -1139,23 +1236,17 @@ async function loadAuditLogs(filters = {}) {
     <table>
       <thead>
         <tr>
-          <th>Data</th>
-          <th>Actor</th>
-          <th>Akcja</th>
-          <th>Encja</th>
-          <th>ID encji</th>
-          <th>Payload</th>
+          <th>Kiedy</th>
+          <th>Użytkownik</th>
+          <th>Co zrobił</th>
         </tr>
       </thead>
       <tbody>
         ${logs.map(log => `
           <tr>
-            <td>${log.createdAt ? new Date(log.createdAt).toLocaleString('pl-PL') : ''}</td>
-            <td>${escapeHtml(log.actorEmail || '')}</td>
-            <td>${escapeHtml(log.actionType || '')}</td>
-            <td>${escapeHtml(log.entityType || '')}</td>
-            <td>${escapeHtml(log.entityId || '')}</td>
-            <td style="max-width:420px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(formatPayload(log.payload))}</td>
+            <td>${log.createdAt ? new Date(log.createdAt).toLocaleString('pl-PL') : '-'}</td>
+            <td>${escapeHtml(userNames[log.actorEmail] || log.actorEmail || '—')}</td>
+            <td>${escapeHtml(describeAudit(log))}</td>
           </tr>
         `).join('')}
       </tbody>
