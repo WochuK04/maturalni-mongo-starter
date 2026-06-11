@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager } from './auth.js';
-import { resolveManagerEmail } from './manager-map.js';
+import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -334,9 +334,22 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
     });
   }
 
-  // Dwuetapowy obieg: jeśli wnioskodawca ma kierownika, wniosek trafia najpierw
-  // do niego (pending_manager). W przeciwnym razie od razu do administracji.
-  const approverEmail = resolveManagerEmail(req.user.email);
+  // Dwuetapowy obieg: jeśli wnioskodawca ma przypisanego (aktywnego) kierownika,
+  // wniosek trafia najpierw do niego (pending_manager). Routing jest sterowany
+  // polem managerEmail na dokumencie użytkownika (ustawianym w panelu „Użytkownicy").
+  const requester = await db.collection(collections.users).findOne({ email: req.user.email });
+  let approverEmail = requester?.managerEmail || null;
+
+  if (approverEmail) {
+    const approver = await db.collection(collections.users).findOne({
+      email: approverEmail,
+      isActive: { $ne: false }
+    });
+
+    if (!approver || !['manager', 'admin'].includes(approver.role)) {
+      approverEmail = null;
+    }
+  }
 
   const loanRequest = {
     itemCode: item.itemCode,
@@ -726,6 +739,79 @@ app.get('/admin/form-options', requireAuth, requireAdmin, async (_req, res) => {
     conditions: ITEM_CONDITIONS,
     users: users.map(u => ({ email: u.email, fullName: u.fullName || u.email }))
   });
+});
+
+// ===== Zarządzanie użytkownikami (tylko admin) =====
+
+app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+
+  const users = await db.collection(collections.users)
+    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1 } })
+    .sort({ fullName: 1 })
+    .toArray();
+
+  res.json(users);
+});
+
+app.patch('/admin/users/:email', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+  const { role, managerEmail } = req.body;
+
+  const user = await db.collection(collections.users).findOne({ email });
+  if (!user) {
+    return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+  }
+
+  const update = { updatedAt: new Date() };
+
+  if (role !== undefined) {
+    if (!['user', 'manager', 'admin'].includes(role)) {
+      return res.status(400).json({ message: 'Nieprawidłowa rola' });
+    }
+    if (email === req.user.email && role !== 'admin') {
+      return res.status(400).json({ message: 'Nie możesz odebrać sobie uprawnień administratora' });
+    }
+    update.role = role;
+  }
+
+  if (managerEmail !== undefined) {
+    const normalized = String(managerEmail || '').trim().toLowerCase();
+
+    if (!normalized) {
+      update.managerEmail = null;
+    } else if (normalized === email) {
+      return res.status(400).json({ message: 'Użytkownik nie może być swoim własnym kierownikiem' });
+    } else {
+      const manager = await db.collection(collections.users).findOne({ email: normalized });
+      if (!manager) {
+        return res.status(400).json({ message: 'Wskazany kierownik nie istnieje' });
+      }
+      if (!['manager', 'admin'].includes(manager.role)) {
+        return res.status(400).json({ message: 'Wskazana osoba nie ma roli kierownika' });
+      }
+      update.managerEmail = normalized;
+    }
+  }
+
+  await db.collection(collections.users).updateOne({ email }, { $set: update });
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'user_updated',
+    entityType: 'user',
+    entityId: email,
+    payload: update,
+    createdAt: new Date()
+  });
+
+  const updated = await db.collection(collections.users).findOne(
+    { email },
+    { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1 } }
+  );
+
+  res.json({ message: 'Zaktualizowano użytkownika', user: updated });
 });
 
 app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
@@ -1197,6 +1283,16 @@ function ensureBoot() {
         { status: 'pending' },
         { $set: { status: 'pending_admin', approverEmail: null } }
       );
+
+      // Seed routingu wniosków z mapy startowej dla użytkowników bez pola
+      // managerEmail. Warunek $exists:false czyni to jednorazowym per użytkownik –
+      // późniejsze zmiany admina (także ustawienie na null) nie są nadpisywane.
+      for (const [subordinate, managerEmail] of Object.entries(MANAGER_MAP)) {
+        await db.collection(collections.users).updateOne(
+          { email: subordinate, managerEmail: { $exists: false } },
+          { $set: { managerEmail } }
+        );
+      }
     })();
   }
   return bootPromise;
