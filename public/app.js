@@ -641,19 +641,20 @@ async function loadMyRequests() {
 }
 
 async function loadMyLoans() {
-  const loans = await api('/my/loans');
+  const items = await api('/my/items');
 
-  if (!loans.length) {
+  if (!items.length) {
     return renderEmpty(myLoansList, 'Nie masz nic do oddania.');
   }
 
   myLoansList.innerHTML = '';
 
-  loans.forEach(loan => {
+  items.forEach(item => {
     const node = loanTpl.content.cloneNode(true);
-    node.querySelector('.item-title').textContent = `${loan.itemCode}`;
+    node.querySelector('.item-title').textContent =
+      `${item.name || item.itemCode} (${item.itemCode})`;
     node.querySelector('.item-meta').textContent =
-      `${loan.userEmail} · od: ${loan.fromLocation} · użycie: ${loan.targetUseLocation}`;
+      `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${item.conditionStatus || '-'}`;
 
     const form = node.querySelector('.return-form');
     const input = node.querySelector('.return-location');
@@ -662,7 +663,7 @@ async function loadMyLoans() {
       e.preventDefault();
 
       try {
-        await api(`/loans/return/${loan._id}`, {
+        await api(`/items/${encodeURIComponent(item.itemCode)}/return`, {
           method: 'POST',
           body: JSON.stringify({
             returnLocation: input.value || 'Magazyn',
@@ -670,7 +671,7 @@ async function loadMyLoans() {
           })
         });
 
-        showToast(`Oddano: ${loan.itemCode}`);
+        showToast(`Oddano: ${item.itemCode}`);
         await refreshAll();
         await loadMyLoans();
       } catch (err) {
@@ -1049,15 +1050,15 @@ async function loadAuditLogs(filters = {}) {
 }
 
 async function refreshStats() {
-  const [available, myLoans, myRequests] = await Promise.all([
+  const [available, myItems, myRequests] = await Promise.all([
     api('/items/available'),
-    api('/my/loans'),
+    api('/my/items'),
     api('/my/loan-requests')
   ]);
 
   renderStats({
     availableCount: available.length,
-    myLoansCount: myLoans.length,
+    myLoansCount: myItems.length,
     myRequestsCount: myRequests.length
   });
 }

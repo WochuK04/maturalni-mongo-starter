@@ -275,6 +275,104 @@ app.get('/my/loans', requireAuth, async (req, res) => {
   res.json(loans);
 });
 
+// Sprzęt, który użytkownik faktycznie ma u siebie — źródłem prawdy jest
+// dokument sprzętu (assignedToEmail), nie kolekcja loans. Dzięki temu widać też
+// sprzęt przypisany z importu Excela, dla którego nie powstał rekord wypożyczenia.
+app.get('/my/items', requireAuth, async (req, res) => {
+  const db = await getDb();
+
+  const items = await db.collection(collections.items)
+    .find(
+      {
+        assignedToEmail: req.user.email,
+        isActive: { $ne: false }
+      },
+      {
+        projection: {
+          itemCode: 1,
+          name: 1,
+          category: 1,
+          currentLocation: 1,
+          conditionStatus: 1,
+          assignedToName: 1,
+          assignedToEmail: 1
+        }
+      }
+    )
+    .sort({ category: 1, name: 1, itemCode: 1 })
+    .toArray();
+
+  res.json(items);
+});
+
+// Zwrot sprzętu po itemCode (działa też bez rekordu wypożyczenia).
+app.post('/items/:itemCode/return', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const { returnLocation = 'Magazyn', returnNote = '' } = req.body;
+  const itemCode = normalizeItemCode(req.params.itemCode);
+
+  const item = await db.collection(collections.items).findOne({
+    itemCode,
+    isActive: { $ne: false }
+  });
+
+  if (!item) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  const isOwner = item.assignedToEmail === req.user.email;
+  const isAdmin = req.user.role === 'admin';
+
+  if (!isOwner && !isAdmin) {
+    return res.status(403).json({ message: 'Nie możesz oddać cudzego sprzętu' });
+  }
+
+  if (!item.assignedToEmail && item.operationalStatus === 'available') {
+    return res.status(400).json({ message: 'Ten sprzęt nie jest u nikogo wypożyczony' });
+  }
+
+  const now = new Date();
+  const loc = String(returnLocation || 'Magazyn').trim() || 'Magazyn';
+
+  await db.collection(collections.items).updateOne(
+    { _id: item._id },
+    {
+      $set: {
+        operationalStatus: 'available',
+        currentLocation: loc,
+        assignedToEmail: null,
+        assignedToName: null,
+        updatedAt: now
+      }
+    }
+  );
+
+  // Zamknij aktywne wypożyczenie, jeśli takie istnieje (dla zwykłego obiegu).
+  await db.collection(collections.loans).updateMany(
+    { itemCode, status: 'active' },
+    {
+      $set: {
+        status: 'returned',
+        returnedAt: now,
+        returnLocation: loc,
+        returnNote: String(returnNote || '').trim(),
+        closedByEmail: req.user.email
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'loan_returned',
+    entityType: 'item',
+    entityId: itemCode,
+    payload: { itemCode, returnLocation: loc },
+    createdAt: now
+  });
+
+  res.json({ message: 'Returned' });
+});
+
 app.get('/my/loan-requests', requireAuth, async (req, res) => {
   const db = await getDb();
 
