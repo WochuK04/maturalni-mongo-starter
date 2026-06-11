@@ -51,6 +51,12 @@ export async function ensureIndexes(db) {
     { key: { borrowedAt: -1 }, name: 'idx_loans_borrowed_at' }
   ]);
 
+  await db.collection(collections.loanRequests).createIndexes([
+    { key: { requesterEmail: 1, status: 1 }, name: 'idx_lr_requester_status' },
+    { key: { approverEmail: 1, status: 1 }, name: 'idx_lr_approver_status' },
+    { key: { status: 1, requestedAt: -1 }, name: 'idx_lr_status_requested' }
+  ]);
+
   await db.collection(collections.auditLogs).createIndexes([
     { key: { entityType: 1, entityId: 1, createdAt: -1 }, name: 'idx_audit_entity' },
     { key: { actorEmail: 1, createdAt: -1 }, name: 'idx_audit_actor' },

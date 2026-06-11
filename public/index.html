@@ -47,6 +47,9 @@
       <button class="view-tab" data-view="returns" type="button">
         Zwróć sprzęt
       </button>
+      <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
+        Akceptacje
+      </button>
       <button class="view-tab" data-view="admin" type="button" id="adminViewTab" hidden>
         Panel admina
       </button>
@@ -170,6 +173,21 @@
       </section>
     </section>
 
+    <section class="view-panel" id="approvalsPanel" data-panel="approvals" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Kierownik działu</p>
+            <h2>Wnioski do akceptacji</h2>
+          </div>
+          <button id="loadManagerRequestsBtn" class="btn btn-secondary" type="button">
+            Odśwież
+          </button>
+        </div>
+        <div id="managerRequestsList" class="list"></div>
+      </section>
+    </section>
+
     <section class="view-panel" id="adminPanel" data-panel="admin" hidden>
       <section class="card admin-card" id="adminSection">
         <div class="section-head">
@@ -186,15 +204,9 @@
           </div>
         </div>
 
-        <form id="createItemForm" class="admin-form">
-          <input name="itemCode" placeholder="Kod, np. CAM-001" required />
-          <input name="category" placeholder="Kategoria, np. Kamera" required />
-          <input name="name" placeholder="Nazwa sprzętu" required />
-          <input name="currentLocation" placeholder="Lokalizacja" value="Magazyn" />
-          <input name="conditionStatus" placeholder="Stan techniczny" value="ok" />
-          <input name="notes" placeholder="Uwagi" />
-          <button type="submit" class="btn btn-primary">Dodaj sprzęt</button>
-        </form>
+        <div class="admin-toolbar">
+          <button id="openAddItemBtn" class="btn btn-primary" type="button">+ Dodaj sprzęt</button>
+        </div>
 
         <form id="auditFilterForm" class="admin-form audit-form" hidden>
           <input name="actorEmail" placeholder="Mail wykonującego" />
@@ -297,6 +309,74 @@
         </div>
       </div>
     </div>
+  </dialog>
+
+  <dialog id="addItemModal" class="form-modal">
+    <form id="addItemForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Panel admina</p>
+          <h3>Dodaj sprzęt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeAddItemBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <div class="modal-form-grid">
+        <label class="field">
+          <span>Kod sprzętu *</span>
+          <input name="itemCode" placeholder="np. CAM-001" required />
+        </label>
+        <label class="field">
+          <span>Nazwa *</span>
+          <input name="name" placeholder="np. Sony A7 III" required />
+        </label>
+
+        <label class="field">
+          <span>Kategoria *</span>
+          <select name="category" id="addItemCategory" required></select>
+        </label>
+        <label class="field" id="addItemCategoryCustomField" hidden>
+          <span>Nowa kategoria *</span>
+          <input id="addItemCategoryCustom" placeholder="Wpisz nazwę nowej kategorii" />
+        </label>
+
+        <label class="field">
+          <span>Lokalizacja</span>
+          <select name="currentLocation" id="addItemLocation"></select>
+        </label>
+        <label class="field">
+          <span>Stan techniczny</span>
+          <select name="conditionStatus" id="addItemCondition"></select>
+        </label>
+
+        <label class="field">
+          <span>Przypisany do</span>
+          <select name="assignedToEmail" id="addItemAssignee"></select>
+        </label>
+        <label class="field">
+          <span>Ilość</span>
+          <input name="quantity" type="number" min="1" value="1" />
+        </label>
+
+        <label class="field field-wide">
+          <span>Szczegóły</span>
+          <input name="details" placeholder="Krótki opis (opcjonalnie)" />
+        </label>
+        <label class="field field-wide">
+          <span>Uwagi</span>
+          <input name="notes" placeholder="Uwagi (opcjonalnie)" />
+        </label>
+      </div>
+
+      <p class="modal-form-hint muted" id="addItemAssignHint" hidden>
+        Wybranie osoby od razu utworzy wypożyczenie i oznaczy sprzęt jako „U pracownika”.
+      </p>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="submit" class="btn btn-primary">Dodaj sprzęt</button>
+        <button type="button" class="btn btn-secondary" id="cancelAddItemBtn">Anuluj</button>
+      </div>
+    </form>
   </dialog>
 
   <template id="availableItemTemplate">

@@ -15,7 +15,22 @@ const adminRequestTpl = document.getElementById('adminRequestTemplate');
 
 const adminQuickActions = document.getElementById('adminQuickActions');
 const toggleWorkspaceBtn = document.getElementById('toggleWorkspaceBtn');
-const createItemForm = document.getElementById('createItemForm');
+
+const managerViewTab = document.getElementById('managerViewTab');
+const managerRequestsList = document.getElementById('managerRequestsList');
+
+const openAddItemBtn = document.getElementById('openAddItemBtn');
+const addItemModal = document.getElementById('addItemModal');
+const addItemForm = document.getElementById('addItemForm');
+const closeAddItemBtn = document.getElementById('closeAddItemBtn');
+const cancelAddItemBtn = document.getElementById('cancelAddItemBtn');
+const addItemCategory = document.getElementById('addItemCategory');
+const addItemCategoryCustomField = document.getElementById('addItemCategoryCustomField');
+const addItemCategoryCustom = document.getElementById('addItemCategoryCustom');
+const addItemLocation = document.getElementById('addItemLocation');
+const addItemCondition = document.getElementById('addItemCondition');
+const addItemAssignee = document.getElementById('addItemAssignee');
+const addItemAssignHint = document.getElementById('addItemAssignHint');
 
 const requestFormCard = document.getElementById('requestFormCard');
 const loanRequestForm = document.getElementById('loanRequestForm');
@@ -192,11 +207,19 @@ function getStatusLabel(status) {
 function getRequestStatusLabel(status) {
   switch (status) {
     case 'pending': return 'Oczekuje';
+    case 'pending_manager': return 'U kierownika';
+    case 'pending_admin': return 'U administracji';
     case 'approved': return 'Zaakceptowany';
     case 'rejected': return 'Odrzucony';
     case 'cancelled': return 'Anulowany';
     default: return status || '-';
   }
+}
+
+const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
+
+function isCancelableStatus(status) {
+  return ACTIVE_REQUEST_STATUSES.includes(status);
 }
 
 function renderTags(container, tags = []) {
@@ -238,7 +261,7 @@ function renderAuthBox() {
 
 function renderStats(data) {
   const cards = [
-    { label: 'Użytkownik', value: currentUser?.email || '-' },
+    { label: 'Użytkownik', value: currentUser?.fullName || currentUser?.email || '-' },
     { label: 'Dostępny sprzęt', value: data.availableCount },
     { label: 'Moje wnioski', value: data.myRequestsCount },
     { label: 'Moje wypożyczenia', value: data.myLoansCount }
@@ -310,6 +333,10 @@ async function handleViewChange(view) {
     await loadMyLoans();
   }
 
+  if (view === 'approvals' && (currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
+    await loadManagerRequests();
+  }
+
   if (view === 'admin' && currentUser?.role === 'admin') {
     await loadAdminItems();
   }
@@ -348,12 +375,16 @@ function applyRoleVisibility(user) {
     viewSwitcher.hidden = true;
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
+    if (managerViewTab) managerViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
     return;
   }
 
   viewSwitcher.hidden = false;
+
+  const isManager = user.role === 'manager';
+  if (managerViewTab) managerViewTab.hidden = !isManager;
 
   if (user.role === 'admin') {
     if (adminQuickActions) adminQuickActions.hidden = false;
@@ -535,6 +566,9 @@ async function loadSession() {
     if (currentUser.role === 'admin') {
       await refreshStats();
       await loadAdminItems();
+    } else if (currentUser.role === 'manager') {
+      await refreshAll();
+      await handleViewChange('approvals');
     } else {
       await refreshAll();
       await handleViewChange('available');
@@ -570,7 +604,7 @@ async function loadMyRequests() {
     badge.dataset.status = req.status || '';
 
     const cancelBtn = node.querySelector('.cancel-request-btn');
-    if (req.status !== 'pending') {
+    if (!isCancelableStatus(req.status)) {
       cancelBtn.remove();
     } else {
       cancelBtn.addEventListener('click', async () => {
@@ -650,7 +684,6 @@ async function loadAdminItems() {
 
   const items = await api('/admin/items');
   adminContent.innerHTML = renderTable(items, [
-    { key: '_id', label: 'ID' },
     { key: 'itemCode', label: 'Kod' },
     { key: 'category', label: 'Kategoria' },
     { key: 'name', label: 'Nazwa' },
@@ -668,7 +701,6 @@ async function loadAdminLoans() {
 
   const loans = await api('/admin/loans');
   adminContent.innerHTML = renderTable(loans, [
-    { key: '_id', label: 'ID loan' },
     { key: 'itemCode', label: 'Kod sprzętu' },
     { key: 'userEmail', label: 'Użytkownik' },
     { key: 'status', label: 'Status' },
@@ -681,10 +713,11 @@ async function loadAdminRequests() {
   if (currentUser?.role !== 'admin') return;
   hideAuditFilters();
 
-  const requests = await api('/admin/loan-requests?status=pending');
+  const all = await api('/admin/loan-requests');
+  const requests = (Array.isArray(all) ? all : []).filter(req => isCancelableStatus(req.status));
 
   if (!requests.length) {
-    adminContent.innerHTML = '<div class="empty">Brak oczekujących wniosków.</div>';
+    adminContent.innerHTML = '<div class="empty">Brak wniosków w obiegu.</div>';
     return;
   }
 
@@ -696,11 +729,24 @@ async function loadAdminRequests() {
     const node = adminRequestTpl.content.cloneNode(true);
     node.querySelector('.item-title').textContent = `${req.itemName} (${req.itemCode})`;
     node.querySelector('.item-meta').textContent =
-      `${req.requesterName || req.requesterEmail} · ${req.requesterEmail} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+      `${req.requesterName || req.requesterEmail} · ${req.requesterEmail} · status: ${getRequestStatusLabel(req.status)} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+
+    // Etap 1 (czeka na kierownika) – administracja jeszcze nie realizuje wydania.
+    if (req.status === 'pending_manager') {
+      node.querySelector('.admin-request-form')?.remove();
+      const waiting = document.createElement('p');
+      waiting.className = 'item-meta muted';
+      waiting.textContent = `Czeka na akceptację kierownika: ${req.approverEmail || '-'}`;
+      node.querySelector('.item-row')?.appendChild(waiting);
+      wrap.appendChild(node);
+      return;
+    }
 
     const noteInput = node.querySelector('.decision-note');
     const approveBtn = node.querySelector('.approve-btn');
     const rejectBtn = node.querySelector('.reject-btn');
+
+    approveBtn.textContent = 'Wydaj sprzęt';
 
     approveBtn.addEventListener('click', async () => {
       try {
@@ -709,7 +755,7 @@ async function loadAdminRequests() {
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(`Zaakceptowano wniosek: ${req.itemCode}`);
+        showToast(`Wydano sprzęt: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
       } catch (err) {
@@ -736,6 +782,62 @@ async function loadAdminRequests() {
   });
 
   adminContent.appendChild(wrap);
+}
+
+async function loadManagerRequests() {
+  const role = currentUser?.role;
+  if (role !== 'manager' && role !== 'admin') return;
+
+  const requests = await api('/manager/loan-requests');
+
+  if (!requests.length) {
+    return renderEmpty(managerRequestsList, 'Brak wniosków oczekujących na Twoją decyzję.');
+  }
+
+  managerRequestsList.innerHTML = '';
+
+  requests.forEach(req => {
+    const node = adminRequestTpl.content.cloneNode(true);
+    node.querySelector('.item-title').textContent = `${req.itemName} (${req.itemCode})`;
+    node.querySelector('.item-meta').textContent =
+      `${req.requesterName || req.requesterEmail} · ${req.requesterEmail} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+
+    const noteInput = node.querySelector('.decision-note');
+    const approveBtn = node.querySelector('.approve-btn');
+    const rejectBtn = node.querySelector('.reject-btn');
+
+    approveBtn.textContent = 'Przekaż do administracji';
+
+    approveBtn.addEventListener('click', async () => {
+      try {
+        await api(`/manager/loan-requests/${req._id}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ decisionNote: noteInput.value || '' })
+        });
+
+        showToast(`Przekazano do administracji: ${req.itemCode}`);
+        await loadManagerRequests();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    rejectBtn.addEventListener('click', async () => {
+      try {
+        await api(`/manager/loan-requests/${req._id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ decisionNote: noteInput.value || '' })
+        });
+
+        showToast(`Odrzucono wniosek: ${req.itemCode}`);
+        await loadManagerRequests();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+
+    managerRequestsList.appendChild(node);
+  });
 }
 
 function formatPayload(payload) {
@@ -831,6 +933,7 @@ viewTabs.forEach((tab) => {
     const view = button.dataset.view;
 
     if (view === 'admin' && currentUser?.role !== 'admin') return;
+    if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
 
     if (view === 'admin') {
       workspaceMode = 'admin';
@@ -859,6 +962,10 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadMyLoansBtn') {
     await handleViewChange('returns');
+  }
+
+  if (target.id === 'loadManagerRequestsBtn') {
+    await handleViewChange('approvals');
   }
 
   if (target.id === 'loadAdminItemsBtn') {
@@ -971,12 +1078,104 @@ if (cancelRequestFormBtn) {
   });
 }
 
-if (createItemForm) {
-  createItemForm.addEventListener('submit', async (e) => {
+// ===== Modal dodawania sprzętu (listy rozwijane) =====
+
+let formOptionsState = null;
+
+function fillSelect(select, options, { includeEmpty } = {}) {
+  if (!select) return;
+  select.innerHTML = '';
+
+  if (includeEmpty) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = includeEmpty;
+    select.appendChild(opt);
+  }
+
+  options.forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  });
+}
+
+async function ensureFormOptions() {
+  if (formOptionsState) return formOptionsState;
+
+  const data = await api('/admin/form-options');
+  formOptionsState = data;
+
+  const categoryOptions = (data.categories || []).map(c => ({ value: c, label: c }));
+  categoryOptions.push({ value: '__custom__', label: '+ Nowa kategoria...' });
+  fillSelect(addItemCategory, categoryOptions);
+
+  fillSelect(addItemLocation, (data.locations || []).map(l => ({ value: l, label: l })));
+  fillSelect(addItemCondition, (data.conditions || []).map(c => ({ value: c.value, label: c.label })));
+  fillSelect(
+    addItemAssignee,
+    (data.users || []).map(u => ({ value: u.email, label: `${u.fullName} (${u.email})` })),
+    { includeEmpty: '— nieprzypisany —' }
+  );
+
+  return formOptionsState;
+}
+
+function syncCategoryCustom() {
+  if (!addItemCategory || !addItemCategoryCustomField) return;
+  const isCustom = addItemCategory.value === '__custom__';
+  addItemCategoryCustomField.hidden = !isCustom;
+  if (addItemCategoryCustom) addItemCategoryCustom.required = isCustom;
+}
+
+function syncAssignHint() {
+  if (!addItemAssignee || !addItemAssignHint) return;
+  addItemAssignHint.hidden = !addItemAssignee.value;
+}
+
+async function openAddItemModal() {
+  if (!addItemModal) return;
+
+  try {
+    await ensureFormOptions();
+  } catch (err) {
+    showToast(err.message);
+    return;
+  }
+
+  if (addItemForm) addItemForm.reset();
+  syncCategoryCustom();
+  syncAssignHint();
+
+  if (!addItemModal.open) addItemModal.showModal();
+}
+
+function closeAddItemModal() {
+  if (addItemModal?.open) addItemModal.close();
+}
+
+if (openAddItemBtn) openAddItemBtn.addEventListener('click', openAddItemModal);
+if (closeAddItemBtn) closeAddItemBtn.addEventListener('click', closeAddItemModal);
+if (cancelAddItemBtn) cancelAddItemBtn.addEventListener('click', closeAddItemModal);
+if (addItemCategory) addItemCategory.addEventListener('change', syncCategoryCustom);
+if (addItemAssignee) addItemAssignee.addEventListener('change', syncAssignHint);
+
+if (addItemForm) {
+  addItemForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const formData = new FormData(createItemForm);
+    const formData = new FormData(addItemForm);
     const payload = Object.fromEntries(formData.entries());
+
+    if (payload.category === '__custom__') {
+      payload.category = (addItemCategoryCustom?.value || '').trim();
+    }
+
+    if (!payload.category) {
+      showToast('Podaj kategorię sprzętu');
+      return;
+    }
 
     try {
       await api('/admin/items', {
@@ -984,8 +1183,9 @@ if (createItemForm) {
         body: JSON.stringify(payload)
       });
 
-      createItemForm.reset();
-      showToast('Dodano sprzęt');
+      showToast(payload.assignedToEmail ? 'Dodano sprzęt i utworzono wypożyczenie' : 'Dodano sprzęt');
+      formOptionsState = null; // odśwież listy (np. nowa kategoria) przy kolejnym otwarciu
+      closeAddItemModal();
       await loadAdminItems();
       await refreshStats();
     } catch (err) {
