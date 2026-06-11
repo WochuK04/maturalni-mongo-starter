@@ -10,7 +10,20 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="layout">
+  <div class="login-gate" id="loginGate">
+    <div class="login-card">
+      <p class="eyebrow">Maturalni</p>
+      <h1>Obieg sprzętu</h1>
+      <p class="muted">
+        Zaloguj się służbowym kontem Google (@maturalni.com), aby uzyskać dostęp do systemu.
+      </p>
+      <a class="btn btn-primary login-btn" href="/auth/google">
+        Zaloguj przez Google
+      </a>
+    </div>
+  </div>
+
+  <div class="layout" id="appLayout" hidden>
     <aside class="sidebar">
       <div class="sidebar-brand">
         <p class="eyebrow">Maturalni</p>
@@ -28,7 +41,8 @@
           Zwróć sprzęt
         </button>
         <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
-          Akceptacje
+          <span>Wymagane działania</span>
+          <span class="nav-badge" id="actionBadge" hidden>0</span>
         </button>
         <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
           Użytkownicy
@@ -199,8 +213,8 @@
       <section class="card card-section">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Kierownik działu</p>
-            <h2>Wnioski do akceptacji</h2>
+            <p class="eyebrow">Wymagane działania</p>
+            <h2>Wnioski wymagające Twojej decyzji</h2>
           </div>
           <button id="loadManagerRequestsBtn" class="btn btn-secondary" type="button">
             Odśwież

@@ -405,6 +405,30 @@ app.get('/my/loan-requests', requireAuth, async (req, res) => {
   res.json(requests);
 });
 
+// Wnioski wymagające działania zalogowanego użytkownika — zasila zakładkę
+// „Wymagane działania" oraz licznik (badge) w menu.
+//  - kierownik: wnioski przypisane do niego, czekające na jego decyzję,
+//  - admin: dodatkowo wszystkie wnioski czekające na realizację administracji.
+app.get('/my/action-items', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const me = req.user.email;
+
+  const conditions = [
+    { status: 'pending_manager', approverEmail: me }
+  ];
+
+  if (req.user.role === 'admin') {
+    conditions.push({ status: { $in: ['pending_admin', 'pending'] } });
+  }
+
+  const requests = await db.collection(collections.loanRequests)
+    .find({ $or: conditions })
+    .sort({ requestedAt: -1 })
+    .toArray();
+
+  res.json(requests);
+});
+
 app.post('/loan-requests', requireAuth, async (req, res) => {
   const db = await getDb();
 
