@@ -935,8 +935,9 @@ app.post('/loans/return/:id', requireAuth, async (req, res) => {
 app.get('/admin/items', requireAuth, requireAdmin, async (_req, res) => {
   const db = await getDb();
 
+  // Wycofany/nieaktywny sprzęt zostaje w bazie (ślad), ale znika z UI.
   const items = await db.collection(collections.items)
-    .find({})
+    .find({ isActive: { $ne: false } })
     .sort({ category: 1, name: 1, itemCode: 1 })
     .toArray();
 
@@ -1317,6 +1318,70 @@ app.delete('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
   });
 
   res.json({ message: 'Item deactivated' });
+});
+
+// Wycofanie sprzętu z magazynu (zepsuty / zgubiony). Sprzęt zostaje w bazie
+// jako ślad (status 'discarded', powód, kto i kiedy), ale znika ze wszystkich
+// widoków UI. Zamykamy też ewentualne aktywne wypożyczenie.
+app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { reason = '' } = req.body;
+  const discardReason = String(reason || '').trim() || 'Wycofano';
+
+  const item = await db.collection(collections.items).findOne({
+    _id: new ObjectId(req.params.id)
+  });
+
+  if (!item) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  if (item.isActive === false) {
+    return res.status(400).json({ message: 'Ten sprzęt został już wycofany' });
+  }
+
+  const now = new Date();
+
+  await db.collection(collections.items).updateOne(
+    { _id: item._id },
+    {
+      $set: {
+        operationalStatus: 'discarded',
+        isActive: false,
+        assignedToEmail: null,
+        assignedToName: null,
+        discardReason,
+        discardedAt: now,
+        discardedByEmail: req.user.email,
+        updatedAt: now
+      }
+    }
+  );
+
+  // Jeśli sprzęt był u kogoś — zamknij aktywne wypożyczenie.
+  await db.collection(collections.loans).updateMany(
+    { itemCode: item.itemCode, status: 'active' },
+    {
+      $set: {
+        status: 'returned',
+        returnedAt: now,
+        returnLocation: 'Wycofany',
+        returnNote: `Sprzęt wycofany z magazynu: ${discardReason}`,
+        closedByEmail: req.user.email
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'item_discarded',
+    entityType: 'item',
+    entityId: String(item._id),
+    payload: { itemCode: item.itemCode, reason: discardReason },
+    createdAt: now
+  });
+
+  res.json({ message: 'Sprzęt wycofany z magazynu' });
 });
 
 app.get('/admin/loans', requireAuth, requireAdmin, async (_req, res) => {

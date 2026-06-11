@@ -213,6 +213,7 @@ function getStatusLabel(status) {
     case 'loaned': return 'Wypożyczony';
     case 'inactive': return 'Nieaktywny';
     case 'unavailable': return 'Niedostępny';
+    case 'discarded': return 'Wyrzucony';
     default: return status || '-';
   }
 }
@@ -807,16 +808,81 @@ async function loadAdminItems() {
   hideAuditFilters();
 
   const items = await api('/admin/items');
-  adminContent.innerHTML = renderTable(items, [
-    { key: 'itemCode', label: 'Kod' },
-    { key: 'category', label: 'Kategoria' },
-    { key: 'name', label: 'Nazwa' },
-    { key: 'operationalStatus', label: 'Status' },
-    { key: 'currentLocation', label: 'Lokalizacja' },
-    { key: 'conditionStatus', label: 'Stan tech.' },
-    { key: 'assignedToEmail', label: 'Przypisany do' },
-    { key: 'isActive', label: 'Aktywny' }
-  ]);
+
+  if (!items.length) {
+    adminContent.innerHTML = '<div class="empty">Brak sprzętu w magazynie.</div>';
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Kod</th>
+        <th>Kategoria</th>
+        <th>Nazwa</th>
+        <th>Status</th>
+        <th>Lokalizacja</th>
+        <th>Stan tech.</th>
+        <th>Przypisany do</th>
+        <th>Akcje</th>
+      </tr>
+    </thead>
+  `;
+
+  const tbody = document.createElement('tbody');
+
+  items.forEach(item => {
+    const tr = document.createElement('tr');
+
+    [
+      item.itemCode || '-',
+      item.category || '-',
+      item.name || '-',
+      getStatusLabel(item.operationalStatus),
+      item.currentLocation || '-',
+      item.conditionStatus || '-',
+      item.assignedToEmail || '—'
+    ].forEach(text => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+
+    const actionsTd = document.createElement('td');
+    const discardBtn = document.createElement('button');
+    discardBtn.type = 'button';
+    discardBtn.className = 'btn btn-danger';
+    discardBtn.textContent = 'Wyrzuć';
+    discardBtn.addEventListener('click', async () => {
+      const reason = prompt(
+        `Wycofać „${item.name || item.itemCode}” (${item.itemCode}) z magazynu?\n` +
+        'Podaj powód — zostanie zapisany w historii (np. zepsute, zgubione):',
+        'zepsute'
+      );
+      if (reason === null) return; // anulowano
+
+      try {
+        await api(`/admin/items/${item._id}/discard`, {
+          method: 'POST',
+          body: JSON.stringify({ reason: reason.trim() || 'Wycofano' })
+        });
+        showToast(`Wycofano sprzęt: ${item.itemCode}`);
+        await loadAdminItems();
+        await refreshStats();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+    actionsTd.appendChild(discardBtn);
+    tr.appendChild(actionsTd);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  adminContent.innerHTML = '';
+  adminContent.appendChild(table);
 }
 
 async function loadAdminLoans() {
@@ -1174,6 +1240,7 @@ const AUDIT_ACTION_LABELS = {
   item_created: 'Dodał sprzęt',
   item_updated: 'Zaktualizował sprzęt',
   item_deactivated: 'Wycofał sprzęt',
+  item_discarded: 'Wyrzucił sprzęt z magazynu',
   user_updated: 'Zmienił ustawienia użytkownika',
   user_deleted: 'Usunął użytkownika'
 };
@@ -1193,7 +1260,8 @@ function getAuditSubject(log) {
 function describeAudit(log) {
   const label = AUDIT_ACTION_LABELS[log.actionType] || log.actionType || 'Wykonał akcję';
   const subject = getAuditSubject(log);
-  return subject ? `${label} — ${subject}` : label;
+  const reason = log.payload?.reason ? ` (${log.payload.reason})` : '';
+  return subject ? `${label} — ${subject}${reason}` : `${label}${reason}`;
 }
 
 // Mapa e-mail -> imię i nazwisko, żeby w historii pokazać człowieka, nie adres.
