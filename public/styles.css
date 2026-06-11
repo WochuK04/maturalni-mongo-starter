@@ -1,21 +1,26 @@
 :root {
-  --bg: #f3f5f9;
+  /* Paleta marki Maturalni */
+  --bg: #f8f9fb;
   --surface: #ffffff;
-  --surface-2: #eef2f7;
-  --surface-3: #e6ebf3;
-  --text: #18202a;
-  --muted: #667085;
-  --border: #d7dee8;
-  --primary: #0f6cbd;
-  --primary-hover: #0a5da8;
-  --success-bg: #eaf7ef;
+  --surface-2: #f1f4f9;
+  --surface-3: #e9edf3;
+  --text: #1f2225;
+  --muted: #737980;
+  --muted-soft: #a2aeb9;
+  --border: #e5e9ed;
+  --border-strong: #d1d9e2;
+  --primary: #3f5fbe;
+  --primary-hover: #1e3a85;
+  --navy: #0c1c44;
+  --accent: #f9cb0b;
+  --success-bg: #e9f6ee;
   --success-text: #17603a;
   --warning-bg: #fff4e5;
   --warning-text: #9a5b00;
   --danger-bg: #fdecec;
-  --danger-text: #9b1c1c;
-  --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
-  --shadow-lg: 0 18px 40px rgba(16, 24, 40, 0.14);
+  --danger-text: #bf1932;
+  --shadow: 0 10px 30px rgba(12, 28, 68, 0.06);
+  --shadow-lg: 0 18px 44px rgba(12, 28, 68, 0.12);
   --radius: 16px;
   --radius-sm: 12px;
 }
@@ -26,8 +31,9 @@
 
 body {
   margin: 0;
-  font-family: Inter, system-ui, sans-serif;
-  background: linear-gradient(180deg, #f7f9fc 0%, #eef3f9 100%);
+  font-family: 'Golos Text', system-ui, -apple-system, sans-serif;
+  letter-spacing: -0.01em;
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -82,11 +88,20 @@ dt {
 h1 {
   margin-bottom: 10px;
   font-size: clamp(30px, 4vw, 42px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
 }
 
 h2 {
   margin-bottom: 0;
   font-size: clamp(22px, 3vw, 28px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+h3,
+h4 {
+  letter-spacing: -0.02em;
 }
 
 h4 {
@@ -199,11 +214,13 @@ select:focus {
 }
 
 .btn {
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 12px;
-  padding: 11px 14px;
+  padding: 11px 16px;
   cursor: pointer;
-  transition: 0.2s ease;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 .btn:hover {
@@ -213,15 +230,32 @@ select:focus {
 .btn-primary {
   background: var(--primary);
   color: #fff;
+  box-shadow: 0 8px 18px rgba(63, 95, 190, 0.22);
 }
 
 .btn-primary:hover {
   background: var(--primary-hover);
+  box-shadow: 0 10px 22px rgba(30, 58, 133, 0.28);
 }
 
 .btn-secondary {
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.btn-secondary:hover {
+  background: var(--surface-2);
+}
+
+.btn-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: #f3c9c9;
+}
+
+.btn-danger:hover {
+  background: #f9d9d9;
 }
 
 .list {
@@ -328,8 +362,8 @@ select:focus {
 
 .badge-status[data-status="loaned"],
 .request-status[data-status="approved"] {
-  background: #e9f0ff;
-  color: #274e9b;
+  background: #e7ecfb;
+  color: var(--primary-hover);
 }
 
 .request-status[data-status="pending"],
@@ -743,30 +777,29 @@ th {
 
 .view-tab {
   appearance: none;
-  border: 1px solid #d7dbe4;
-  background: #eef1f5;
-  color: #1f2937;
-  min-height: 46px;
-  padding: 0 18px;
-  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
   font: inherit;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .view-tab:hover {
-  background: #e6ebf2;
-  border-color: #c8d0dc;
-  transform: translateY(-1px);
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .view-tab.active {
-  background: #1f2937;
+  background: var(--primary);
   color: #fff;
-  border-color: #1f2937;
-  box-shadow: 0 10px 24px rgba(31, 41, 55, 0.18);
+  border-color: var(--primary);
+  box-shadow: 0 8px 20px rgba(63, 95, 190, 0.24);
 }
 
 .view-panel {
@@ -887,4 +920,30 @@ th {
   .content {
     padding: 20px 16px 48px;
   }
+}
+
+/* ===== Fix: „Moje wnioski" zajmuje pełną szerokość, gdy formularz jest ukryty ===== */
+.request-layout {
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+.request-layout.form-open {
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+}
+
+@media (max-width: 980px) {
+  .request-layout.form-open {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== Akcenty marki ===== */
+.eyebrow {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.stat-value {
+  color: var(--primary);
 }
