@@ -169,8 +169,8 @@
             </label>
 
             <label class="field">
-              <span>Planowana data zwrotu</span>
-              <input id="requestedReturnDate" name="requestedReturnDate" type="date" />
+              <span>Planowana data zwrotu *</span>
+              <input id="requestedReturnDate" name="requestedReturnDate" type="date" required />
             </label>
 
             <label class="field">
@@ -253,6 +253,7 @@
           <div class="actions-inline actions-wrap">
             <button id="loadAdminItemsBtn" class="btn btn-secondary" type="button">Sprzęt</button>
             <button id="loadAdminLoansBtn" class="btn btn-secondary" type="button">Wypożyczenia</button>
+            <button id="loadAdminReturnsBtn" class="btn btn-secondary" type="button">Zwroty</button>
             <button id="loadAdminRequestsBtn" class="btn btn-secondary" type="button">Wnioski</button>
             <button id="loadAuditLogsBtn" class="btn btn-secondary" type="button">Historia</button>
           </div>
@@ -544,11 +545,11 @@
       </div>
 
       <form class="inline-form return-form">
+        <select class="return-location" aria-label="Miejsce zwrotu"></select>
         <input
-          class="return-location"
+          class="return-note"
           type="text"
-          placeholder="Zwrot do"
-          value="Magazyn"
+          placeholder="Notatka (opcjonalnie)"
         />
         <button class="btn btn-primary" type="submit">Oddaj</button>
       </form>
@@ -566,7 +567,7 @@
         <input
           class="decision-note"
           type="text"
-          placeholder="Notatka do decyzji"
+          placeholder="Notatka — zobaczy ją wnioskodawca"
         />
         <button class="btn btn-primary approve-btn" type="button">Akceptuj</button>
         <button class="btn btn-secondary reject-btn" type="button">Odrzuć</button>

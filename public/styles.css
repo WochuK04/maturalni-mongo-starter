@@ -1028,3 +1028,52 @@ th {
   font-weight: 700;
   line-height: 1;
 }
+
+/* ===== Animacja ładowania na przyciskach (odświeżanie) ===== */
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn.is-loading {
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.btn.is-loading::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+/* ===== Notatka z decyzji na karcie wniosku ===== */
+.item-note {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  background: #eef4ff;
+  color: var(--primary-hover);
+}
+
+/* ===== Formularz zwrotu (lista lokalizacji + notatka) ===== */
+.return-form {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.return-form .return-location {
+  width: auto;
+  min-width: 130px;
+}
+
+.return-form .return-note {
+  width: auto;
+  min-width: 160px;
+}

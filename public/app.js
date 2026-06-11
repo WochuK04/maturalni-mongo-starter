@@ -175,6 +175,44 @@ async function api(url, options = {}) {
   return data;
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Animacja ładowania na klikniętym przycisku na czas operacji. Minimalny czas
+// trwania sprawia, że spinner jest widoczny nawet przy błyskawicznym odświeżeniu.
+async function withButtonLoading(btn, task, minMs = 450) {
+  if (!btn) return task();
+
+  btn.classList.add('is-loading');
+  btn.disabled = true;
+  const startedAt = Date.now();
+
+  try {
+    const result = await task();
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < minMs) await delay(minMs - elapsed);
+    return result;
+  } finally {
+    btn.classList.remove('is-loading');
+    btn.disabled = false;
+  }
+}
+
+// Lokalizacje do listy rozwijanej przy zwrocie (pobierane raz i cache'owane).
+let locationsCache = null;
+
+async function ensureLocations() {
+  if (locationsCache) return locationsCache;
+  try {
+    const locs = await api('/locations');
+    if (Array.isArray(locs) && locs.length) locationsCache = locs;
+  } catch {
+    // zostaje fallback poniżej
+  }
+  return locationsCache || ['Magazyn', 'Studio', 'Biuro', 'Serwis'];
+}
+
 function renderEmpty(container, text) {
   container.innerHTML = `<div class="empty">${text}</div>`;
 }
@@ -270,6 +308,22 @@ function fillRequestNode(node, req, { withRequester } = {}) {
       : `Status: ${getRequestStatusLabel(req.status)}`;
     metaEl.textContent = `${base} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
   }
+}
+
+// Pokazuje notatkę z decyzji na karcie wniosku — dzięki temu wiadomo, dokąd
+// trafia: widzi ją wnioskodawca (w „Moje wnioski") i kolejny decydent.
+function appendDecisionNote(node, req) {
+  const note = String(req.decisionNote || '').trim();
+  if (!note) return;
+
+  const container = node.querySelector('.item-title')?.parentElement;
+  if (!container) return;
+
+  const label = req.status === 'pending_admin' ? 'Notatka kierownika' : 'Notatka do decyzji';
+  const p = document.createElement('p');
+  p.className = 'item-note';
+  p.textContent = `📝 ${label}: ${note}`;
+  container.appendChild(p);
 }
 
 function renderTags(container, tags = []) {
@@ -722,6 +776,7 @@ async function loadMyRequests() {
   requests.forEach(req => {
     const node = requestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: false });
+    appendDecisionNote(node, req);
 
     const badge = node.querySelector('.request-status');
     badge.textContent = getRequestStatusLabel(req.status);
@@ -748,7 +803,10 @@ async function loadMyRequests() {
 }
 
 async function loadMyLoans() {
-  const items = await api('/my/items');
+  const [items, locations] = await Promise.all([
+    api('/my/items'),
+    ensureLocations()
+  ]);
 
   if (!items.length) {
     return renderEmpty(myLoansList, 'Nie masz nic do oddania.');
@@ -764,7 +822,16 @@ async function loadMyLoans() {
       `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${item.conditionStatus || '-'}`;
 
     const form = node.querySelector('.return-form');
-    const input = node.querySelector('.return-location');
+    const locationSelect = node.querySelector('.return-location');
+    const noteInput = node.querySelector('.return-note');
+
+    locations.forEach(loc => {
+      const opt = document.createElement('option');
+      opt.value = loc;
+      opt.textContent = loc;
+      locationSelect.appendChild(opt);
+    });
+    if (locations.includes('Magazyn')) locationSelect.value = 'Magazyn';
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -773,8 +840,8 @@ async function loadMyLoans() {
         await api(`/items/${encodeURIComponent(item.itemCode)}/return`, {
           method: 'POST',
           body: JSON.stringify({
-            returnLocation: input.value || 'Magazyn',
-            returnNote: 'Zwrot z frontendu'
+            returnLocation: locationSelect.value || 'Magazyn',
+            returnNote: noteInput.value.trim()
           })
         });
 
@@ -885,18 +952,40 @@ async function loadAdminItems() {
   adminContent.appendChild(table);
 }
 
-async function loadAdminLoans() {
+async function loadAdminLoans(status = 'active') {
   if (currentUser?.role !== 'admin') return;
   hideAuditFilters();
 
-  const loans = await api('/admin/loans');
-  adminContent.innerHTML = renderTable(loans, [
-    { key: 'itemCode', label: 'Kod sprzętu' },
-    { key: 'userEmail', label: 'Użytkownik' },
-    { key: 'status', label: 'Status' },
-    { key: 'fromLocation', label: 'Skąd' },
-    { key: 'targetUseLocation', label: 'Gdzie używane' }
-  ]);
+  const loans = await api(`/admin/loans?status=${encodeURIComponent(status)}`);
+  const rows = (Array.isArray(loans) ? loans : []).map(loan => ({
+    ...loan,
+    borrowedAtLabel: formatDate(loan.borrowedAt),
+    returnedAtLabel: formatDate(loan.returnedAt)
+  }));
+
+  if (!rows.length) {
+    adminContent.innerHTML = `<div class="empty">${status === 'returned' ? 'Brak zwrotów.' : 'Brak aktywnych wypożyczeń.'}</div>`;
+    return;
+  }
+
+  const columns = status === 'returned'
+    ? [
+        { key: 'itemCode', label: 'Kod sprzętu' },
+        { key: 'userEmail', label: 'Użytkownik' },
+        { key: 'borrowedAtLabel', label: 'Wypożyczono' },
+        { key: 'returnedAtLabel', label: 'Zwrócono' },
+        { key: 'returnLocation', label: 'Zwrot do' },
+        { key: 'returnNote', label: 'Notatka zwrotu' }
+      ]
+    : [
+        { key: 'itemCode', label: 'Kod sprzętu' },
+        { key: 'userEmail', label: 'Użytkownik' },
+        { key: 'fromLocation', label: 'Skąd' },
+        { key: 'targetUseLocation', label: 'Gdzie używane' },
+        { key: 'borrowedAtLabel', label: 'Wypożyczono' }
+      ];
+
+  adminContent.innerHTML = renderTable(rows, columns);
 }
 
 async function loadAdminRequests() {
@@ -918,6 +1007,7 @@ async function loadAdminRequests() {
   requests.forEach(req => {
     const node = adminRequestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: true });
+    appendDecisionNote(node, req);
 
     // Etap 1 (czeka na kierownika) – administracja jeszcze nie realizuje wydania.
     if (req.status === 'pending_manager') {
@@ -1043,6 +1133,7 @@ async function loadActionItems() {
   requests.forEach(req => {
     const node = adminRequestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: true });
+    appendDecisionNote(node, req);
 
     const noteInput = node.querySelector('.decision-note');
     const approveBtn = node.querySelector('.approve-btn');
@@ -1379,23 +1470,23 @@ document.addEventListener('click', async (e) => {
   const target = e.target;
 
   if (target.id === 'loadAvailableBtn') {
-    await handleViewChange('available');
+    await withButtonLoading(target, () => handleViewChange('available')).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadMyRequestsBtn') {
-    await handleViewChange('requests');
+    await withButtonLoading(target, () => handleViewChange('requests')).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadMyLoansBtn') {
-    await handleViewChange('returns');
+    await withButtonLoading(target, () => handleViewChange('returns')).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadManagerRequestsBtn') {
-    await handleViewChange('approvals');
+    await withButtonLoading(target, () => handleViewChange('approvals')).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadUsersBtn') {
-    await handleViewChange('users');
+    await withButtonLoading(target, () => handleViewChange('users')).catch(err => showToast(err.message));
   }
 
   if (target.closest('.open-purchase-btn')) {
@@ -1405,26 +1496,32 @@ document.addEventListener('click', async (e) => {
   if (target.id === 'loadAdminItemsBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
-    await loadAdminItems();
+    await withButtonLoading(target, () => loadAdminItems()).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadAdminLoansBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
-    await loadAdminLoans();
+    await withButtonLoading(target, () => loadAdminLoans('active')).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'loadAdminReturnsBtn') {
+    workspaceMode = 'admin';
+    setActiveView('admin');
+    await withButtonLoading(target, () => loadAdminLoans('returned')).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadAdminRequestsBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
-    await loadAdminRequests();
+    await withButtonLoading(target, () => loadAdminRequests()).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadAuditLogsBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
     showAuditFilters();
-    await loadAuditLogs({ limit: 100 });
+    await withButtonLoading(target, () => loadAuditLogs({ limit: 100 })).catch(err => showToast(err.message));
   }
 
   const detailsBtn = target.closest('.details-btn');
