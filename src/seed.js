@@ -1,5 +1,8 @@
-import { getDb, closeDb } from './db.js';
+import dotenv from 'dotenv';
+import { connectToDatabase, closeDb } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
+
+dotenv.config();
 
 const now = new Date();
 
@@ -23,7 +26,7 @@ const items = [
     category: 'Lampy',
     name: 'Streamplify Light 10',
     details: '',
-    quantityTotal: 1,
+    quantity: 1,
     conditionStatus: 'very_good',
     operationalStatus: 'loaned',
     currentLocation: 'U pracownika',
@@ -38,7 +41,7 @@ const items = [
     category: 'Laptop',
     name: 'Lenovo IdeaPad Slim 5',
     details: '',
-    quantityTotal: 1,
+    quantity: 1,
     conditionStatus: 'very_good',
     operationalStatus: 'loaned',
     currentLocation: 'U pracownika',
@@ -53,7 +56,7 @@ const items = [
     category: 'Monitory',
     name: 'Aputure V',
     details: 'Monitorek podglądowy',
-    quantityTotal: 1,
+    quantity: 1,
     conditionStatus: 'very_good',
     operationalStatus: 'available',
     currentLocation: 'Magazyn',
@@ -118,7 +121,7 @@ const auditLogs = [
 ];
 
 async function run() {
-  const db = await getDb();
+  const db = await connectToDatabase();
   await ensureIndexes(db);
 
   await db.collection(collections.locations).deleteMany({});
