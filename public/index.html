@@ -74,9 +74,14 @@
             <p class="eyebrow">Użytkownik</p>
             <h2>Dostępny sprzęt</h2>
           </div>
-          <button id="loadAvailableBtn" class="btn btn-secondary" type="button">
-            Odśwież listę
-          </button>
+          <div class="actions-inline">
+            <button class="btn btn-primary open-purchase-btn" type="button">
+              Poproś o nowy sprzęt
+            </button>
+            <button id="loadAvailableBtn" class="btn btn-secondary" type="button">
+              Odśwież listę
+            </button>
+          </div>
         </div>
 
         <div class="toolbar">
@@ -100,9 +105,14 @@
               <p class="eyebrow">Użytkownik</p>
               <h2>Moje wnioski</h2>
             </div>
-            <button id="loadMyRequestsBtn" class="btn btn-secondary" type="button">
-              Odśwież wnioski
-            </button>
+            <div class="actions-inline">
+              <button class="btn btn-primary open-purchase-btn" type="button">
+                Poproś o nowy sprzęt
+              </button>
+              <button id="loadMyRequestsBtn" class="btn btn-secondary" type="button">
+                Odśwież wnioski
+              </button>
+            </div>
           </div>
           <div id="myRequestsList" class="list"></div>
         </section>
@@ -406,6 +416,63 @@
       <div class="actions-inline modal-form-actions">
         <button type="submit" class="btn btn-primary">Dodaj sprzęt</button>
         <button type="button" class="btn btn-secondary" id="cancelAddItemBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="purchaseModal" class="form-modal">
+    <form id="purchaseForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Zapotrzebowanie</p>
+          <h3>Poproś o nowy sprzęt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closePurchaseBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted">
+        Nie ma czegoś w magazynie? Wypełnij formularz — wniosek o zakup trafi do akceptacji tak samo jak wypożyczenie.
+      </p>
+
+      <div class="modal-form-grid">
+        <label class="field field-wide">
+          <span>Co potrzebujesz? *</span>
+          <input name="itemName" placeholder="np. Podkładka pod mysz XL" required />
+        </label>
+
+        <label class="field">
+          <span>Kategoria</span>
+          <input name="category" placeholder="np. Akcesoria" />
+        </label>
+        <label class="field">
+          <span>Ilość</span>
+          <input name="quantity" type="number" min="1" value="1" />
+        </label>
+
+        <label class="field field-wide">
+          <span>Link do sklepu *</span>
+          <input name="shopUrl" type="url" placeholder="https://sklep.pl/produkt" required />
+        </label>
+
+        <label class="field">
+          <span>Szacowany koszt</span>
+          <input name="estimatedPrice" placeholder="np. 79 zł" />
+        </label>
+
+        <label class="field field-wide">
+          <span>Uzasadnienie *</span>
+          <textarea name="justification" rows="3" placeholder="Do czego i dlaczego jest potrzebny" required></textarea>
+        </label>
+
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <textarea name="note" rows="2" placeholder="Dodatkowe informacje (opcjonalnie)"></textarea>
+        </label>
+      </div>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="submit" class="btn btn-primary">Wyślij wniosek o zakup</button>
+        <button type="button" class="btn btn-secondary" id="cancelPurchaseBtn">Anuluj</button>
       </div>
     </form>
   </dialog>

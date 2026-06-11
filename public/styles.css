@@ -649,6 +649,8 @@ th {
   gap: 18px;
   padding: 24px;
   background: var(--surface);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .modal-form-head {
@@ -936,6 +938,16 @@ th {
   .request-layout.form-open {
     grid-template-columns: 1fr;
   }
+}
+
+.shop-link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.shop-link:hover {
+  color: var(--primary-hover);
 }
 
 /* ===== Akcenty marki ===== */
