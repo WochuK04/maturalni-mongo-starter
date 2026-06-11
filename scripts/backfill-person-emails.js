@@ -5,11 +5,26 @@ import { resolvePersonEmail } from '../src/person-email-map.js';
 
 dotenv.config();
 
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  process.env.MONGODB_URI ||
+  process.env.mongodb_uri;
+
+const DB_NAME =
+  process.env.MONGO_DB_NAME ||
+  process.env.DB_NAME ||
+  'equipment_db';
+
+if (!MONGO_URI) {
+  console.error('Brak MONGO_URI / MONGODB_URI / mongodb_uri w .env');
+  process.exit(1);
+}
+
 async function run() {
-  const client = new MongoClient(process.env.MONGODB_URI);
+  const client = new MongoClient(MONGO_URI);
   await client.connect();
 
-  const db = client.db(process.env.DB_NAME);
+  const db = client.db(DB_NAME);
 
   const items = await db.collection(collections.items).find({
     assignedToName: { $exists: true, $ne: null }

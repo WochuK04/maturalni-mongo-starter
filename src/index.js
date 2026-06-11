@@ -9,10 +9,16 @@ import { ObjectId } from 'mongodb';
 
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
-import { setupPassport, requireAuth, requireAdmin } from './auth.js';
+import { setupPassport, requireAuth, requireAdmin, requireManager } from './auth.js';
+import { resolveManagerEmail } from './manager-map.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+
+// Akceptujemy oba warianty nazw (jak skrypty import/backfill), bo lokalny .env
+// używa MONGODB_URI / DB_NAME, a środowisko produkcyjne MONGO_URI / MONGO_DB_NAME.
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME || process.env.DB_NAME || 'equipment_db';
 
 // najpierw łączymy się z bazą, potem konfigurujemy Passport
 await connectToDatabase();
@@ -24,9 +30,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 console.log('ENV CHECK', {
-  hasMongoUri: Boolean(process.env.MONGO_URI),
+  hasMongoUri: Boolean(MONGO_URI),
   hasSessionSecret: Boolean(process.env.SESSION_SECRET),
-  mongoDbName: process.env.MONGO_DB_NAME || null,
+  mongoDbName: MONGO_DB_NAME,
   nodeEnv: process.env.NODE_ENV
 });
 
@@ -36,8 +42,8 @@ app.use(
     resave: false,
     saveUninitialized: false,
     store: MongoStore.create({
-      mongoUrl: process.env.MONGO_URI,
-      dbName: process.env.MONGO_DB_NAME || 'equipment_db',
+      mongoUrl: MONGO_URI,
+      dbName: MONGO_DB_NAME,
       collectionName: 'sessions'
     }),
     cookie: {
@@ -85,6 +91,23 @@ function isBlockedFromLoan(item) {
 
   return isStudioLocation || isStudioLocked;
 }
+
+// Słownik stanów technicznych dla list rozwijanych w panelu admina.
+const ITEM_CONDITIONS = [
+  { value: 'new', label: 'Nowy' },
+  { value: 'very_good', label: 'Bardzo dobry' },
+  { value: 'good', label: 'Dobry' },
+  { value: 'ok', label: 'Zadowalający' },
+  { value: 'poor', label: 'Wymaga uwagi' },
+  { value: 'damaged', label: 'Uszkodzony' },
+  { value: 'for_repair', label: 'Do naprawy' }
+];
+
+const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwis'];
+
+// Statusy wniosku, które wciąż są "w obiegu" (nie zapadła ostateczna decyzja).
+// 'pending' to status zaszłości sprzed wprowadzenia dwuetapowej akceptacji.
+const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
 
 app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
@@ -302,7 +325,7 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
   const existingPendingRequest = await db.collection(collections.loanRequests).findOne({
     itemCode: normalizedItemCode,
     requesterEmail: req.user.email,
-    status: 'pending'
+    status: { $in: ACTIVE_REQUEST_STATUSES }
   });
 
   if (existingPendingRequest) {
@@ -310,6 +333,10 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
       message: 'Masz już oczekujący wniosek dla tego sprzętu'
     });
   }
+
+  // Dwuetapowy obieg: jeśli wnioskodawca ma kierownika, wniosek trafia najpierw
+  // do niego (pending_manager). W przeciwnym razie od razu do administracji.
+  const approverEmail = resolveManagerEmail(req.user.email);
 
   const loanRequest = {
     itemCode: item.itemCode,
@@ -320,8 +347,11 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
     targetUseLocation: String(targetUseLocation || '').trim(),
     requestedReturnDate: requestedReturnDate || null,
     note: String(note || '').trim(),
-    status: 'pending',
+    approverEmail,
+    status: approverEmail ? 'pending_manager' : 'pending_admin',
     requestedAt: new Date(),
+    managerApprovedAt: null,
+    managerApprovedByEmail: null,
     approvedAt: null,
     approvedByEmail: null,
     rejectedAt: null,
@@ -364,7 +394,7 @@ app.post('/my/loan-requests/:id/cancel', requireAuth, async (req, res) => {
     return res.status(403).json({ message: 'To nie jest Twój wniosek' });
   }
 
-  if (requestDoc.status !== 'pending') {
+  if (!ACTIVE_REQUEST_STATUSES.includes(requestDoc.status)) {
     return res.status(400).json({ message: 'Można anulować tylko oczekujący wniosek' });
   }
 
@@ -393,6 +423,123 @@ app.post('/my/loan-requests/:id/cancel', requireAuth, async (req, res) => {
   });
 
   res.json({ message: 'Wniosek anulowany' });
+});
+
+// ===== Etap 1 obiegu: akceptacja kierownika działu =====
+
+app.get('/manager/loan-requests', requireAuth, requireManager, async (req, res) => {
+  const db = await getDb();
+  const { status } = req.query;
+
+  const query = { approverEmail: req.user.email };
+  query.status = status ? String(status).trim() : 'pending_manager';
+
+  const requests = await db.collection(collections.loanRequests)
+    .find(query)
+    .sort({ requestedAt: -1 })
+    .toArray();
+
+  res.json(requests);
+});
+
+function isRequestApprover(requestDoc, user) {
+  return user?.role === 'admin' || requestDoc.approverEmail === user?.email;
+}
+
+app.post('/manager/loan-requests/:id/approve', requireAuth, requireManager, async (req, res) => {
+  const db = await getDb();
+  const { decisionNote = '' } = req.body;
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({
+    _id: new ObjectId(req.params.id)
+  });
+
+  if (!requestDoc) {
+    return res.status(404).json({ message: 'Wniosek nie istnieje' });
+  }
+
+  if (!isRequestApprover(requestDoc, req.user)) {
+    return res.status(403).json({ message: 'Ten wniosek nie jest przypisany do Ciebie' });
+  }
+
+  if (requestDoc.status !== 'pending_manager') {
+    return res.status(400).json({ message: 'Wniosek nie oczekuje na decyzję kierownika' });
+  }
+
+  // Akceptacja kierownika nie wydaje sprzętu – przekazuje wniosek do administracji.
+  await db.collection(collections.loanRequests).updateOne(
+    { _id: requestDoc._id },
+    {
+      $set: {
+        status: 'pending_admin',
+        managerApprovedAt: new Date(),
+        managerApprovedByEmail: req.user.email,
+        decisionNote: String(decisionNote || '').trim()
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'loan_request_manager_approved',
+    entityType: 'loan_request',
+    entityId: String(requestDoc._id),
+    payload: {
+      itemCode: requestDoc.itemCode,
+      requesterEmail: requestDoc.requesterEmail
+    },
+    createdAt: new Date()
+  });
+
+  res.json({ message: 'Wniosek przekazany do administracji' });
+});
+
+app.post('/manager/loan-requests/:id/reject', requireAuth, requireManager, async (req, res) => {
+  const db = await getDb();
+  const { decisionNote = '' } = req.body;
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({
+    _id: new ObjectId(req.params.id)
+  });
+
+  if (!requestDoc) {
+    return res.status(404).json({ message: 'Wniosek nie istnieje' });
+  }
+
+  if (!isRequestApprover(requestDoc, req.user)) {
+    return res.status(403).json({ message: 'Ten wniosek nie jest przypisany do Ciebie' });
+  }
+
+  if (requestDoc.status !== 'pending_manager') {
+    return res.status(400).json({ message: 'Wniosek nie oczekuje na decyzję kierownika' });
+  }
+
+  await db.collection(collections.loanRequests).updateOne(
+    { _id: requestDoc._id },
+    {
+      $set: {
+        status: 'rejected',
+        rejectedAt: new Date(),
+        rejectedByEmail: req.user.email,
+        managerApprovedByEmail: req.user.email,
+        decisionNote: String(decisionNote || '').trim()
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'loan_request_manager_rejected',
+    entityType: 'loan_request',
+    entityId: String(requestDoc._id),
+    payload: {
+      itemCode: requestDoc.itemCode,
+      requesterEmail: requestDoc.requesterEmail
+    },
+    createdAt: new Date()
+  });
+
+  res.json({ message: 'Wniosek odrzucony przez kierownika' });
 });
 
 app.post('/loans/borrow', requireAuth, async (req, res) => {
@@ -555,6 +702,32 @@ app.get('/admin/items', requireAuth, requireAdmin, async (_req, res) => {
   res.json(items);
 });
 
+// Dane do list rozwijanych w formularzu dodawania sprzętu.
+app.get('/admin/form-options', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+
+  const [locationDocs, categories, users] = await Promise.all([
+    db.collection(collections.locations)
+      .find({ isActive: { $ne: false } })
+      .sort({ name: 1 })
+      .toArray(),
+    db.collection(collections.items).distinct('category', { category: { $nin: [null, ''] } }),
+    db.collection(collections.users)
+      .find({ isActive: { $ne: false } }, { projection: { email: 1, fullName: 1 } })
+      .sort({ fullName: 1 })
+      .toArray()
+  ]);
+
+  const locationNames = locationDocs.map(loc => loc.name).filter(Boolean);
+
+  res.json({
+    locations: [...new Set([...locationNames, ...FALLBACK_LOCATIONS])],
+    categories: categories.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b), 'pl')),
+    conditions: ITEM_CONDITIONS,
+    users: users.map(u => ({ email: u.email, fullName: u.fullName || u.email }))
+  });
+});
+
 app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
 
@@ -573,7 +746,8 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     model = '',
     qrCodeValue = '',
     tags = [],
-    isStudioLocked = false
+    isStudioLocked = false,
+    assignedToEmail = ''
   } = req.body;
 
   if (!itemCode || !category || !name) {
@@ -590,17 +764,32 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     return res.status(409).json({ message: 'Taki itemCode już istnieje' });
   }
 
+  const now = new Date();
+  const sourceLocation = String(currentLocation || 'Magazyn').trim() || 'Magazyn';
+
+  // Opcjonalne przypisanie sprzętu do użytkownika już przy dodawaniu.
+  const normalizedAssignee = String(assignedToEmail || '').trim().toLowerCase();
+  let assignedUser = null;
+
+  if (normalizedAssignee) {
+    assignedUser = await db.collection(collections.users).findOne({ email: normalizedAssignee });
+
+    if (!assignedUser) {
+      return res.status(400).json({ message: 'Wybrany użytkownik nie istnieje' });
+    }
+  }
+
   const doc = {
     itemCode: normalizedItemCode,
     category: String(category).trim(),
     name: String(name).trim(),
     details: String(details || '').trim(),
     quantity: Math.max(1, Number(quantity) || 1),
-    currentLocation: String(currentLocation || 'Magazyn').trim(),
+    currentLocation: assignedUser ? 'U pracownika' : sourceLocation,
     conditionStatus: String(conditionStatus || 'ok').trim(),
-    operationalStatus: 'available',
-    assignedToName: null,
-    assignedToEmail: null,
+    operationalStatus: assignedUser ? 'loaned' : 'available',
+    assignedToName: assignedUser ? (assignedUser.fullName || assignedUser.email) : null,
+    assignedToEmail: assignedUser ? assignedUser.email : null,
     notes: String(notes || '').trim(),
     imageUrl: String(imageUrl || '').trim(),
     thumbnailUrl: String(thumbnailUrl || '').trim(),
@@ -610,8 +799,8 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     tags: normalizeTags(tags),
     isStudioLocked: parseBoolean(isStudioLocked),
     isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date()
+    createdAt: now,
+    updatedAt: now
   };
 
   const result = await db.collection(collections.items).insertOne(doc);
@@ -622,8 +811,40 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     entityType: 'item',
     entityId: String(result.insertedId),
     payload: doc,
-    createdAt: new Date()
+    createdAt: now
   });
+
+  // Sprzęt dodany od razu „na stanie pracownika” = utworzenie wypożyczenia.
+  if (assignedUser) {
+    const loan = {
+      itemId: result.insertedId,
+      itemCode: normalizedItemCode,
+      userEmail: assignedUser.email,
+      userDisplayName: assignedUser.fullName || assignedUser.email,
+      quantity: 1,
+      fromLocation: sourceLocation,
+      targetUseLocation: 'U pracownika',
+      status: 'active',
+      borrowedAt: now,
+      dueAt: null,
+      returnedAt: null,
+      borrowNote: 'Przypisano przy dodawaniu sprzętu',
+      returnNote: null,
+      createdByEmail: req.user.email,
+      closedByEmail: null
+    };
+
+    const loanResult = await db.collection(collections.loans).insertOne(loan);
+
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'loan_created',
+      entityType: 'loan',
+      entityId: String(loanResult.insertedId),
+      payload: { itemCode: normalizedItemCode, userEmail: assignedUser.email },
+      createdAt: now
+    });
+  }
 
   res.status(201).json({
     message: 'Item created',
@@ -789,8 +1010,12 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
     return res.status(404).json({ message: 'Wniosek nie istnieje' });
   }
 
-  if (requestDoc.status !== 'pending') {
-    return res.status(400).json({ message: 'Wniosek nie oczekuje już na decyzję' });
+  if (!['pending_admin', 'pending'].includes(requestDoc.status)) {
+    return res.status(400).json({
+      message: requestDoc.status === 'pending_manager'
+        ? 'Wniosek czeka jeszcze na akceptację kierownika'
+        : 'Wniosek nie oczekuje już na decyzję'
+    });
   }
 
   const item = await db.collection(collections.items).findOne({
@@ -885,7 +1110,7 @@ app.post('/admin/loan-requests/:id/reject', requireAuth, requireAdmin, async (re
     return res.status(404).json({ message: 'Wniosek nie istnieje' });
   }
 
-  if (requestDoc.status !== 'pending') {
+  if (!ACTIVE_REQUEST_STATUSES.includes(requestDoc.status)) {
     return res.status(400).json({ message: 'Wniosek nie oczekuje już na decyzję' });
   }
 
@@ -965,6 +1190,13 @@ function ensureBoot() {
     bootPromise = (async () => {
       const db = await getDb();
       await ensureIndexes(db);
+
+      // Migracja zaszłości: wnioski sprzed dwuetapowej akceptacji ('pending')
+      // traktujemy jak gotowe do realizacji przez administrację.
+      await db.collection(collections.loanRequests).updateMany(
+        { status: 'pending' },
+        { $set: { status: 'pending_admin', approverEmail: null } }
+      );
     })();
   }
   return bootPromise;

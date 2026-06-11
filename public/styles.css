@@ -332,7 +332,9 @@ select:focus {
   color: #274e9b;
 }
 
-.request-status[data-status="pending"] {
+.request-status[data-status="pending"],
+.request-status[data-status="pending_manager"],
+.request-status[data-status="pending_admin"] {
   background: var(--warning-bg);
   color: var(--warning-text);
 }
@@ -586,6 +588,76 @@ th {
 .modal-actions {
   margin-top: auto;
   justify-content: flex-start;
+}
+
+.admin-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 16px;
+}
+
+.form-modal {
+  width: min(720px, calc(100vw - 24px));
+  border: 0;
+  padding: 0;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.form-modal::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.modal-form {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  background: var(--surface);
+}
+
+.modal-form-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-form-head h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.modal-form-head .modal-close {
+  position: static;
+  box-shadow: none;
+  background: var(--surface-2);
+}
+
+.modal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.modal-form-hint {
+  margin: 0;
+  font-size: 13px;
+}
+
+.modal-form-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .modal-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 [hidden] {

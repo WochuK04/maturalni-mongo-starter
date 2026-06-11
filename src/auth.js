@@ -1,6 +1,7 @@
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { collections } from './schema.js';
+import { MANAGER_EMAILS } from './manager-map.js';
 
 export function setupPassport() {
   passport.serializeUser((user, done) => {
@@ -42,12 +43,13 @@ export function setupPassport() {
 
           const existingUser = await db.collection(collections.users).findOne({ email });
 
-          let role = 'user';
+          let role = existingUser?.role || 'user';
 
-          if (existingUser?.role) {
-            role = existingUser.role;
-          } else if (email === `k.woch@${allowedDomain}`) {
+          // Twardo zdefiniowane role: admin oraz kierownicy działów.
+          if (email === `k.woch@${allowedDomain}`) {
             role = 'admin';
+          } else if (MANAGER_EMAILS.includes(email) && role !== 'admin') {
+            role = 'manager';
           }
 
           const update = {
@@ -97,4 +99,13 @@ export function requireAdmin(req, res, next) {
   }
 
   return res.status(403).json({ message: 'Brak uprawnień administratora' });
+}
+
+export function requireManager(req, res, next) {
+  const role = req.user?.role;
+  if (req.isAuthenticated && req.isAuthenticated() && (role === 'manager' || role === 'admin')) {
+    return next();
+  }
+
+  return res.status(403).json({ message: 'Brak uprawnień kierownika' });
 }
