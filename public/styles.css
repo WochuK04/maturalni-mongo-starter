@@ -361,16 +361,23 @@ select:focus {
 }
 
 .badge-status[data-status="loaned"],
-.request-status[data-status="approved"] {
+.request-status[data-status="approved"],
+.request-status[data-status="ordered"] {
   background: #e7ecfb;
   color: var(--primary-hover);
 }
 
 .request-status[data-status="pending"],
 .request-status[data-status="pending_manager"],
-.request-status[data-status="pending_admin"] {
+.request-status[data-status="pending_admin"],
+.request-status[data-status="to_order"] {
   background: var(--warning-bg);
   color: var(--warning-text);
+}
+
+.request-status[data-status="fulfilled"] {
+  background: var(--success-bg);
+  color: var(--success-text);
 }
 
 .request-status[data-status="rejected"],

@@ -130,6 +130,28 @@ async function resolveApproverEmail(db, requesterEmail) {
   return approverEmail;
 }
 
+// Generuje unikalny kod sprzętu dla pozycji dodawanej z wniosku o zakup.
+// Prefiks z kategorii (bez polskich znaków), reszta z czasu/losowości.
+async function generatePurchaseItemCode(db, category) {
+  const prefix =
+    String(category || 'ZAK')
+      .normalize('NFD')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 4)
+      .toUpperCase() || 'ZAK';
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const suffix = attempt === 0
+      ? Date.now().toString(36).toUpperCase()
+      : `${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1000)}`;
+    const candidate = `${prefix}-${suffix}`;
+    const exists = await db.collection(collections.items).findOne({ itemCode: candidate });
+    if (!exists) return candidate;
+  }
+
+  return `ZAK-${Date.now()}`;
+}
+
 app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });
@@ -419,6 +441,8 @@ app.get('/my/action-items', requireAuth, async (req, res) => {
 
   if (req.user.role === 'admin') {
     conditions.push({ status: { $in: ['pending_admin', 'pending'] } });
+    // Zakupy w toku procedury (po zatwierdzeniu) też wymagają działania admina.
+    conditions.push({ kind: 'purchase', status: { $in: ['to_order', 'ordered'] } });
   }
 
   const requests = await db.collection(collections.loanRequests)
@@ -1341,14 +1365,14 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
     });
   }
 
-  // Wniosek o zakup: akceptacja to tylko decyzja (zatwierdzenie zakupu),
-  // nie tworzymy wypożyczenia ani nie szukamy sprzętu w bazie.
+  // Wniosek o zakup: akceptacja nie tworzy od razu sprzętu — uruchamia
+  // procedurę zakupową (Do zamówienia -> Zamówiony -> dodanie do magazynu).
   if (requestDoc.kind === 'purchase') {
     await db.collection(collections.loanRequests).updateOne(
       { _id: requestDoc._id },
       {
         $set: {
-          status: 'approved',
+          status: 'to_order',
           approvedAt: new Date(),
           approvedByEmail: req.user.email,
           decisionNote: String(decisionNote || '').trim()
@@ -1365,7 +1389,7 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
       createdAt: new Date()
     });
 
-    return res.json({ message: 'Wniosek o zakup zaakceptowany' });
+    return res.json({ message: 'Wniosek zatwierdzony — do zamówienia' });
   }
 
   const item = await db.collection(collections.items).findOne({
@@ -1489,6 +1513,158 @@ app.post('/admin/loan-requests/:id/reject', requireAuth, requireAdmin, async (re
   });
 
   res.json({ message: 'Wniosek odrzucony' });
+});
+
+// ===== Procedura zakupowa (wniosek kind='purchase' po zatwierdzeniu) =====
+
+// Krok 2: oznaczenie zatwierdzonego zakupu jako zamówiony.
+app.post('/admin/purchase-requests/:id/order', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { decisionNote = '' } = req.body;
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({
+    _id: new ObjectId(req.params.id)
+  });
+
+  if (!requestDoc || requestDoc.kind !== 'purchase') {
+    return res.status(404).json({ message: 'Wniosek o zakup nie istnieje' });
+  }
+
+  if (requestDoc.status !== 'to_order') {
+    return res.status(400).json({ message: 'Wniosek nie jest w stanie „Do zamówienia”' });
+  }
+
+  await db.collection(collections.loanRequests).updateOne(
+    { _id: requestDoc._id },
+    {
+      $set: {
+        status: 'ordered',
+        orderedAt: new Date(),
+        orderedByEmail: req.user.email,
+        orderNote: String(decisionNote || '').trim()
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'purchase_request_ordered',
+    entityType: 'purchase_request',
+    entityId: String(requestDoc._id),
+    payload: { itemName: requestDoc.itemName, shopUrl: requestDoc.shopUrl },
+    createdAt: new Date()
+  });
+
+  res.json({ message: 'Oznaczono jako zamówiony' });
+});
+
+// Krok 3: dodanie zamówionego sprzętu do magazynu i natychmiastowe
+// przypisanie go osobie, która składała wniosek (tworzy wypożyczenie).
+app.post('/admin/purchase-requests/:id/stock', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({
+    _id: new ObjectId(req.params.id)
+  });
+
+  if (!requestDoc || requestDoc.kind !== 'purchase') {
+    return res.status(404).json({ message: 'Wniosek o zakup nie istnieje' });
+  }
+
+  if (requestDoc.status !== 'ordered') {
+    return res.status(400).json({ message: 'Najpierw oznacz wniosek jako zamówiony' });
+  }
+
+  const now = new Date();
+
+  // Wnioskodawca — bierzemy świeże imię/nazwisko, jeśli konto wciąż istnieje.
+  const requester = await db.collection(collections.users).findOne({
+    email: requestDoc.requesterEmail
+  });
+  const assigneeEmail = requestDoc.requesterEmail;
+  const assigneeName =
+    requester?.fullName || requestDoc.requesterName || requestDoc.requesterEmail;
+
+  const itemCode = await generatePurchaseItemCode(db, requestDoc.category);
+
+  const itemDoc = {
+    itemCode,
+    category: String(requestDoc.category || 'Zakup').trim() || 'Zakup',
+    name: String(requestDoc.itemName || 'Nowy sprzęt').trim(),
+    details: '',
+    quantity: Math.max(1, Number(requestDoc.quantity) || 1),
+    currentLocation: 'U pracownika',
+    conditionStatus: 'new',
+    operationalStatus: 'loaned',
+    assignedToName: assigneeName,
+    assignedToEmail: assigneeEmail,
+    notes: requestDoc.justification
+      ? `Z wniosku o zakup: ${requestDoc.justification}`
+      : 'Dodano z wniosku o zakup',
+    imageUrl: '',
+    thumbnailUrl: '',
+    brand: '',
+    model: '',
+    qrCodeValue: '',
+    tags: [],
+    isStudioLocked: false,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const itemResult = await db.collection(collections.items).insertOne(itemDoc);
+
+  const loan = {
+    itemId: itemResult.insertedId,
+    itemCode,
+    userEmail: assigneeEmail,
+    userDisplayName: assigneeName,
+    quantity: itemDoc.quantity,
+    fromLocation: 'Zakup',
+    targetUseLocation: 'U pracownika',
+    status: 'active',
+    borrowedAt: now,
+    dueAt: null,
+    returnedAt: null,
+    borrowNote: 'Zakup nowego sprzętu na wniosek',
+    returnNote: null,
+    createdByEmail: req.user.email,
+    closedByEmail: null
+  };
+
+  const loanResult = await db.collection(collections.loans).insertOne(loan);
+
+  await db.collection(collections.loanRequests).updateOne(
+    { _id: requestDoc._id },
+    {
+      $set: {
+        status: 'fulfilled',
+        fulfilledAt: now,
+        fulfilledByEmail: req.user.email,
+        resultItemCode: itemCode
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'purchase_request_stocked',
+    entityType: 'purchase_request',
+    entityId: String(requestDoc._id),
+    payload: {
+      itemName: requestDoc.itemName,
+      itemCode,
+      assignedToEmail: assigneeEmail,
+      loanId: String(loanResult.insertedId)
+    },
+    createdAt: now
+  });
+
+  res.json({
+    message: 'Dodano do magazynu i przypisano wnioskodawcy',
+    itemCode
+  });
 });
 
 app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
