@@ -35,6 +35,11 @@ const addItemCondition = document.getElementById('addItemCondition');
 const addItemAssignee = document.getElementById('addItemAssignee');
 const addItemAssignHint = document.getElementById('addItemAssignHint');
 
+const purchaseModal = document.getElementById('purchaseModal');
+const purchaseForm = document.getElementById('purchaseForm');
+const closePurchaseBtn = document.getElementById('closePurchaseBtn');
+const cancelPurchaseBtn = document.getElementById('cancelPurchaseBtn');
+
 const requestFormCard = document.getElementById('requestFormCard');
 const requestLayout = document.getElementById('requestLayout');
 const loanRequestForm = document.getElementById('loanRequestForm');
@@ -224,6 +229,39 @@ const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
 
 function isCancelableStatus(status) {
   return ACTIVE_REQUEST_STATUSES.includes(status);
+}
+
+function makeShopLink(url) {
+  const a = document.createElement('a');
+  const safe = /^https?:\/\//i.test(String(url || '')) ? url : '#';
+  a.href = safe;
+  a.textContent = '🔗 link do sklepu';
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.className = 'shop-link';
+  return a;
+}
+
+// Wypełnia tytuł i meta węzła wniosku — obsługuje wypożyczenia i zakupy.
+function fillRequestNode(node, req, { withRequester } = {}) {
+  const titleEl = node.querySelector('.item-title');
+  const metaEl = node.querySelector('.item-meta');
+  const who = req.requesterName || req.requesterEmail;
+
+  if (req.kind === 'purchase') {
+    titleEl.textContent = `🛒 ${req.itemName || 'Nowy sprzęt'} ×${req.quantity || 1}`;
+    const base = withRequester
+      ? `${who} · ${req.requesterEmail} · zakup`
+      : `Zakup · status: ${getRequestStatusLabel(req.status)}`;
+    metaEl.textContent = `${base}${req.estimatedPrice ? ` · ~${req.estimatedPrice}` : ''} · uzasadnienie: ${req.justification || '-'} · `;
+    metaEl.appendChild(makeShopLink(req.shopUrl));
+  } else {
+    titleEl.textContent = `${req.itemName} (${req.itemCode})`;
+    const base = withRequester
+      ? `${who} · ${req.requesterEmail}`
+      : `Status: ${getRequestStatusLabel(req.status)}`;
+    metaEl.textContent = `${base} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+  }
 }
 
 function renderTags(container, tags = []) {
@@ -612,9 +650,7 @@ async function loadMyRequests() {
 
   requests.forEach(req => {
     const node = requestTpl.content.cloneNode(true);
-    node.querySelector('.item-title').textContent = `${req.itemName} (${req.itemCode})`;
-    node.querySelector('.item-meta').textContent =
-      `Status: ${getRequestStatusLabel(req.status)} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+    fillRequestNode(node, req, { withRequester: false });
 
     const badge = node.querySelector('.request-status');
     badge.textContent = getRequestStatusLabel(req.status);
@@ -745,9 +781,7 @@ async function loadAdminRequests() {
 
   requests.forEach(req => {
     const node = adminRequestTpl.content.cloneNode(true);
-    node.querySelector('.item-title').textContent = `${req.itemName} (${req.itemCode})`;
-    node.querySelector('.item-meta').textContent =
-      `${req.requesterName || req.requesterEmail} · ${req.requesterEmail} · status: ${getRequestStatusLabel(req.status)} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+    fillRequestNode(node, req, { withRequester: true });
 
     // Etap 1 (czeka na kierownika) – administracja jeszcze nie realizuje wydania.
     if (req.status === 'pending_manager') {
@@ -764,7 +798,7 @@ async function loadAdminRequests() {
     const approveBtn = node.querySelector('.approve-btn');
     const rejectBtn = node.querySelector('.reject-btn');
 
-    approveBtn.textContent = 'Wydaj sprzęt';
+    approveBtn.textContent = req.kind === 'purchase' ? 'Zatwierdź zakup' : 'Wydaj sprzęt';
 
     approveBtn.addEventListener('click', async () => {
       try {
@@ -816,9 +850,7 @@ async function loadManagerRequests() {
 
   requests.forEach(req => {
     const node = adminRequestTpl.content.cloneNode(true);
-    node.querySelector('.item-title').textContent = `${req.itemName} (${req.itemCode})`;
-    node.querySelector('.item-meta').textContent =
-      `${req.requesterName || req.requesterEmail} · ${req.requesterEmail} · cel: ${req.purpose || '-'} · miejsce: ${req.targetUseLocation || '-'} · zwrot: ${req.requestedReturnDate || '-'}`;
+    fillRequestNode(node, req, { withRequester: true });
 
     const noteInput = node.querySelector('.decision-note');
     const approveBtn = node.querySelector('.approve-btn');
@@ -1125,6 +1157,10 @@ document.addEventListener('click', async (e) => {
     await handleViewChange('users');
   }
 
+  if (target.closest('.open-purchase-btn')) {
+    openPurchaseModal();
+  }
+
   if (target.id === 'loadAdminItemsBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
@@ -1345,6 +1381,45 @@ if (addItemForm) {
       closeAddItemModal();
       await loadAdminItems();
       await refreshStats();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+// ===== Modal „Poproś o nowy sprzęt" (wniosek o zakup) =====
+
+function openPurchaseModal() {
+  if (!purchaseModal) return;
+  if (purchaseForm) purchaseForm.reset();
+  if (!purchaseModal.open) purchaseModal.showModal();
+}
+
+function closePurchaseModal() {
+  if (purchaseModal?.open) purchaseModal.close();
+}
+
+if (closePurchaseBtn) closePurchaseBtn.addEventListener('click', closePurchaseModal);
+if (cancelPurchaseBtn) cancelPurchaseBtn.addEventListener('click', closePurchaseModal);
+
+if (purchaseForm) {
+  purchaseForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(purchaseForm);
+    const payload = Object.fromEntries(formData.entries());
+
+    try {
+      await api('/purchase-requests', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+
+      showToast('Wysłano wniosek o zakup');
+      closePurchaseModal();
+      await refreshAll();
+      await loadMyRequests();
+      setActiveView('requests');
     } catch (err) {
       showToast(err.message);
     }

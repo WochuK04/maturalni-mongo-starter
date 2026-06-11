@@ -109,6 +109,27 @@ const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwi
 // 'pending' to status zaszłości sprzed wprowadzenia dwuetapowej akceptacji.
 const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
 
+// Wyznacza kierownika-akceptującego dla wnioskodawcy (routing dwuetapowy).
+// Zwraca email aktywnego kierownika/admina albo null (wtedy wniosek idzie wprost
+// do administracji). Wspólne dla wniosków o wypożyczenie i o zakup.
+async function resolveApproverEmail(db, requesterEmail) {
+  const requester = await db.collection(collections.users).findOne({ email: requesterEmail });
+  let approverEmail = requester?.managerEmail || null;
+
+  if (approverEmail) {
+    const approver = await db.collection(collections.users).findOne({
+      email: approverEmail,
+      isActive: { $ne: false }
+    });
+
+    if (!approver || !['manager', 'admin'].includes(approver.role)) {
+      approverEmail = null;
+    }
+  }
+
+  return approverEmail;
+}
+
 app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });
@@ -433,23 +454,11 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
   }
 
   // Dwuetapowy obieg: jeśli wnioskodawca ma przypisanego (aktywnego) kierownika,
-  // wniosek trafia najpierw do niego (pending_manager). Routing jest sterowany
-  // polem managerEmail na dokumencie użytkownika (ustawianym w panelu „Użytkownicy").
-  const requester = await db.collection(collections.users).findOne({ email: req.user.email });
-  let approverEmail = requester?.managerEmail || null;
-
-  if (approverEmail) {
-    const approver = await db.collection(collections.users).findOne({
-      email: approverEmail,
-      isActive: { $ne: false }
-    });
-
-    if (!approver || !['manager', 'admin'].includes(approver.role)) {
-      approverEmail = null;
-    }
-  }
+  // wniosek trafia najpierw do niego (pending_manager), inaczej wprost do admina.
+  const approverEmail = await resolveApproverEmail(db, req.user.email);
 
   const loanRequest = {
+    kind: 'loan',
     itemCode: item.itemCode,
     itemName: item.name,
     requesterEmail: req.user.email,
@@ -486,6 +495,79 @@ app.post('/loan-requests', requireAuth, async (req, res) => {
 
   res.status(201).json({
     message: 'Wniosek o wypożyczenie został utworzony',
+    requestId: result.insertedId
+  });
+});
+
+// Wniosek o ZAKUP sprzętu spoza magazynu/bazy (np. promocja w sklepie).
+// Korzysta z tego samego dwuetapowego obiegu akceptacji (kierownik -> admin).
+app.post('/purchase-requests', requireAuth, async (req, res) => {
+  const db = await getDb();
+
+  const {
+    itemName,
+    category = '',
+    quantity = 1,
+    shopUrl,
+    estimatedPrice = '',
+    justification = '',
+    note = ''
+  } = req.body;
+
+  const name = String(itemName || '').trim();
+  const url = String(shopUrl || '').trim();
+  const reason = String(justification || '').trim();
+
+  if (!name) {
+    return res.status(400).json({ message: 'Nazwa sprzętu jest wymagana' });
+  }
+
+  if (!/^https?:\/\/.+/i.test(url)) {
+    return res.status(400).json({ message: 'Podaj prawidłowy link do sklepu (http/https)' });
+  }
+
+  if (!reason) {
+    return res.status(400).json({ message: 'Uzasadnienie jest wymagane' });
+  }
+
+  const approverEmail = await resolveApproverEmail(db, req.user.email);
+
+  const purchaseRequest = {
+    kind: 'purchase',
+    itemName: name,
+    category: String(category || '').trim(),
+    quantity: Math.max(1, Number(quantity) || 1),
+    shopUrl: url,
+    estimatedPrice: String(estimatedPrice || '').trim(),
+    justification: reason,
+    note: String(note || '').trim(),
+    requesterEmail: req.user.email,
+    requesterName: req.user.fullName || req.user.email,
+    approverEmail,
+    status: approverEmail ? 'pending_manager' : 'pending_admin',
+    requestedAt: new Date(),
+    managerApprovedAt: null,
+    managerApprovedByEmail: null,
+    approvedAt: null,
+    approvedByEmail: null,
+    rejectedAt: null,
+    rejectedByEmail: null,
+    decisionNote: null
+  };
+
+  const result = await db.collection(collections.loanRequests).insertOne(purchaseRequest);
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'purchase_request_created',
+    entityType: 'purchase_request',
+    entityId: String(result.insertedId),
+    payload: { itemName: name, shopUrl: url, quantity: purchaseRequest.quantity },
+    createdAt: new Date()
+  });
+
+  res.status(201).json({
+    message: 'Wniosek o zakup został utworzony',
     requestId: result.insertedId
   });
 });
@@ -1233,6 +1315,33 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
         ? 'Wniosek czeka jeszcze na akceptację kierownika'
         : 'Wniosek nie oczekuje już na decyzję'
     });
+  }
+
+  // Wniosek o zakup: akceptacja to tylko decyzja (zatwierdzenie zakupu),
+  // nie tworzymy wypożyczenia ani nie szukamy sprzętu w bazie.
+  if (requestDoc.kind === 'purchase') {
+    await db.collection(collections.loanRequests).updateOne(
+      { _id: requestDoc._id },
+      {
+        $set: {
+          status: 'approved',
+          approvedAt: new Date(),
+          approvedByEmail: req.user.email,
+          decisionNote: String(decisionNote || '').trim()
+        }
+      }
+    );
+
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'purchase_request_approved',
+      entityType: 'purchase_request',
+      entityId: String(requestDoc._id),
+      payload: { itemName: requestDoc.itemName, shopUrl: requestDoc.shopUrl },
+      createdAt: new Date()
+    });
+
+    return res.json({ message: 'Wniosek o zakup zaakceptowany' });
   }
 
   const item = await db.collection(collections.items).findOne({
