@@ -76,14 +76,10 @@ const modalItemStatus = document.getElementById('modalItemStatus');
 const modalItemCategory = document.getElementById('modalItemCategory');
 const modalItemTitle = document.getElementById('modalItemTitle');
 const modalItemSubtitle = document.getElementById('modalItemSubtitle');
-const modalItemCode = document.getElementById('modalItemCode');
 const modalItemBrandModel = document.getElementById('modalItemBrandModel');
 const modalItemLocation = document.getElementById('modalItemLocation');
-const modalItemDetailedLocation = document.getElementById('modalItemDetailedLocation');
 const modalItemCondition = document.getElementById('modalItemCondition');
 const modalItemSerial = document.getElementById('modalItemSerial');
-const modalItemWarranty = document.getElementById('modalItemWarranty');
-const modalItemQr = document.getElementById('modalItemQr');
 const modalItemAssigned = document.getElementById('modalItemAssigned');
 const modalItemDetails = document.getElementById('modalItemDetails');
 const modalItemTags = document.getElementById('modalItemTags');
@@ -689,7 +685,10 @@ async function openItemDetails(itemCode) {
   modalItemTags.innerHTML = '';
   modalActiveLoan.textContent = 'Ładowanie...';
   modalRequestBtn.disabled = true;
-  if (modalHistoryBlock) modalHistoryBlock.hidden = true;
+  if (modalHistoryBlock) {
+    modalHistoryBlock.hidden = true;
+    modalHistoryBlock.open = false; // historia domyślnie zwinięta
+  }
   if (modalItemHistory) modalItemHistory.innerHTML = '';
 
   if (!itemDetailsModal.open) itemDetailsModal.showModal();
@@ -712,14 +711,10 @@ async function openItemDetails(itemCode) {
     modalItemSubtitle.textContent =
       [item.brand, item.model].filter(Boolean).join(' · ') || 'Brak dodatkowych danych producenta';
 
-    modalItemCode.textContent = item.itemCode || '-';
     modalItemBrandModel.textContent = [item.brand, item.model].filter(Boolean).join(' / ') || '-';
     modalItemLocation.textContent = item.currentLocation || '-';
-    modalItemDetailedLocation.textContent = item.detailedLocation || '-';
     modalItemCondition.textContent = item.conditionStatus || '-';
     modalItemSerial.textContent = item.serialNumber || '-';
-    modalItemWarranty.textContent = item.warrantyUntil ? formatDate(item.warrantyUntil) : '-';
-    modalItemQr.textContent = item.qrCodeValue || '-';
     modalItemAssigned.textContent =
       item.assignedToName || item.assignedToEmail
         ? `${item.assignedToName || ''}${item.assignedToName && item.assignedToEmail ? ' · ' : ''}${item.assignedToEmail || ''}`

@@ -311,10 +311,6 @@
 
         <dl class="details-grid">
           <div class="detail-item">
-            <dt>Kod</dt>
-            <dd id="modalItemCode">-</dd>
-          </div>
-          <div class="detail-item">
             <dt>Marka / model</dt>
             <dd id="modalItemBrandModel">-</dd>
           </div>
@@ -323,24 +319,12 @@
             <dd id="modalItemLocation">-</dd>
           </div>
           <div class="detail-item">
-            <dt>Lokalizacja szczegółowa</dt>
-            <dd id="modalItemDetailedLocation">-</dd>
-          </div>
-          <div class="detail-item">
             <dt>Stan techniczny</dt>
             <dd id="modalItemCondition">-</dd>
           </div>
           <div class="detail-item">
             <dt>Numer seryjny</dt>
             <dd id="modalItemSerial">-</dd>
-          </div>
-          <div class="detail-item">
-            <dt>Gwarancja do</dt>
-            <dd id="modalItemWarranty">-</dd>
-          </div>
-          <div class="detail-item">
-            <dt>QR</dt>
-            <dd id="modalItemQr">-</dd>
           </div>
           <div class="detail-item">
             <dt>Przypisanie</dt>
@@ -365,10 +349,10 @@
           </p>
         </div>
 
-        <div class="modal-block" id="modalHistoryBlock" hidden>
-          <h4>Historia</h4>
+        <details class="modal-block history-details" id="modalHistoryBlock" hidden>
+          <summary>Historia</summary>
           <ol id="modalItemHistory" class="history-list"></ol>
-        </div>
+        </details>
 
         <div class="actions-inline modal-actions">
           <button id="modalRequestBtn" class="btn btn-primary" type="button">
