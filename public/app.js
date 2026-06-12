@@ -1326,7 +1326,8 @@ function distinctSorted(items, key) {
 }
 
 function getAdminItemSearchSource(item) {
-  return [item.itemCode, item.name, item.brand, item.model, item.serialNumber]
+  // Szukamy po nazwie i właścicielu (imię + e-mail) oraz po kodzie sprzętu.
+  return [item.name, item.assignedToName, item.assignedToEmail, item.itemCode]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
@@ -1470,7 +1471,7 @@ function buildAdminItemsToolbar() {
   search.id = 'adminItemsSearch';
   search.className = 'search-input';
   search.type = 'search';
-  search.placeholder = 'Szukaj: kod, nazwa, marka, model, nr seryjny...';
+  search.placeholder = 'Szukaj: nazwa, właściciel (imię / e-mail), kod...';
 
   const categorySelect = makeFilterSelect(
     'adminItemsCategory',
