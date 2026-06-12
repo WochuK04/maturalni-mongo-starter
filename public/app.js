@@ -64,6 +64,7 @@ const transferItemForm = document.getElementById('transferItemForm');
 const transferItemTarget = document.getElementById('transferItemTarget');
 const transferAssignee = document.getElementById('transferAssignee');
 const transferNote = document.getElementById('transferNote');
+const transferEyebrow = document.getElementById('transferEyebrow');
 const closeTransferBtn = document.getElementById('closeTransferBtn');
 const cancelTransferBtn = document.getElementById('cancelTransferBtn');
 
@@ -1216,6 +1217,9 @@ async function loadMyLoans() {
     const noteInput = node.querySelector('.return-note');
     const reportBtn = node.querySelector('.report-issue-btn');
     if (reportBtn) reportBtn.addEventListener('click', () => openReportIssueModal(item));
+
+    const transferBtn = node.querySelector('.transfer-mine-btn');
+    if (transferBtn) transferBtn.addEventListener('click', () => openTransferModal(item, 'user'));
 
     locations.forEach(loc => {
       const opt = document.createElement('option');
@@ -2950,32 +2954,44 @@ if (discardItemForm) {
 // ===== Modal „Przenieś sprzęt" (transfer między osobami, Pakiet C) =====
 
 let transferTargetItem = null;
+// 'admin' = transfer z panelu admina (klucz po _id), 'user' = wymiana pracownik→pracownik
+// z zakładki „Mój sprzęt" (klucz po itemCode). Lista osób w obu z /users.
+let transferMode = 'admin';
 
-async function openTransferModal(item) {
+async function openTransferModal(item, mode = 'admin') {
   if (!transferItemModal || !item) return;
 
+  let users;
   try {
-    await ensureFormOptions();
+    users = await api('/users');
   } catch (err) {
     showToast(err.message);
     return;
   }
 
   transferTargetItem = item;
+  transferMode = mode;
   if (transferItemForm) transferItemForm.reset();
+  if (transferEyebrow) transferEyebrow.textContent = mode === 'user' ? 'Mój sprzęt' : 'Panel admina';
 
   // Lista osób bez obecnego posiadacza (transfer ma zmienić właściciela).
-  const userOptions = (formOptionsState?.users || [])
-    .filter(u => u.email !== item.assignedToEmail)
+  const excludeEmail = mode === 'user' ? (currentUser?.email || item.assignedToEmail) : item.assignedToEmail;
+  const userOptions = (Array.isArray(users) ? users : [])
+    .filter(u => u.email !== excludeEmail)
     .map(u => ({ value: u.email, label: `${u.fullName} (${u.email})` }));
   fillSelect(transferAssignee, userOptions, { includeEmpty: '— wybierz osobę —' });
 
   if (transferItemTarget) {
-    const holder = item.assignedToEmail
-      ? `Obecnie u: ${item.assignedToName || item.assignedToEmail}.`
-      : 'Sprzęt nie jest obecnie przypisany.';
-    transferItemTarget.textContent =
-      `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}). ${holder} Dotychczasowe wypożyczenie zostanie zamknięte, a sprzęt przypisany nowej osobie.`;
+    if (mode === 'user') {
+      transferItemTarget.textContent =
+        `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}) na innego pracownika. Sprzęt zostanie przypisany wybranej osobie, a administracja zobaczy to działanie.`;
+    } else {
+      const holder = item.assignedToEmail
+        ? `Obecnie u: ${item.assignedToName || item.assignedToEmail}.`
+        : 'Sprzęt nie jest obecnie przypisany.';
+      transferItemTarget.textContent =
+        `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}). ${holder} Dotychczasowe wypożyczenie zostanie zamknięte, a sprzęt przypisany nowej osobie.`;
+    }
   }
 
   if (!transferItemModal.open) transferItemModal.showModal();
@@ -3001,17 +3017,29 @@ if (transferItemForm) {
     }
 
     const item = transferTargetItem;
+    const note = transferNote?.value || '';
 
     try {
-      await api(`/admin/items/${item._id}/transfer`, {
-        method: 'POST',
-        body: JSON.stringify({ toEmail, note: transferNote?.value || '' })
-      });
-      showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
-      closeTransferModal();
-      await loadAdminItems();
-      await refreshStats();
-      await refreshReportsBadge();
+      if (transferMode === 'user') {
+        await api(`/my/items/${encodeURIComponent(item.itemCode)}/transfer`, {
+          method: 'POST',
+          body: JSON.stringify({ toEmail, note })
+        });
+        showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
+        closeTransferModal();
+        await loadMyLoans();
+        await refreshAll();
+      } else {
+        await api(`/admin/items/${item._id}/transfer`, {
+          method: 'POST',
+          body: JSON.stringify({ toEmail, note })
+        });
+        showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
+        closeTransferModal();
+        await loadAdminItems();
+        await refreshStats();
+        await refreshReportsBadge();
+      }
     } catch (err) {
       showToast(err.message);
     }

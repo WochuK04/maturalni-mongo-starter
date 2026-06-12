@@ -296,6 +296,18 @@ app.get('/locations', requireAuth, async (_req, res) => {
   res.json([...new Set([...locationNames, ...FALLBACK_LOCATIONS])]);
 });
 
+// Lista aktywnych użytkowników (tylko imię/e-mail) — do wyboru osoby przy
+// transferze pracownik→pracownik. Dostępne dla każdego zalogowanego.
+app.get('/users', requireAuth, async (_req, res) => {
+  const db = await getDb();
+  const users = await db.collection(collections.users)
+    .find({ isActive: { $ne: false } }, { projection: { email: 1, fullName: 1 } })
+    .sort({ fullName: 1 })
+    .toArray();
+
+  res.json(users.map(u => ({ email: u.email, fullName: u.fullName || u.email })));
+});
+
 app.get('/items/:itemCode', requireAuth, async (req, res) => {
   const db = await getDb();
   const normalizedItemCode = normalizeItemCode(req.params.itemCode);
@@ -521,6 +533,54 @@ app.post('/my/items/:itemCode/report-issue', requireAuth, async (req, res) => {
   });
 
   res.status(201).json({ message: 'Zgłoszenie wysłane do administracji', id: result.insertedId });
+});
+
+// Transfer sprzętu inicjowany przez pracownika — wymiana między pracownikami.
+// Przenosić można tylko własny sprzęt; administracja widzi to w „Zgłoszeniach".
+app.post('/my/items/:itemCode/transfer', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const itemCode = normalizeItemCode(req.params.itemCode);
+  const { toEmail = '', note = '' } = req.body;
+  const targetEmail = String(toEmail || '').trim().toLowerCase();
+
+  if (!targetEmail) {
+    return res.status(400).json({ message: 'Wskaż osobę, na którą przenosisz sprzęt' });
+  }
+
+  const item = await db.collection(collections.items).findOne({
+    itemCode,
+    isActive: { $ne: false }
+  });
+
+  if (!item) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  // Przenosić może osoba, która ma sprzęt przypisany, albo administracja.
+  const isAssignee = item.assignedToEmail === req.user.email;
+  if (!isAssignee && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Możesz przenosić tylko swój sprzęt' });
+  }
+
+  if (isBlockedFromLoan(item)) {
+    return res.status(400).json({ message: 'Tego sprzętu nie można przenosić' });
+  }
+
+  if (item.assignedToEmail === targetEmail) {
+    return res.status(400).json({ message: 'Sprzęt jest już przypisany do tej osoby' });
+  }
+
+  const targetUser = await db.collection(collections.users).findOne({
+    email: targetEmail,
+    isActive: { $ne: false }
+  });
+
+  if (!targetUser) {
+    return res.status(404).json({ message: 'Nie znaleziono aktywnego użytkownika o tym adresie' });
+  }
+
+  const { targetName } = await performItemTransfer(db, item, targetUser, req.user, note);
+  res.json({ message: `Przeniesiono na ${targetName}`, itemCode: item.itemCode });
 });
 
 app.get('/my/loan-requests', requireAuth, async (req, res) => {
@@ -1922,11 +1982,114 @@ app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res)
 // Przeniesienie sprzętu na inną osobę (transfer). Zamyka ewentualne aktywne
 // wypożyczenie obecnego posiadacza i otwiera nowe dla wskazanej osoby. Osoba
 // docelowa jest wymagana — zwrot do magazynu robi się zwykłym przepływem zwrotu.
+// Wspólna logika transferu sprzętu na inną osobę: zamyka aktywne wypożyczenie
+// obecnego posiadacza, otwiera nowe dla osoby docelowej, aktualizuje sprzęt
+// (na „U pracownika"), dopisuje audyt i powiadomienie dla administracji.
+// Używane przez transfer admina (panel) oraz transfer pracownika („Mój sprzęt").
+async function performItemTransfer(db, item, targetUser, actor, note) {
+  const now = new Date();
+  const transferNote = String(note || '').trim();
+  const targetEmail = targetUser.email;
+  const targetName = targetUser.fullName || targetUser.email;
+  const fromEmail = item.assignedToEmail || null;
+  const fromName = item.assignedToName || null;
+  const actorEmail = actor.email;
+  const actorName = actor.fullName || actor.email;
+
+  // Zamknij aktywne wypożyczenie obecnego posiadacza (jeśli sprzęt był u kogoś).
+  await db.collection(collections.loans).updateMany(
+    { itemCode: item.itemCode, status: 'active' },
+    {
+      $set: {
+        status: 'returned',
+        returnedAt: now,
+        returnLocation: 'Transfer',
+        returnNote: transferNote
+          ? `Przeniesiono na ${targetName}: ${transferNote}`
+          : `Przeniesiono na ${targetName}`,
+        closedByEmail: actorEmail
+      }
+    }
+  );
+
+  // Otwórz nowe wypożyczenie dla osoby docelowej.
+  const loan = {
+    itemId: item._id,
+    itemCode: item.itemCode,
+    userEmail: targetEmail,
+    userDisplayName: targetName,
+    quantity: 1,
+    fromLocation: item.currentLocation || 'Transfer',
+    targetUseLocation: 'U pracownika',
+    status: 'active',
+    borrowedAt: now,
+    dueAt: null,
+    returnedAt: null,
+    borrowNote: transferNote
+      ? `Transfer od ${fromName || fromEmail || 'magazynu'}: ${transferNote}`
+      : `Transfer od ${fromName || fromEmail || 'magazynu'}`,
+    returnNote: null,
+    createdByEmail: actorEmail,
+    closedByEmail: null
+  };
+
+  const loanResult = await db.collection(collections.loans).insertOne(loan);
+
+  await db.collection(collections.items).updateOne(
+    { _id: item._id },
+    {
+      $set: {
+        operationalStatus: 'loaned',
+        currentLocation: 'U pracownika',
+        assignedToEmail: targetEmail,
+        assignedToName: targetName,
+        updatedAt: now
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail,
+    actionType: 'item_transferred',
+    entityType: 'item',
+    entityId: String(item._id),
+    payload: {
+      itemCode: item.itemCode,
+      itemName: item.name,
+      fromEmail,
+      fromName,
+      toEmail: targetEmail,
+      toName: targetName,
+      loanId: String(loanResult.insertedId)
+    },
+    createdAt: now
+  });
+
+  // Powiadomienie dla administracji, że transfer został wykonany.
+  await db.collection(collections.notifications).insertOne({
+    kind: 'transfer',
+    status: 'open',
+    itemCode: item.itemCode,
+    itemName: item.name,
+    fromEmail,
+    fromName,
+    toEmail: targetEmail,
+    toName: targetName,
+    message: transferNote || '',
+    createdAt: now,
+    createdByEmail: actorEmail,
+    createdByName: actorName,
+    resolvedAt: null,
+    resolvedByEmail: null
+  });
+
+  return { targetName, loanId: loanResult.insertedId };
+}
+
 app.post('/admin/items/:id/transfer', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
   const { toEmail = '', note = '' } = req.body;
   const targetEmail = String(toEmail || '').trim().toLowerCase();
-  const transferNote = String(note || '').trim();
 
   if (!targetEmail) {
     return res.status(400).json({ message: 'Wskaż osobę, na którą przenosisz sprzęt' });
@@ -1962,98 +2125,7 @@ app.post('/admin/items/:id/transfer', requireAuth, requireAdmin, async (req, res
     return res.status(404).json({ message: 'Nie znaleziono aktywnego użytkownika o tym adresie' });
   }
 
-  const now = new Date();
-  const targetName = targetUser.fullName || targetUser.email;
-  const fromEmail = item.assignedToEmail || null;
-  const fromName = item.assignedToName || null;
-
-  // Zamknij aktywne wypożyczenie obecnego posiadacza (jeśli sprzęt był u kogoś).
-  await db.collection(collections.loans).updateMany(
-    { itemCode: item.itemCode, status: 'active' },
-    {
-      $set: {
-        status: 'returned',
-        returnedAt: now,
-        returnLocation: 'Transfer',
-        returnNote: transferNote
-          ? `Przeniesiono na ${targetName}: ${transferNote}`
-          : `Przeniesiono na ${targetName}`,
-        closedByEmail: req.user.email
-      }
-    }
-  );
-
-  // Otwórz nowe wypożyczenie dla osoby docelowej.
-  const loan = {
-    itemId: item._id,
-    itemCode: item.itemCode,
-    userEmail: targetEmail,
-    userDisplayName: targetName,
-    quantity: 1,
-    fromLocation: item.currentLocation || 'Transfer',
-    targetUseLocation: 'U pracownika',
-    status: 'active',
-    borrowedAt: now,
-    dueAt: null,
-    returnedAt: null,
-    borrowNote: transferNote
-      ? `Transfer od ${fromEmail || 'magazynu'}: ${transferNote}`
-      : `Transfer od ${fromEmail || 'magazynu'}`,
-    returnNote: null,
-    createdByEmail: req.user.email,
-    closedByEmail: null
-  };
-
-  const loanResult = await db.collection(collections.loans).insertOne(loan);
-
-  await db.collection(collections.items).updateOne(
-    { _id: item._id },
-    {
-      $set: {
-        operationalStatus: 'loaned',
-        currentLocation: 'U pracownika',
-        assignedToEmail: targetEmail,
-        assignedToName: targetName,
-        updatedAt: now
-      }
-    }
-  );
-
-  await db.collection(collections.auditLogs).insertOne({
-    actorEmail: req.user.email,
-    actionType: 'item_transferred',
-    entityType: 'item',
-    entityId: String(item._id),
-    payload: {
-      itemCode: item.itemCode,
-      itemName: item.name,
-      fromEmail,
-      fromName,
-      toEmail: targetEmail,
-      toName: targetName,
-      loanId: String(loanResult.insertedId)
-    },
-    createdAt: now
-  });
-
-  // Powiadomienie dla administracji, że transfer został wykonany.
-  await db.collection(collections.notifications).insertOne({
-    kind: 'transfer',
-    status: 'open',
-    itemCode: item.itemCode,
-    itemName: item.name,
-    fromEmail,
-    fromName,
-    toEmail: targetEmail,
-    toName: targetName,
-    message: transferNote || '',
-    createdAt: now,
-    createdByEmail: req.user.email,
-    createdByName: req.user.fullName || req.user.email,
-    resolvedAt: null,
-    resolvedByEmail: null
-  });
-
+  const { targetName } = await performItemTransfer(db, item, targetUser, req.user, note);
   res.json({ message: `Przeniesiono na ${targetName}`, itemCode: item.itemCode });
 });
 
