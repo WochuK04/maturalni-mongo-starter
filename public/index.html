@@ -251,6 +251,7 @@
           </div>
 
           <div class="actions-inline actions-wrap">
+            <button id="loadDashboardBtn" class="btn btn-secondary" type="button">Dashboard</button>
             <button id="loadAdminItemsBtn" class="btn btn-secondary" type="button">Sprzęt</button>
             <button id="loadAdminLoansBtn" class="btn btn-secondary" type="button">Wypożyczenia</button>
             <button id="loadAdminReturnsBtn" class="btn btn-secondary" type="button">Zwroty</button>
@@ -261,6 +262,7 @@
 
         <div class="admin-toolbar">
           <button id="openAddItemBtn" class="btn btn-primary" type="button">+ Dodaj sprzęt</button>
+          <button id="openImportBtn" class="btn btn-secondary" type="button">Importuj CSV</button>
         </div>
 
         <form id="auditFilterForm" class="admin-form audit-form" hidden>
@@ -585,6 +587,38 @@
         <button type="button" class="btn btn-secondary" id="cancelDiscardBtn">Anuluj</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="importItemsModal" class="form-modal import-modal">
+    <div class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Panel admina</p>
+          <h3>Importuj sprzęt z CSV</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeImportBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted">
+        Wymagane kolumny: <strong>kod</strong>, <strong>nazwa</strong>, <strong>kategoria</strong>.
+        Opcjonalne: ilość, lokalizacja, stan, marka, model, numer seryjny, gwarancja,
+        lokalizacja szczegółowa, tagi, uwagi.
+        <a href="#" id="downloadCsvTemplate">Pobierz szablon CSV</a>
+      </p>
+
+      <label class="field field-wide">
+        <span>Plik CSV</span>
+        <input type="file" id="importCsvFile" accept=".csv,text/csv" />
+      </label>
+
+      <div id="importPreview" class="import-preview" hidden></div>
+      <div id="importResult" class="import-result" hidden></div>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="importSubmitBtn" disabled>Importuj</button>
+        <button type="button" class="btn btn-secondary" id="cancelImportBtn">Zamknij</button>
+      </div>
+    </div>
   </dialog>
 
   <template id="availableItemTemplate">

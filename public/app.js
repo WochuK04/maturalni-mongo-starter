@@ -57,6 +57,15 @@ const purchaseForm = document.getElementById('purchaseForm');
 const closePurchaseBtn = document.getElementById('closePurchaseBtn');
 const cancelPurchaseBtn = document.getElementById('cancelPurchaseBtn');
 
+const importItemsModal = document.getElementById('importItemsModal');
+const importCsvFile = document.getElementById('importCsvFile');
+const importPreview = document.getElementById('importPreview');
+const importResult = document.getElementById('importResult');
+const importSubmitBtn = document.getElementById('importSubmitBtn');
+const closeImportBtn = document.getElementById('closeImportBtn');
+const cancelImportBtn = document.getElementById('cancelImportBtn');
+const downloadCsvTemplateBtn = document.getElementById('downloadCsvTemplate');
+
 const requestFormCard = document.getElementById('requestFormCard');
 const requestLayout = document.getElementById('requestLayout');
 const loanRequestForm = document.getElementById('loanRequestForm');
@@ -249,6 +258,120 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString('pl-PL');
+}
+
+// --- CSV: eksport i import (Pakiet B) ---
+
+// Pole CSV w cudzysłowach, gdy zawiera przecinek/cudzysłów/nową linię.
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function buildCsv(headers, rows) {
+  const lines = [headers.map(csvEscape).join(',')];
+  rows.forEach(row => lines.push(row.map(csvEscape).join(',')));
+  return lines.join('\r\n');
+}
+
+// Pobranie pliku CSV po stronie przeglądarki. BOM UTF-8, by Excel poprawnie
+// odczytał polskie znaki.
+function downloadCsv(filename, csvText) {
+  const blob = new Blob(['﻿', csvText], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvDateStamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Parser CSV obsługujący cudzysłowy, przecinki i znaki nowej linii w polach.
+function parseCsv(text) {
+  const clean = String(text || '').replace(/^﻿/, '');
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < clean.length; i += 1) {
+    const ch = clean[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (clean[i + 1] === '"') { field += '"'; i += 1; }
+        else inQuotes = false;
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') inQuotes = true;
+    else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (ch !== '\r') field += ch;
+  }
+
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+
+  return rows.filter(cells => cells.some(cell => String(cell).trim() !== ''));
+}
+
+// Nazwy kolumn (po polsku i po angielsku) → pola sprzętu. Klucze bez znaków
+// diakrytycznych, bo nagłówki normalizujemy przez normalizeHeader().
+const CSV_HEADER_ALIASES = {
+  'kod': 'itemCode', 'kod sprzetu': 'itemCode', 'itemcode': 'itemCode',
+  'nazwa': 'name', 'name': 'name',
+  'kategoria': 'category', 'category': 'category',
+  'ilosc': 'quantity', 'liczba': 'quantity', 'quantity': 'quantity',
+  'lokalizacja': 'currentLocation', 'currentlocation': 'currentLocation', 'location': 'currentLocation',
+  'stan': 'conditionStatus', 'stan techniczny': 'conditionStatus', 'conditionstatus': 'conditionStatus', 'condition': 'conditionStatus',
+  'marka': 'brand', 'brand': 'brand',
+  'model': 'model',
+  'numer seryjny': 'serialNumber', 'serialnumber': 'serialNumber', 'serial': 'serialNumber',
+  'gwarancja': 'warrantyUntil', 'gwarancja do': 'warrantyUntil', 'warrantyuntil': 'warrantyUntil', 'warranty': 'warrantyUntil',
+  'lokalizacja szczegolowa': 'detailedLocation', 'detailedlocation': 'detailedLocation',
+  'tagi': 'tags', 'tags': 'tags',
+  'kod qr': 'qrCodeValue', 'qr': 'qrCodeValue', 'qrcodevalue': 'qrCodeValue',
+  'uwagi': 'notes', 'notes': 'notes',
+  'szczegoly': 'details', 'details': 'details', 'opis': 'details'
+};
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replaceAll('ł', 'l'); // ł nie rozkłada się w NFD, więc zamieniamy ręcznie
+}
+
+// Z surowych wierszy CSV (pierwszy = nagłówek) buduje obiekty pól sprzętu.
+function csvToItems(rows) {
+  if (!rows.length) return { items: [], unknownHeaders: [] };
+
+  const headerCells = rows[0];
+  const fields = headerCells.map(cell => CSV_HEADER_ALIASES[normalizeHeader(cell)] || null);
+  const unknownHeaders = headerCells.filter((_, i) => !fields[i]).map(h => String(h).trim()).filter(Boolean);
+
+  const items = rows.slice(1).map(cells => {
+    const obj = {};
+    fields.forEach((field, i) => {
+      if (field) obj[field] = String(cells[i] ?? '').trim();
+    });
+    return obj;
+  });
+
+  return { items, unknownHeaders };
 }
 
 function getItemImage(item) {
@@ -979,14 +1102,156 @@ function renderTable(rows, columns) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-async function loadAdminItems() {
-  if (currentUser?.role !== 'admin') return;
-  hideAuditFilters();
+// Tabela admina z paskiem narzędzi i eksportem CSV bieżącej listy (B2).
+function renderAdminTableView(rows, columns, exportBaseName) {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'admin-list-toolbar';
 
-  const items = await api('/admin/items');
+  const count = document.createElement('span');
+  count.className = 'admin-items-count muted';
+  count.textContent = `Pozycje: ${rows.length}`;
 
-  if (!items.length) {
-    adminContent.innerHTML = '<div class="empty">Brak sprzętu w magazynie.</div>';
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'btn btn-secondary';
+  exportBtn.textContent = 'Eksportuj CSV';
+  exportBtn.disabled = !rows.length;
+  exportBtn.addEventListener('click', () => {
+    const headers = columns.map(col => col.label);
+    const data = rows.map(row => columns.map(col => row[col.key] ?? ''));
+    downloadCsv(`${exportBaseName}-${csvDateStamp()}.csv`, buildCsv(headers, data));
+    showToast(`Wyeksportowano ${rows.length} pozycji`);
+  });
+
+  toolbar.append(count, exportBtn);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.innerHTML = renderTable(rows, columns);
+
+  adminContent.innerHTML = '';
+  adminContent.append(toolbar, tableWrap);
+}
+
+// Pełna lista sprzętu admina (pobrana raz, filtrowana po stronie frontu – B1/B2).
+let adminItemsState = [];
+
+// Kolumny eksportu CSV sprzętu (etykiety po polsku, wartości czytelne dla człowieka).
+const ADMIN_ITEMS_EXPORT_COLUMNS = [
+  { label: 'Kod', get: i => i.itemCode },
+  { label: 'Nazwa', get: i => i.name },
+  { label: 'Kategoria', get: i => i.category },
+  { label: 'Status', get: i => getStatusLabel(i.operationalStatus) },
+  { label: 'Lokalizacja', get: i => i.currentLocation },
+  { label: 'Lokalizacja szczegolowa', get: i => i.detailedLocation },
+  { label: 'Stan techniczny', get: i => getConditionLabel(i.conditionStatus) },
+  { label: 'Marka', get: i => i.brand },
+  { label: 'Model', get: i => i.model },
+  { label: 'Numer seryjny', get: i => i.serialNumber },
+  { label: 'Gwarancja do', get: i => i.warrantyUntil },
+  { label: 'Ilosc', get: i => i.quantity },
+  { label: 'Przypisany do', get: i => i.assignedToEmail },
+  { label: 'Tagi', get: i => (Array.isArray(i.tags) ? i.tags.join(', ') : '') },
+  { label: 'Kod QR', get: i => i.qrCodeValue },
+  { label: 'Uwagi', get: i => i.notes },
+  { label: 'Szczegoly', get: i => i.details }
+];
+
+function distinctSorted(items, key) {
+  return [...new Set(items.map(i => i[key]).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b), 'pl'));
+}
+
+function getAdminItemSearchSource(item) {
+  return [item.itemCode, item.name, item.brand, item.model, item.serialNumber]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function getFilteredAdminItems() {
+  const term = normalizeText(document.getElementById('adminItemsSearch')?.value || '');
+  const category = document.getElementById('adminItemsCategory')?.value || '';
+  const status = document.getElementById('adminItemsStatus')?.value || '';
+  const location = document.getElementById('adminItemsLocation')?.value || '';
+  const condition = document.getElementById('adminItemsCondition')?.value || '';
+
+  return adminItemsState.filter(item => {
+    if (term && !getAdminItemSearchSource(item).includes(term)) return false;
+    if (category && item.category !== category) return false;
+    if (status && item.operationalStatus !== status) return false;
+    if (location && item.currentLocation !== location) return false;
+    if (condition && item.conditionStatus !== condition) return false;
+    return true;
+  });
+}
+
+function buildAdminItemRow(item) {
+  const tr = document.createElement('tr');
+
+  [
+    item.category || '-',
+    item.name || '-',
+    getStatusLabel(item.operationalStatus),
+    item.currentLocation || '-',
+    getConditionLabel(item.conditionStatus),
+    item.assignedToEmail || '—'
+  ].forEach(text => {
+    const td = document.createElement('td');
+    td.textContent = text;
+    tr.appendChild(td);
+  });
+
+  const actionsTd = document.createElement('td');
+  actionsTd.className = 'table-actions';
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'btn btn-secondary';
+  editBtn.textContent = 'Edytuj';
+  editBtn.addEventListener('click', () => openEditItemModal(item));
+  actionsTd.appendChild(editBtn);
+
+  const discardBtn = document.createElement('button');
+  discardBtn.type = 'button';
+  discardBtn.className = 'btn btn-danger';
+  discardBtn.textContent = 'Wyrzuć';
+  discardBtn.addEventListener('click', () => openDiscardModal(item));
+  actionsTd.appendChild(discardBtn);
+
+  tr.appendChild(actionsTd);
+  return tr;
+}
+
+function makeFilterSelect(id, allLabel, options) {
+  const select = document.createElement('select');
+  select.id = id;
+  select.className = 'filter-select';
+
+  const optAll = document.createElement('option');
+  optAll.value = '';
+  optAll.textContent = allLabel;
+  select.appendChild(optAll);
+
+  options.forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  });
+
+  return select;
+}
+
+function renderAdminItemsTable() {
+  const wrap = document.getElementById('adminItemsTableWrap');
+  if (!wrap) return;
+
+  const filtered = getFilteredAdminItems();
+  const countEl = document.getElementById('adminItemsCount');
+  if (countEl) countEl.textContent = `Pozycje: ${filtered.length} z ${adminItemsState.length}`;
+
+  if (!filtered.length) {
+    wrap.innerHTML = '<div class="empty">Brak sprzętu dla wybranych filtrów.</div>';
     return;
   }
 
@@ -1006,48 +1271,222 @@ async function loadAdminItems() {
   `;
 
   const tbody = document.createElement('tbody');
+  filtered.forEach(item => tbody.appendChild(buildAdminItemRow(item)));
+  table.appendChild(tbody);
 
-  items.forEach(item => {
-    const tr = document.createElement('tr');
+  wrap.innerHTML = '';
+  wrap.appendChild(table);
+}
 
-    [
-      item.category || '-',
-      item.name || '-',
-      getStatusLabel(item.operationalStatus),
-      item.currentLocation || '-',
-      getConditionLabel(item.conditionStatus),
-      item.assignedToEmail || '—'
-    ].forEach(text => {
-      const td = document.createElement('td');
-      td.textContent = text;
-      tr.appendChild(td);
-    });
+function exportAdminItemsCsv() {
+  const rows = getFilteredAdminItems();
+  if (!rows.length) {
+    showToast('Brak danych do eksportu');
+    return;
+  }
 
-    const actionsTd = document.createElement('td');
-    actionsTd.className = 'table-actions';
+  const headers = ADMIN_ITEMS_EXPORT_COLUMNS.map(c => c.label);
+  const data = rows.map(item => ADMIN_ITEMS_EXPORT_COLUMNS.map(c => c.get(item)));
+  downloadCsv(`sprzet-${csvDateStamp()}.csv`, buildCsv(headers, data));
+  showToast(`Wyeksportowano ${rows.length} pozycji`);
+}
 
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'btn btn-secondary';
-    editBtn.textContent = 'Edytuj';
-    editBtn.addEventListener('click', () => openEditItemModal(item));
-    actionsTd.appendChild(editBtn);
+function buildAdminItemsToolbar() {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'admin-items-toolbar';
 
-    const discardBtn = document.createElement('button');
-    discardBtn.type = 'button';
-    discardBtn.className = 'btn btn-danger';
-    discardBtn.textContent = 'Wyrzuć';
-    discardBtn.addEventListener('click', () => openDiscardModal(item));
-    actionsTd.appendChild(discardBtn);
+  const search = document.createElement('input');
+  search.id = 'adminItemsSearch';
+  search.className = 'search-input';
+  search.type = 'search';
+  search.placeholder = 'Szukaj: kod, nazwa, marka, model, nr seryjny...';
 
-    tr.appendChild(actionsTd);
+  const categorySelect = makeFilterSelect(
+    'adminItemsCategory',
+    'Wszystkie kategorie',
+    distinctSorted(adminItemsState, 'category').map(v => ({ value: v, label: v }))
+  );
+  const statusSelect = makeFilterSelect(
+    'adminItemsStatus',
+    'Wszystkie statusy',
+    distinctSorted(adminItemsState, 'operationalStatus').map(v => ({ value: v, label: getStatusLabel(v) }))
+  );
+  const locationSelect = makeFilterSelect(
+    'adminItemsLocation',
+    'Wszystkie lokalizacje',
+    distinctSorted(adminItemsState, 'currentLocation').map(v => ({ value: v, label: v }))
+  );
+  const conditionSelect = makeFilterSelect(
+    'adminItemsCondition',
+    'Każdy stan techniczny',
+    distinctSorted(adminItemsState, 'conditionStatus').map(v => ({ value: v, label: getConditionLabel(v) }))
+  );
 
-    tbody.appendChild(tr);
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'btn btn-secondary';
+  exportBtn.textContent = 'Eksportuj CSV';
+  exportBtn.addEventListener('click', exportAdminItemsCsv);
+
+  let searchTimer = null;
+  search.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(renderAdminItemsTable, 120);
+  });
+  [categorySelect, statusSelect, locationSelect, conditionSelect].forEach(sel => {
+    sel.addEventListener('change', renderAdminItemsTable);
   });
 
-  table.appendChild(tbody);
+  toolbar.append(search, categorySelect, statusSelect, locationSelect, conditionSelect, exportBtn);
+  return toolbar;
+}
+
+async function loadAdminItems() {
+  if (currentUser?.role !== 'admin') return;
+  hideAuditFilters();
+
+  const items = await api('/admin/items');
+  adminItemsState = Array.isArray(items) ? items : [];
+
   adminContent.innerHTML = '';
-  adminContent.appendChild(table);
+
+  if (!adminItemsState.length) {
+    adminContent.innerHTML = '<div class="empty">Brak sprzętu w magazynie.</div>';
+    return;
+  }
+
+  adminContent.appendChild(buildAdminItemsToolbar());
+
+  const count = document.createElement('p');
+  count.id = 'adminItemsCount';
+  count.className = 'admin-items-count muted';
+  adminContent.appendChild(count);
+
+  const wrap = document.createElement('div');
+  wrap.id = 'adminItemsTableWrap';
+  adminContent.appendChild(wrap);
+
+  renderAdminItemsTable();
+}
+
+// --- Dashboard administracyjny (B3) ---
+
+const DASHBOARD_STATUS_ORDER = ['available', 'loaned', 'unavailable', 'inactive'];
+const STATUS_BAR_MODIFIER = {
+  available: 'bar-fill-available',
+  loaned: 'bar-fill-loaned',
+  unavailable: 'bar-fill-unavailable',
+  inactive: 'bar-fill-inactive'
+};
+
+function renderBarChart(entries) {
+  if (!entries.length) return '<p class="muted">Brak danych.</p>';
+
+  const max = Math.max(...entries.map(e => e.count), 1);
+  const rows = entries.map(entry => {
+    const pct = Math.max(2, Math.round((entry.count / max) * 100));
+    const modifier = entry.modifier ? ` ${entry.modifier}` : '';
+    return `
+      <div class="bar-row">
+        <span class="bar-label" title="${escapeHtml(entry.label)}">${escapeHtml(entry.label)}</span>
+        <span class="bar-track"><span class="bar-fill${modifier}" style="width:${pct}%"></span></span>
+        <span class="bar-value">${entry.count}</span>
+      </div>
+    `;
+  }).join('');
+
+  return `<div class="bar-chart">${rows}</div>`;
+}
+
+function buildStatusEntries(byStatus) {
+  const extra = Object.keys(byStatus).filter(k => !DASHBOARD_STATUS_ORDER.includes(k));
+  return [...DASHBOARD_STATUS_ORDER, ...extra]
+    .filter(key => byStatus[key])
+    .map(key => ({
+      label: getStatusLabel(key),
+      count: byStatus[key],
+      modifier: STATUS_BAR_MODIFIER[key] || ''
+    }));
+}
+
+async function loadDashboard() {
+  if (currentUser?.role !== 'admin') return;
+  hideAuditFilters();
+
+  const stats = await api('/admin/stats');
+
+  const statusEntries = buildStatusEntries(stats.itemsByStatus || {});
+  const conditionEntries = (stats.itemsByCondition || []).map(c => ({
+    label: c.condition ? getConditionLabel(c.condition) : 'Nieokreślony',
+    count: c.count
+  }));
+  const categoryEntries = (stats.itemsByCategory || []).map(c => ({
+    label: c.category,
+    count: c.count
+  }));
+
+  const warranty = stats.warranty || { total: 0, expired: 0, soon: 0, items: [] };
+
+  const cards = [
+    { label: 'Sprzęt łącznie', value: stats.itemsTotal ?? 0, hint: 'aktywne pozycje w bazie' },
+    { label: 'Aktywne wypożyczenia', value: stats.activeLoans ?? 0, hint: 'sprzęt obecnie u osób' },
+    { label: 'Oczekujące wnioski', value: stats.pendingRequests?.total ?? 0, hint: 'czekają na decyzję' },
+    {
+      label: 'Gwarancje ≤ 30 dni',
+      value: warranty.total ?? 0,
+      hint: warranty.expired ? `w tym ${warranty.expired} po terminie` : 'kończące się wkrótce',
+      modifier: warranty.total ? 'dash-card-warn' : ''
+    }
+  ];
+
+  const cardsHtml = cards.map(card => `
+    <article class="card dash-card ${card.modifier || ''}">
+      <p class="dash-card-label">${escapeHtml(card.label)}</p>
+      <p class="dash-card-value">${escapeHtml(card.value)}</p>
+      <p class="dash-card-hint muted">${escapeHtml(card.hint)}</p>
+    </article>
+  `).join('');
+
+  const warrantyHtml = warranty.items && warranty.items.length
+    ? `<div class="admin-content"><table>
+        <thead><tr><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Gwarancja do</th><th>Status</th></tr></thead>
+        <tbody>${warranty.items.map(item => `
+          <tr>
+            <td>${escapeHtml(item.itemCode || '-')}</td>
+            <td>${escapeHtml(item.name || '-')}</td>
+            <td>${escapeHtml(item.category || '-')}</td>
+            <td>${escapeHtml(formatDate(item.warrantyUntil))}</td>
+            <td>${item.expired
+              ? '<span class="badge badge-warranty-expired">Po terminie</span>'
+              : `<span class="badge badge-warranty-soon">${item.daysLeft === 0 ? 'dziś' : (item.daysLeft === 1 ? 'za 1 dzień' : `za ${item.daysLeft} dni`)}</span>`}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table></div>`
+    : '<p class="muted">Brak sprzętu z gwarancją kończącą się w ciągu 30 dni.</p>';
+
+  adminContent.innerHTML = `
+    <div class="dashboard">
+      <div class="dashboard-stats">${cardsHtml}</div>
+      <div class="dashboard-sections">
+        <section class="card dash-section">
+          <h3>Sprzęt wg statusu</h3>
+          ${renderBarChart(statusEntries)}
+        </section>
+        <section class="card dash-section">
+          <h3>Sprzęt wg stanu technicznego</h3>
+          ${renderBarChart(conditionEntries)}
+        </section>
+        <section class="card dash-section dash-section-wide">
+          <h3>Sprzęt wg kategorii</h3>
+          ${renderBarChart(categoryEntries)}
+        </section>
+        <section class="card dash-section dash-section-wide">
+          <h3>Gwarancje kończące się w ciągu 30 dni</h3>
+          ${warrantyHtml}
+        </section>
+      </div>
+    </div>
+  `;
 }
 
 async function loadAdminLoans(status = 'active') {
@@ -1083,7 +1522,7 @@ async function loadAdminLoans(status = 'active') {
         { key: 'borrowedAtLabel', label: 'Wypożyczono' }
       ];
 
-  adminContent.innerHTML = renderTable(rows, columns);
+  renderAdminTableView(rows, columns, status === 'returned' ? 'zwroty' : 'wypozyczenia');
 }
 
 async function loadAdminRequests() {
@@ -1489,26 +1928,19 @@ async function loadAuditLogs(filters = {}) {
     return;
   }
 
-  adminContent.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Kiedy</th>
-          <th>Użytkownik</th>
-          <th>Co zrobił</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${logs.map(log => `
-          <tr>
-            <td>${log.createdAt ? new Date(log.createdAt).toLocaleString('pl-PL') : '-'}</td>
-            <td>${escapeHtml(userNames[log.actorEmail] || log.actorEmail || '—')}</td>
-            <td>${escapeHtml(describeAudit(log))}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
+  const rows = logs.map(log => ({
+    when: log.createdAt ? new Date(log.createdAt).toLocaleString('pl-PL') : '-',
+    user: userNames[log.actorEmail] || log.actorEmail || '—',
+    action: describeAudit(log)
+  }));
+
+  const columns = [
+    { key: 'when', label: 'Kiedy' },
+    { key: 'user', label: 'Użytkownik' },
+    { key: 'action', label: 'Co zrobił' }
+  ];
+
+  renderAdminTableView(rows, columns, 'historia');
 }
 
 async function refreshStats() {
@@ -1620,6 +2052,16 @@ document.addEventListener('click', async (e) => {
     setActiveView('admin');
     showAuditFilters();
     await withButtonLoading(target, () => loadAuditLogs({ limit: 100 })).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'loadDashboardBtn') {
+    workspaceMode = 'admin';
+    setActiveView('admin');
+    await withButtonLoading(target, () => loadDashboard()).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'openImportBtn') {
+    openImportModal();
   }
 
   const detailsBtn = target.closest('.details-btn');
@@ -1855,6 +2297,169 @@ async function openEditItemModal(item) {
 function closeAddItemModal() {
   if (addItemModal?.open) addItemModal.close();
   editingItemId = null;
+}
+
+// --- Import zbiorczy sprzętu z CSV (B4) ---
+
+let importParsedItems = [];
+
+function resetImportModal() {
+  importParsedItems = [];
+  if (importCsvFile) importCsvFile.value = '';
+  if (importPreview) { importPreview.hidden = true; importPreview.innerHTML = ''; }
+  if (importResult) { importResult.hidden = true; importResult.innerHTML = ''; }
+  if (importSubmitBtn) importSubmitBtn.disabled = true;
+}
+
+function openImportModal() {
+  if (!importItemsModal) return;
+  resetImportModal();
+  if (!importItemsModal.open) importItemsModal.showModal();
+}
+
+function closeImportModal() {
+  if (importItemsModal?.open) importItemsModal.close();
+}
+
+function handleImportFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const rows = parseCsv(reader.result);
+      const { items, unknownHeaders } = csvToItems(rows);
+      buildImportPreview(items, unknownHeaders);
+    } catch {
+      showToast('Nie udało się odczytać pliku CSV');
+    }
+  };
+  reader.onerror = () => showToast('Nie udało się odczytać pliku');
+  reader.readAsText(file, 'utf-8');
+}
+
+// Walidacja po stronie frontu (te same reguły co backend): pola wymagane
+// i duplikaty kodu w obrębie pliku. Duplikaty względem bazy wykryje backend.
+function buildImportPreview(items, unknownHeaders) {
+  if (importResult) { importResult.hidden = true; importResult.innerHTML = ''; }
+  if (!importPreview) return;
+
+  if (!items.length) {
+    importPreview.hidden = false;
+    importPreview.innerHTML = '<div class="empty">Plik nie zawiera danych do importu.</div>';
+    importParsedItems = [];
+    if (importSubmitBtn) importSubmitBtn.disabled = true;
+    return;
+  }
+
+  const seen = new Set();
+  const validated = items.map((item, index) => {
+    const itemCode = String(item.itemCode || '').trim().toUpperCase();
+    const name = String(item.name || '').trim();
+    const category = String(item.category || '').trim();
+
+    let issue = '';
+    if (!itemCode || !name || !category) issue = 'Brak: kod / nazwa / kategoria';
+    else if (seen.has(itemCode)) issue = 'Duplikat kodu w pliku';
+    if (itemCode) seen.add(itemCode);
+
+    return { fileRow: index + 2, item, itemCode, name, category, issue };
+  });
+
+  const okItems = validated.filter(v => !v.issue).map(v => v.item);
+  const badCount = validated.length - okItems.length;
+  importParsedItems = okItems;
+
+  const previewRows = validated.slice(0, 30);
+  const tableRows = previewRows.map(v => `
+    <tr class="${v.issue ? 'import-row-bad' : ''}">
+      <td>${v.fileRow}</td>
+      <td>${escapeHtml(v.itemCode || '—')}</td>
+      <td>${escapeHtml(v.name || '—')}</td>
+      <td>${escapeHtml(v.category || '—')}</td>
+      <td>${v.issue
+        ? `<span class="import-issue">${escapeHtml(v.issue)}</span>`
+        : '<span class="import-ok">OK</span>'}</td>
+    </tr>
+  `).join('');
+
+  const unknownNote = unknownHeaders.length
+    ? `<p class="muted">Pominięte kolumny (nierozpoznane): ${escapeHtml(unknownHeaders.join(', '))}</p>`
+    : '';
+  const moreNote = validated.length > previewRows.length
+    ? `<span class="muted">(podgląd ${previewRows.length} z ${validated.length})</span>`
+    : '';
+
+  importPreview.hidden = false;
+  importPreview.innerHTML = `
+    <div class="import-summary">
+      <span class="import-ok">Poprawne: ${okItems.length}</span>
+      <span class="import-issue">Z błędami: ${badCount}</span>
+      ${moreNote}
+    </div>
+    ${unknownNote}
+    <div class="admin-content import-preview-table">
+      <table>
+        <thead><tr><th>Wiersz</th><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Status</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `;
+
+  if (importSubmitBtn) importSubmitBtn.disabled = okItems.length === 0;
+}
+
+async function submitImport() {
+  if (!importParsedItems.length) return;
+
+  const result = await api('/admin/items/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ items: importParsedItems })
+  });
+
+  const errorList = (result.errors || []).slice(0, 50).map(err =>
+    `<li>Wiersz ${err.row}${err.itemCode ? ` (${escapeHtml(err.itemCode)})` : ''}: ${escapeHtml(err.message)}</li>`
+  ).join('');
+
+  if (importResult) {
+    importResult.hidden = false;
+    importResult.innerHTML = `
+      <div class="import-summary">
+        <span class="import-ok">Dodano: ${result.added}</span>
+        <span class="import-issue">Pominięto: ${result.skipped}</span>
+      </div>
+      ${errorList ? `<ul class="import-errors">${errorList}</ul>` : ''}
+    `;
+  }
+
+  // Czyścimy bufor, by ponowne kliknięcie nie zaimportowało drugi raz.
+  importParsedItems = [];
+  if (importSubmitBtn) importSubmitBtn.disabled = true;
+  showToast(result.message);
+
+  loadAdminItems().catch(() => {});
+}
+
+function downloadImportTemplate() {
+  const headers = ['kod', 'nazwa', 'kategoria', 'ilosc', 'lokalizacja', 'stan', 'marka', 'model', 'numer seryjny', 'gwarancja', 'lokalizacja szczegolowa', 'tagi', 'uwagi'];
+  const example = ['CAM-100', 'Sony A7 III', 'Aparat', '1', 'Magazyn', 'Dobry', 'Sony', 'A7 III', 'SN-12345', '2026-12-31', 'Regał B, półka 3', '4K, fullframe', 'Przykładowy wiersz'];
+  downloadCsv('szablon-import-sprzetu.csv', buildCsv(headers, [example]));
+}
+
+if (closeImportBtn) closeImportBtn.addEventListener('click', closeImportModal);
+if (cancelImportBtn) cancelImportBtn.addEventListener('click', closeImportModal);
+if (importCsvFile) {
+  importCsvFile.addEventListener('change', (e) => handleImportFile(e.target.files?.[0]));
+}
+if (importSubmitBtn) {
+  importSubmitBtn.addEventListener('click', () => {
+    withButtonLoading(importSubmitBtn, submitImport).catch(err => showToast(err.message));
+  });
+}
+if (downloadCsvTemplateBtn) {
+  downloadCsvTemplateBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    downloadImportTemplate();
+  });
 }
 
 if (openAddItemBtn) openAddItemBtn.addEventListener('click', openAddItemModal);

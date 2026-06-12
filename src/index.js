@@ -105,6 +105,23 @@ const ITEM_CONDITIONS = [
 
 const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwis'];
 
+// Stan techniczny z importu CSV bywa wpisany "po polsku" albo jako surowa wartość.
+// Sprowadzamy do znanej wartości z ITEM_CONDITIONS, w razie wątpliwości fallback.
+const CONDITION_VALUES = ITEM_CONDITIONS.map(c => c.value);
+const CONDITION_LABEL_TO_VALUE = ITEM_CONDITIONS.reduce((acc, c) => {
+  acc[c.label.toLowerCase()] = c.value;
+  return acc;
+}, {});
+
+function normalizeConditionStatus(value, fallback = 'ok') {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  const lower = raw.toLowerCase();
+  if (CONDITION_VALUES.includes(lower)) return lower;
+  if (CONDITION_LABEL_TO_VALUE[lower]) return CONDITION_LABEL_TO_VALUE[lower];
+  return fallback;
+}
+
 // Statusy wniosku, które wciąż są "w obiegu" (nie zapadła ostateczna decyzja).
 // 'pending' to status zaszłości sprzed wprowadzenia dwuetapowej akceptacji.
 const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
@@ -992,6 +1009,108 @@ app.get('/admin/form-options', requireAuth, requireAdmin, async (_req, res) => {
   });
 });
 
+// Agregaty do dashboardu administracyjnego (Pakiet B – Raporty i dane).
+app.get('/admin/stats', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+  const itemsColl = db.collection(collections.items);
+  const activeItems = { isActive: { $ne: false } };
+
+  const [
+    statusRows,
+    categoryRows,
+    conditionRows,
+    itemsTotal,
+    activeLoans,
+    requestRows,
+    warrantyDocs
+  ] = await Promise.all([
+    itemsColl.aggregate([
+      { $match: activeItems },
+      { $group: { _id: '$operationalStatus', count: { $sum: 1 } } }
+    ]).toArray(),
+    itemsColl.aggregate([
+      { $match: activeItems },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $sort: { count: -1, _id: 1 } }
+    ]).toArray(),
+    itemsColl.aggregate([
+      { $match: activeItems },
+      { $group: { _id: '$conditionStatus', count: { $sum: 1 } } }
+    ]).toArray(),
+    itemsColl.countDocuments(activeItems),
+    db.collection(collections.loans).countDocuments({ status: 'active' }),
+    db.collection(collections.loanRequests).aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]).toArray(),
+    itemsColl
+      .find(
+        { ...activeItems, warrantyUntil: { $nin: [null, ''] } },
+        { projection: { itemCode: 1, name: 1, category: 1, warrantyUntil: 1 } }
+      )
+      .toArray()
+  ]);
+
+  const toMap = (rows) => rows.reduce((acc, r) => {
+    const key = r._id == null || r._id === '' ? 'unknown' : String(r._id);
+    acc[key] = r.count;
+    return acc;
+  }, {});
+
+  const requestsByStatus = toMap(requestRows);
+  const pendingRequestsTotal = ACTIVE_REQUEST_STATUSES.reduce(
+    (sum, status) => sum + (requestsByStatus[status] || 0),
+    0
+  );
+
+  // Gwarancje: dni do końca względem dziś (00:00). warrantyUntil to string z formularza.
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const SOON_DAYS = 30;
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  const warrantyItems = warrantyDocs
+    .map(doc => {
+      const parsed = new Date(doc.warrantyUntil);
+      if (Number.isNaN(parsed.getTime())) return null;
+      const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+      const daysLeft = Math.round((target - today) / dayMs);
+      return {
+        itemCode: doc.itemCode,
+        name: doc.name,
+        category: doc.category,
+        warrantyUntil: doc.warrantyUntil,
+        daysLeft,
+        expired: daysLeft < 0
+      };
+    })
+    .filter(Boolean)
+    .filter(entry => entry.daysLeft < SOON_DAYS)
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+
+  const warrantyExpired = warrantyItems.filter(entry => entry.expired).length;
+
+  res.json({
+    itemsTotal,
+    itemsByStatus: toMap(statusRows),
+    itemsByCategory: categoryRows.map(r => ({
+      category: r._id == null || r._id === '' ? 'Bez kategorii' : String(r._id),
+      count: r.count
+    })),
+    itemsByCondition: conditionRows.map(r => ({
+      condition: r._id == null || r._id === '' ? '' : String(r._id),
+      count: r.count
+    })),
+    activeLoans,
+    pendingRequests: { total: pendingRequestsTotal, byStatus: requestsByStatus },
+    warranty: {
+      total: warrantyItems.length,
+      expired: warrantyExpired,
+      soon: warrantyItems.length - warrantyExpired,
+      items: warrantyItems.slice(0, 100)
+    }
+  });
+});
+
 // ===== Zarządzanie użytkownikami (tylko admin) =====
 
 app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
@@ -1226,6 +1345,120 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     message: 'Item created',
     id: result.insertedId,
     item: doc
+  });
+});
+
+// Import zbiorczy sprzętu z CSV (Pakiet B). Body: { items: [{...}] }.
+// Waliduje pola wymagane oraz duplikaty kodów (w pliku i w bazie); zwraca raport.
+app.post('/admin/items/bulk', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!rawItems) {
+    return res.status(400).json({ message: 'Body musi zawierać tablicę items' });
+  }
+  if (!rawItems.length) {
+    return res.status(400).json({ message: 'Lista do importu jest pusta' });
+  }
+  if (rawItems.length > 500) {
+    return res.status(400).json({ message: 'Maksymalnie 500 pozycji na jeden import' });
+  }
+
+  const now = new Date();
+  const errors = [];
+  const valid = [];
+  const seenInFile = new Set();
+
+  // Walidacja wstępna + wychwycenie duplikatów w obrębie pliku.
+  rawItems.forEach((row, index) => {
+    const rowNumber = index + 1;
+    const itemCode = normalizeItemCode(row?.itemCode);
+    const name = String(row?.name || '').trim();
+    const category = String(row?.category || '').trim();
+
+    if (!itemCode || !name || !category) {
+      errors.push({ row: rowNumber, itemCode, message: 'Brak wymaganych pól (kod, nazwa, kategoria)' });
+      return;
+    }
+
+    if (seenInFile.has(itemCode)) {
+      errors.push({ row: rowNumber, itemCode, message: 'Zduplikowany kod w pliku' });
+      return;
+    }
+    seenInFile.add(itemCode);
+
+    valid.push({ rowNumber, row, itemCode, name, category });
+  });
+
+  // Duplikaty względem bazy – jedno zapytanie na całą paczkę.
+  let existingCodes = new Set();
+  if (valid.length) {
+    const found = await db.collection(collections.items)
+      .find({ itemCode: { $in: valid.map(v => v.itemCode) } }, { projection: { itemCode: 1 } })
+      .toArray();
+    existingCodes = new Set(found.map(f => f.itemCode));
+  }
+
+  const docs = [];
+  valid.forEach(entry => {
+    if (existingCodes.has(entry.itemCode)) {
+      errors.push({ row: entry.rowNumber, itemCode: entry.itemCode, message: 'Kod już istnieje w bazie' });
+      return;
+    }
+
+    const row = entry.row;
+    docs.push({
+      itemCode: entry.itemCode,
+      category: entry.category,
+      name: entry.name,
+      details: String(row.details || '').trim(),
+      quantity: Math.max(1, Number(row.quantity) || 1),
+      currentLocation: String(row.currentLocation || 'Magazyn').trim() || 'Magazyn',
+      conditionStatus: normalizeConditionStatus(row.conditionStatus),
+      operationalStatus: 'available',
+      assignedToName: null,
+      assignedToEmail: null,
+      notes: String(row.notes || '').trim(),
+      imageUrl: String(row.imageUrl || '').trim(),
+      thumbnailUrl: String(row.thumbnailUrl || '').trim(),
+      brand: String(row.brand || '').trim(),
+      model: String(row.model || '').trim(),
+      qrCodeValue: String(row.qrCodeValue || '').trim(),
+      tags: normalizeTags(row.tags),
+      serialNumber: String(row.serialNumber || '').trim(),
+      warrantyUntil: String(row.warrantyUntil || '').trim(),
+      detailedLocation: String(row.detailedLocation || '').trim(),
+      isStudioLocked: false,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+
+  let added = 0;
+  if (docs.length) {
+    const result = await db.collection(collections.items).insertMany(docs, { ordered: false });
+    added = result.insertedCount;
+
+    // Po jednym wpisie audytu na sprzęt – spójnie z dodawaniem pojedynczym
+    // i potrzebne dla historii konkretnego sprzętu (payload.itemCode + entityId).
+    const auditDocs = docs.map((doc, i) => ({
+      actorEmail: req.user.email,
+      actionType: 'item_created',
+      entityType: 'item',
+      entityId: String(result.insertedIds[i]),
+      payload: doc,
+      createdAt: now
+    }));
+    await db.collection(collections.auditLogs).insertMany(auditDocs);
+  }
+
+  res.status(added ? 201 : 200).json({
+    message: `Zaimportowano ${added} z ${rawItems.length} pozycji`,
+    added,
+    skipped: errors.length,
+    total: rawItems.length,
+    errors
   });
 });
 
