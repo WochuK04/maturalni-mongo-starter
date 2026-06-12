@@ -44,6 +44,9 @@
           <span>Wymagane działania</span>
           <span class="nav-badge" id="actionBadge" hidden>0</span>
         </button>
+        <button class="view-tab" data-view="team" type="button" id="teamViewTab" hidden>
+          Mój zespół
+        </button>
         <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
           Użytkownicy
         </button>
@@ -221,6 +224,24 @@
           </button>
         </div>
         <div id="managerRequestsList" class="list"></div>
+      </section>
+    </section>
+
+    <section class="view-panel" id="teamPanel" data-panel="team" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Kierownik</p>
+            <h2>Mój zespół</h2>
+            <p class="muted">
+              Osoby, których wnioski trafiają do Ciebie — wraz z przypisanym sprzętem i wnioskami w toku.
+            </p>
+          </div>
+          <button id="loadTeamBtn" class="btn btn-secondary" type="button">
+            Odśwież
+          </button>
+        </div>
+        <div id="teamContent" class="team-content"></div>
       </section>
     </section>
 
@@ -585,6 +606,38 @@
       <div class="actions-inline modal-form-actions">
         <button type="submit" class="btn btn-danger" id="confirmDiscardBtn">Wycofaj sprzęt</button>
         <button type="button" class="btn btn-secondary" id="cancelDiscardBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="transferItemModal" class="form-modal">
+    <form id="transferItemForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Panel admina</p>
+          <h3>Przenieś sprzęt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeTransferBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted" id="transferItemTarget">
+        Wybierz osobę, na którą przenosisz sprzęt. Dotychczasowe wypożyczenie zostanie zamknięte,
+        a sprzęt przypisany nowej osobie.
+      </p>
+
+      <label class="field field-wide">
+        <span>Przenieś na *</span>
+        <select id="transferAssignee" required></select>
+      </label>
+
+      <label class="field field-wide">
+        <span>Notatka (opcjonalnie)</span>
+        <input id="transferNote" placeholder="np. zmiana opiekuna sprzętu" />
+      </label>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="submit" class="btn btn-primary" id="confirmTransferBtn">Przenieś</button>
+        <button type="button" class="btn btn-secondary" id="cancelTransferBtn">Anuluj</button>
       </div>
     </form>
   </dialog>
