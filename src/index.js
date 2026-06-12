@@ -131,6 +131,13 @@ function normalizeConditionStatus(value, fallback = 'ok') {
 // 'pending' to status zaszłości sprzed wprowadzenia dwuetapowej akceptacji.
 const ACTIVE_REQUEST_STATUSES = ['pending_manager', 'pending_admin', 'pending'];
 
+// Typy zgłoszeń pracownika o sprzęcie (zakładka „Mój sprzęt" → administracja).
+const ISSUE_TYPES = {
+  damage: 'Uszkodzenie',
+  lost: 'Zgubienie',
+  other: 'Inne'
+};
+
 // Wyznacza kierownika-akceptującego dla wnioskodawcy (routing dwuetapowy).
 // Zwraca email aktywnego kierownika/admina albo null (wtedy wniosek idzie wprost
 // do administracji). Wspólne dla wniosków o wypożyczenie i o zakup.
@@ -454,6 +461,66 @@ app.post('/items/:itemCode/return', requireAuth, async (req, res) => {
   });
 
   res.json({ message: 'Returned' });
+});
+
+// Zgłoszenie pracownika dotyczące jego sprzętu (np. uszkodzenie/zgubienie).
+// Trafia do administracji jako powiadomienie (zakładka „Zgłoszenia").
+app.post('/my/items/:itemCode/report-issue', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const itemCode = normalizeItemCode(req.params.itemCode);
+  const rawType = String(req.body?.issueType || '').trim().toLowerCase();
+  const issueType = ISSUE_TYPES[rawType] ? rawType : 'other';
+  const message = String(req.body?.message || '').trim();
+
+  if (!message) {
+    return res.status(400).json({ message: 'Opisz, co się dzieje ze sprzętem' });
+  }
+  if (message.length > 2000) {
+    return res.status(400).json({ message: 'Opis jest za długi (max 2000 znaków)' });
+  }
+
+  const item = await db.collection(collections.items).findOne({
+    itemCode,
+    isActive: { $ne: false }
+  });
+
+  if (!item) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  // Zgłaszać może osoba, która ma sprzęt przypisany, albo administracja.
+  const isAssignee = item.assignedToEmail === req.user.email;
+  if (!isAssignee && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Możesz zgłaszać tylko swój sprzęt' });
+  }
+
+  const now = new Date();
+  const notification = {
+    kind: 'issue',
+    status: 'open',
+    issueType,
+    itemCode: item.itemCode,
+    itemName: item.name,
+    message,
+    createdAt: now,
+    createdByEmail: req.user.email,
+    createdByName: req.user.fullName || req.user.email,
+    resolvedAt: null,
+    resolvedByEmail: null
+  };
+
+  const result = await db.collection(collections.notifications).insertOne(notification);
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'issue_reported',
+    entityType: 'item',
+    entityId: String(item._id),
+    payload: { itemCode: item.itemCode, itemName: item.name, reason: ISSUE_TYPES[issueType] },
+    createdAt: now
+  });
+
+  res.status(201).json({ message: 'Zgłoszenie wysłane do administracji', id: result.insertedId });
 });
 
 app.get('/my/loan-requests', requireAuth, async (req, res) => {
@@ -1898,6 +1965,7 @@ app.post('/admin/items/:id/transfer', requireAuth, requireAdmin, async (req, res
   const now = new Date();
   const targetName = targetUser.fullName || targetUser.email;
   const fromEmail = item.assignedToEmail || null;
+  const fromName = item.assignedToName || null;
 
   // Zamknij aktywne wypożyczenie obecnego posiadacza (jeśli sprzęt był u kogoś).
   await db.collection(collections.loans).updateMany(
@@ -1958,14 +2026,87 @@ app.post('/admin/items/:id/transfer', requireAuth, requireAdmin, async (req, res
     entityId: String(item._id),
     payload: {
       itemCode: item.itemCode,
+      itemName: item.name,
       fromEmail,
+      fromName,
       toEmail: targetEmail,
+      toName: targetName,
       loanId: String(loanResult.insertedId)
     },
     createdAt: now
   });
 
+  // Powiadomienie dla administracji, że transfer został wykonany.
+  await db.collection(collections.notifications).insertOne({
+    kind: 'transfer',
+    status: 'open',
+    itemCode: item.itemCode,
+    itemName: item.name,
+    fromEmail,
+    fromName,
+    toEmail: targetEmail,
+    toName: targetName,
+    message: transferNote || '',
+    createdAt: now,
+    createdByEmail: req.user.email,
+    createdByName: req.user.fullName || req.user.email,
+    resolvedAt: null,
+    resolvedByEmail: null
+  });
+
   res.json({ message: `Przeniesiono na ${targetName}`, itemCode: item.itemCode });
+});
+
+// ===== Powiadomienia / zgłoszenia dla administracji (Mój sprzęt + transfery) =====
+
+app.get('/admin/notifications', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { status } = req.query;
+
+  const query = {};
+  if (status) query.status = String(status).trim();
+
+  const notifications = await db.collection(collections.notifications)
+    .find(query)
+    .sort({ createdAt: -1 })
+    .limit(200)
+    .toArray();
+
+  res.json(notifications);
+});
+
+// Lekki licznik nieprzeczytanych (otwartych) zgłoszeń — zasila badge w menu.
+app.get('/admin/notifications/count', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+  const open = await db.collection(collections.notifications).countDocuments({ status: 'open' });
+  res.json({ open });
+});
+
+app.post('/admin/notifications/:id/resolve', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+
+  let id;
+  try {
+    id = new ObjectId(req.params.id);
+  } catch {
+    return res.status(400).json({ message: 'Nieprawidłowy identyfikator zgłoszenia' });
+  }
+
+  const notification = await db.collection(collections.notifications).findOne({ _id: id });
+  if (!notification) {
+    return res.status(404).json({ message: 'Zgłoszenie nie istnieje' });
+  }
+
+  if (notification.status === 'resolved') {
+    return res.status(400).json({ message: 'Zgłoszenie jest już załatwione' });
+  }
+
+  await db.collection(collections.notifications).updateOne(
+    { _id: id },
+    { $set: { status: 'resolved', resolvedAt: new Date(), resolvedByEmail: req.user.email } }
+  );
+
+  res.json({ message: 'Oznaczono jako załatwione' });
 });
 
 app.get('/admin/loans', requireAuth, requireAdmin, async (req, res) => {

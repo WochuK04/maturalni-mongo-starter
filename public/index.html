@@ -38,7 +38,7 @@
           Moje wnioski
         </button>
         <button class="view-tab" data-view="returns" type="button">
-          Zwróć sprzęt
+          Mój sprzęt
         </button>
         <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
           <span>Wymagane działania</span>
@@ -46,6 +46,10 @@
         </button>
         <button class="view-tab" data-view="team" type="button" id="teamViewTab" hidden>
           Mój zespół
+        </button>
+        <button class="view-tab" data-view="reports" type="button" id="reportsViewTab" hidden>
+          <span>Zgłoszenia</span>
+          <span class="nav-badge" id="reportsBadge" hidden>0</span>
         </button>
         <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
           Użytkownicy
@@ -202,7 +206,8 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Użytkownik</p>
-            <h2>Zwróć sprzęt</h2>
+            <h2>Mój sprzęt</h2>
+            <p class="muted">Sprzęt przypisany do Ciebie — możesz go oddać lub zgłosić problem do administracji.</p>
           </div>
           <button id="loadMyLoansBtn" class="btn btn-secondary" type="button">
             Odśwież moje rzeczy
@@ -242,6 +247,24 @@
           </button>
         </div>
         <div id="teamContent" class="team-content"></div>
+      </section>
+    </section>
+
+    <section class="view-panel" id="reportsPanel" data-panel="reports" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Zgłoszenia</h2>
+            <p class="muted">
+              Zgłoszenia pracowników o sprzęcie (np. uszkodzenie) oraz ślad wykonanych transferów.
+            </p>
+          </div>
+          <button id="loadReportsBtn" class="btn btn-secondary" type="button">
+            Odśwież
+          </button>
+        </div>
+        <div id="reportsContent" class="admin-content"></div>
       </section>
     </section>
 
@@ -642,6 +665,41 @@
     </form>
   </dialog>
 
+  <dialog id="reportIssueModal" class="form-modal">
+    <form id="reportIssueForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Mój sprzęt</p>
+          <h3>Zgłoś problem ze sprzętem</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeReportIssueBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted" id="reportIssueTarget">
+        Zgłoszenie trafi do administracji.
+      </p>
+
+      <label class="field field-wide">
+        <span>Rodzaj zgłoszenia *</span>
+        <select id="reportIssueType">
+          <option value="damage">Uszkodzenie</option>
+          <option value="lost">Zgubienie</option>
+          <option value="other">Inne</option>
+        </select>
+      </label>
+
+      <label class="field field-wide">
+        <span>Opis *</span>
+        <textarea id="reportIssueMessage" rows="4" placeholder="Opisz, co się stało" required></textarea>
+      </label>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="submit" class="btn btn-primary" id="confirmReportIssueBtn">Wyślij zgłoszenie</button>
+        <button type="button" class="btn btn-secondary" id="cancelReportIssueBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="importItemsModal" class="form-modal import-modal">
     <div class="modal-form">
       <div class="modal-form-head">
@@ -736,6 +794,7 @@
           placeholder="Notatka (opcjonalnie)"
         />
         <button class="btn btn-primary" type="submit">Oddaj</button>
+        <button class="btn btn-secondary report-issue-btn" type="button">Zgłoś problem</button>
       </form>
     </article>
   </template>

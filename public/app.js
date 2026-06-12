@@ -29,6 +29,10 @@ const usersContent = document.getElementById('usersContent');
 const teamViewTab = document.getElementById('teamViewTab');
 const teamContent = document.getElementById('teamContent');
 
+const reportsViewTab = document.getElementById('reportsViewTab');
+const reportsBadge = document.getElementById('reportsBadge');
+const reportsContent = document.getElementById('reportsContent');
+
 const openAddItemBtn = document.getElementById('openAddItemBtn');
 const addItemModal = document.getElementById('addItemModal');
 const addItemForm = document.getElementById('addItemForm');
@@ -62,6 +66,14 @@ const transferAssignee = document.getElementById('transferAssignee');
 const transferNote = document.getElementById('transferNote');
 const closeTransferBtn = document.getElementById('closeTransferBtn');
 const cancelTransferBtn = document.getElementById('cancelTransferBtn');
+
+const reportIssueModal = document.getElementById('reportIssueModal');
+const reportIssueForm = document.getElementById('reportIssueForm');
+const reportIssueTarget = document.getElementById('reportIssueTarget');
+const reportIssueType = document.getElementById('reportIssueType');
+const reportIssueMessage = document.getElementById('reportIssueMessage');
+const closeReportIssueBtn = document.getElementById('closeReportIssueBtn');
+const cancelReportIssueBtn = document.getElementById('cancelReportIssueBtn');
 
 const purchaseModal = document.getElementById('purchaseModal');
 const purchaseForm = document.getElementById('purchaseForm');
@@ -705,6 +717,10 @@ async function handleViewChange(view) {
     await loadTeam();
   }
 
+  if (view === 'reports' && currentUser?.role === 'admin') {
+    await loadReports();
+  }
+
   if (view === 'users' && currentUser?.role === 'admin') {
     await loadUsers();
   }
@@ -753,6 +769,7 @@ function applyRoleVisibility(user) {
     if (adminViewTab) adminViewTab.hidden = true;
     if (managerViewTab) managerViewTab.hidden = true;
     if (teamViewTab) teamViewTab.hidden = true;
+    if (reportsViewTab) reportsViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
@@ -773,12 +790,14 @@ function applyRoleVisibility(user) {
     if (adminQuickActions) adminQuickActions.hidden = false;
     if (adminViewTab) adminViewTab.hidden = false;
     if (usersViewTab) usersViewTab.hidden = false;
+    if (reportsViewTab) reportsViewTab.hidden = false;
     if (adminSection) adminSection.hidden = false;
     setWorkspaceMode('admin');
   } else {
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
+    if (reportsViewTab) reportsViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     setWorkspaceMode('user');
   }
@@ -828,14 +847,39 @@ async function refreshActionBadge() {
   }
 }
 
+// ===== Badge „Zgłoszenia" (powiadomienia/zgłoszenia dla admina) =====
+
+function setReportsBadge(count) {
+  if (!reportsBadge) return;
+  if (currentUser?.role !== 'admin') {
+    reportsBadge.hidden = true;
+    return;
+  }
+  reportsBadge.textContent = String(count);
+  reportsBadge.hidden = count <= 0;
+}
+
+async function refreshReportsBadge() {
+  if (!reportsBadge || currentUser?.role !== 'admin') return;
+  try {
+    const data = await api('/admin/notifications/count');
+    setReportsBadge(Number(data?.open) || 0);
+  } catch {
+    // Zostawiamy ostatnią znaną wartość.
+  }
+}
+
 let actionBadgeTimer = null;
 
-// Lekki polling, żeby kierownik/admin zobaczył nowe wnioski bez odświeżania strony.
+// Lekki polling, żeby kierownik/admin zobaczył nowe wnioski/zgłoszenia bez odświeżania strony.
 function startActionBadgePolling() {
   if (actionBadgeTimer) return;
   const role = currentUser?.role;
   if (role !== 'manager' && role !== 'admin') return;
-  actionBadgeTimer = setInterval(refreshActionBadge, 30000);
+  actionBadgeTimer = setInterval(() => {
+    refreshActionBadge();
+    refreshReportsBadge();
+  }, 30000);
 }
 
 function getAvailableSearchSource(item) {
@@ -1093,12 +1137,14 @@ async function loadSession() {
     }
 
     await refreshActionBadge();
+    await refreshReportsBadge();
     startActionBadgePolling();
   } catch {
     currentUser = null;
     showLoginGate();
     renderAuthBox();
     setActionBadge(0);
+    setReportsBadge(0);
     stats.innerHTML = '';
     if (viewSwitcher) viewSwitcher.hidden = true;
     if (adminSection) adminSection.hidden = true;
@@ -1168,6 +1214,8 @@ async function loadMyLoans() {
     const form = node.querySelector('.return-form');
     const locationSelect = node.querySelector('.return-location');
     const noteInput = node.querySelector('.return-note');
+    const reportBtn = node.querySelector('.report-issue-btn');
+    if (reportBtn) reportBtn.addEventListener('click', () => openReportIssueModal(item));
 
     locations.forEach(loc => {
       const opt = document.createElement('option');
@@ -2058,6 +2106,97 @@ async function loadTeam() {
   });
 }
 
+const ISSUE_TYPE_LABELS = { damage: 'Uszkodzenie', lost: 'Zgubienie', other: 'Inne' };
+
+// „Zgłoszenia" — powiadomienia dla administracji: zgłoszenia pracowników o sprzęcie
+// oraz ślad wykonanych transferów. Admin może oznaczyć jako załatwione.
+async function loadReports() {
+  if (currentUser?.role !== 'admin' || !reportsContent) return;
+  hideAuditFilters();
+
+  const notifications = await api('/admin/notifications');
+  await refreshReportsBadge();
+
+  if (!Array.isArray(notifications) || !notifications.length) {
+    reportsContent.innerHTML = '<div class="empty">Brak zgłoszeń.</div>';
+    return;
+  }
+
+  reportsContent.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'list';
+
+  notifications.forEach(n => {
+    const card = document.createElement('article');
+    card.className = 'item-row report-card';
+    if (n.status === 'resolved') card.classList.add('report-resolved');
+
+    const main = document.createElement('div');
+
+    const title = document.createElement('h3');
+    title.className = 'item-title';
+    if (n.kind === 'transfer') {
+      title.textContent = `🔄 Transfer: ${n.itemName || n.itemCode || ''} (${n.itemCode || '-'})`;
+    } else {
+      const typeLabel = ISSUE_TYPE_LABELS[n.issueType] || 'Zgłoszenie';
+      title.textContent = `⚠️ ${typeLabel}: ${n.itemName || n.itemCode || ''} (${n.itemCode || '-'})`;
+    }
+    main.appendChild(title);
+
+    const meta = document.createElement('p');
+    meta.className = 'item-meta';
+    const when = n.createdAt ? new Date(n.createdAt).toLocaleString('pl-PL') : '';
+    if (n.kind === 'transfer') {
+      const from = n.fromName || n.fromEmail || 'magazynu';
+      meta.textContent = `Z: ${from} → na: ${n.toName || n.toEmail || '-'} · wykonał: ${n.createdByName || n.createdByEmail} · ${when}`;
+    } else {
+      meta.textContent = `Zgłosił: ${n.createdByName || n.createdByEmail} · ${when}`;
+    }
+    main.appendChild(meta);
+
+    if (n.message) {
+      const msg = document.createElement('p');
+      msg.className = 'item-note';
+      msg.textContent = `📝 ${n.message}`;
+      main.appendChild(msg);
+    }
+
+    if (n.status === 'resolved') {
+      const done = document.createElement('p');
+      done.className = 'item-meta muted';
+      const rwhen = n.resolvedAt ? new Date(n.resolvedAt).toLocaleString('pl-PL') : '';
+      done.textContent = `✅ Załatwione przez ${n.resolvedByEmail || '-'}${rwhen ? ` · ${rwhen}` : ''}`;
+      main.appendChild(done);
+    }
+
+    card.appendChild(main);
+
+    if (n.status !== 'resolved') {
+      const actions = document.createElement('div');
+      actions.className = 'actions-inline';
+      const resolveBtn = document.createElement('button');
+      resolveBtn.type = 'button';
+      resolveBtn.className = 'btn btn-secondary';
+      resolveBtn.textContent = 'Oznacz jako załatwione';
+      resolveBtn.addEventListener('click', async () => {
+        try {
+          await api(`/admin/notifications/${n._id}/resolve`, { method: 'POST' });
+          showToast('Oznaczono jako załatwione');
+          await loadReports();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+      actions.appendChild(resolveBtn);
+      card.appendChild(actions);
+    }
+
+    list.appendChild(card);
+  });
+
+  reportsContent.appendChild(list);
+}
+
 // Słownik akcji po polsku — historia ma być zrozumiała dla laika.
 const AUDIT_ACTION_LABELS = {
   loan_request_created: 'Złożył wniosek o wypożyczenie',
@@ -2080,6 +2219,7 @@ const AUDIT_ACTION_LABELS = {
   item_deactivated: 'Wycofał sprzęt',
   item_discarded: 'Wyrzucił sprzęt z magazynu',
   item_transferred: 'Przeniósł sprzęt na inną osobę',
+  issue_reported: 'Zgłosił problem ze sprzętem',
   user_updated: 'Zmienił ustawienia użytkownika',
   user_deleted: 'Usunął użytkownika'
 };
@@ -2100,6 +2240,14 @@ function describeAudit(log) {
   const label = AUDIT_ACTION_LABELS[log.actionType] || log.actionType || 'Wykonał akcję';
   const subject = getAuditSubject(log);
   const reason = log.payload?.reason ? ` (${log.payload.reason})` : '';
+
+  // Transfer: pokaż wprost, na kogo przeniesiono (czytelny ślad w historii).
+  if (log.actionType === 'item_transferred') {
+    const to = log.payload?.toName || log.payload?.toEmail;
+    const suffix = to ? ` (na: ${to})` : '';
+    return subject ? `${label} — ${subject}${suffix}` : `${label}${suffix}`;
+  }
+
   return subject ? `${label} — ${subject}${reason}` : `${label}${reason}`;
 }
 
@@ -2191,10 +2339,11 @@ viewTabs.forEach((tab) => {
 
     if (view === 'admin' && currentUser?.role !== 'admin') return;
     if (view === 'users' && currentUser?.role !== 'admin') return;
+    if (view === 'reports' && currentUser?.role !== 'admin') return;
     if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
     if (view === 'team' && !['manager', 'admin'].includes(currentUser?.role)) return;
 
-    if (view === 'admin' || view === 'users') {
+    if (view === 'admin' || view === 'users' || view === 'reports') {
       workspaceMode = 'admin';
     } else {
       workspaceMode = 'user';
@@ -2233,6 +2382,10 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadTeamBtn') {
     await withButtonLoading(target, () => handleViewChange('team')).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'loadReportsBtn') {
+    await withButtonLoading(target, () => handleViewChange('reports')).catch(err => showToast(err.message));
   }
 
   if (target.closest('.open-purchase-btn')) {
@@ -2858,6 +3011,56 @@ if (transferItemForm) {
       closeTransferModal();
       await loadAdminItems();
       await refreshStats();
+      await refreshReportsBadge();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+// ===== Modal „Zgłoś problem ze sprzętem" (Mój sprzęt → administracja) =====
+
+let reportIssueItem = null;
+
+function openReportIssueModal(item) {
+  if (!reportIssueModal || !item) return;
+  reportIssueItem = item;
+  if (reportIssueForm) reportIssueForm.reset();
+  if (reportIssueType) reportIssueType.value = 'damage';
+  if (reportIssueTarget) {
+    reportIssueTarget.textContent =
+      `Zgłaszasz problem ze sprzętem „${item.name || item.itemCode}" (${item.itemCode}). Zgłoszenie trafi do administracji.`;
+  }
+  if (!reportIssueModal.open) reportIssueModal.showModal();
+}
+
+function closeReportIssueModal() {
+  if (reportIssueModal?.open) reportIssueModal.close();
+  reportIssueItem = null;
+}
+
+if (closeReportIssueBtn) closeReportIssueBtn.addEventListener('click', closeReportIssueModal);
+if (cancelReportIssueBtn) cancelReportIssueBtn.addEventListener('click', closeReportIssueModal);
+
+if (reportIssueForm) {
+  reportIssueForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!reportIssueItem) return;
+
+    const message = (reportIssueMessage?.value || '').trim();
+    if (!message) {
+      showToast('Opisz, co się dzieje ze sprzętem');
+      return;
+    }
+
+    const item = reportIssueItem;
+    try {
+      await api(`/my/items/${encodeURIComponent(item.itemCode)}/report-issue`, {
+        method: 'POST',
+        body: JSON.stringify({ issueType: reportIssueType?.value || 'other', message })
+      });
+      showToast('Zgłoszenie wysłane do administracji');
+      closeReportIssueModal();
     } catch (err) {
       showToast(err.message);
     }
