@@ -29,6 +29,8 @@ const usersContent = document.getElementById('usersContent');
 const openAddItemBtn = document.getElementById('openAddItemBtn');
 const addItemModal = document.getElementById('addItemModal');
 const addItemForm = document.getElementById('addItemForm');
+const addItemModalTitle = document.getElementById('addItemModalTitle');
+const addItemSubmitBtn = document.getElementById('addItemSubmitBtn');
 const closeAddItemBtn = document.getElementById('closeAddItemBtn');
 const cancelAddItemBtn = document.getElementById('cancelAddItemBtn');
 const addItemCategory = document.getElementById('addItemCategory');
@@ -36,8 +38,19 @@ const addItemCategoryCustomField = document.getElementById('addItemCategoryCusto
 const addItemCategoryCustom = document.getElementById('addItemCategoryCustom');
 const addItemLocation = document.getElementById('addItemLocation');
 const addItemCondition = document.getElementById('addItemCondition');
+const addItemAssigneeField = document.getElementById('addItemAssigneeField');
 const addItemAssignee = document.getElementById('addItemAssignee');
+const addItemStatusField = document.getElementById('addItemStatusField');
+const addItemStatus = document.getElementById('addItemStatus');
 const addItemAssignHint = document.getElementById('addItemAssignHint');
+
+const discardItemModal = document.getElementById('discardItemModal');
+const discardItemForm = document.getElementById('discardItemForm');
+const discardItemTarget = document.getElementById('discardItemTarget');
+const discardOtherField = document.getElementById('discardOtherField');
+const discardOtherInput = document.getElementById('discardOtherInput');
+const closeDiscardBtn = document.getElementById('closeDiscardBtn');
+const cancelDiscardBtn = document.getElementById('cancelDiscardBtn');
 
 const purchaseModal = document.getElementById('purchaseModal');
 const purchaseForm = document.getElementById('purchaseForm');
@@ -66,12 +79,17 @@ const modalItemSubtitle = document.getElementById('modalItemSubtitle');
 const modalItemCode = document.getElementById('modalItemCode');
 const modalItemBrandModel = document.getElementById('modalItemBrandModel');
 const modalItemLocation = document.getElementById('modalItemLocation');
+const modalItemDetailedLocation = document.getElementById('modalItemDetailedLocation');
 const modalItemCondition = document.getElementById('modalItemCondition');
+const modalItemSerial = document.getElementById('modalItemSerial');
+const modalItemWarranty = document.getElementById('modalItemWarranty');
 const modalItemQr = document.getElementById('modalItemQr');
 const modalItemAssigned = document.getElementById('modalItemAssigned');
 const modalItemDetails = document.getElementById('modalItemDetails');
 const modalItemTags = document.getElementById('modalItemTags');
 const modalActiveLoan = document.getElementById('modalActiveLoan');
+const modalHistoryBlock = document.getElementById('modalHistoryBlock');
+const modalItemHistory = document.getElementById('modalItemHistory');
 const modalRequestBtn = document.getElementById('modalRequestBtn');
 const modalCloseBtn = document.getElementById('modalCloseBtn');
 const closeItemDetailsModalBtn = document.getElementById('closeItemDetailsModalBtn');
@@ -671,6 +689,8 @@ async function openItemDetails(itemCode) {
   modalItemTags.innerHTML = '';
   modalActiveLoan.textContent = 'Ładowanie...';
   modalRequestBtn.disabled = true;
+  if (modalHistoryBlock) modalHistoryBlock.hidden = true;
+  if (modalItemHistory) modalItemHistory.innerHTML = '';
 
   if (!itemDetailsModal.open) itemDetailsModal.showModal();
 
@@ -695,7 +715,10 @@ async function openItemDetails(itemCode) {
     modalItemCode.textContent = item.itemCode || '-';
     modalItemBrandModel.textContent = [item.brand, item.model].filter(Boolean).join(' / ') || '-';
     modalItemLocation.textContent = item.currentLocation || '-';
+    modalItemDetailedLocation.textContent = item.detailedLocation || '-';
     modalItemCondition.textContent = item.conditionStatus || '-';
+    modalItemSerial.textContent = item.serialNumber || '-';
+    modalItemWarranty.textContent = item.warrantyUntil ? formatDate(item.warrantyUntil) : '-';
     modalItemQr.textContent = item.qrCodeValue || '-';
     modalItemAssigned.textContent =
       item.assignedToName || item.assignedToEmail
@@ -713,6 +736,10 @@ async function openItemDetails(itemCode) {
     }
 
     modalRequestBtn.disabled = item.operationalStatus !== 'available';
+
+    if (currentUser?.role === 'admin') {
+      await renderItemHistory(item);
+    }
   } catch (err) {
     activeModalItem = null;
     modalItemTitle.textContent = 'Nie udało się pobrać szczegółów';
@@ -728,6 +755,63 @@ async function openItemDetails(itemCode) {
 function closeItemDetails() {
   if (itemDetailsModal?.open) itemDetailsModal.close();
   activeModalItem = null;
+}
+
+// Historia konkretnego sprzętu (tylko admin). Łączymy dwa zapytania:
+// po entityId (zdarzenia samego sprzętu — także aktualizacje bez kodu w payloadzie)
+// oraz po itemCode (wypożyczenia, zwroty, wnioski). Regex po itemCode łapie
+// podciągi, więc dopasowanie kodu zawężamy dokładnie po stronie frontu.
+async function renderItemHistory(item) {
+  if (!modalHistoryBlock || !modalItemHistory) return;
+
+  modalHistoryBlock.hidden = false;
+  modalItemHistory.innerHTML = '<li class="muted">Ładowanie historii...</li>';
+
+  const code = String(item.itemCode || '').toUpperCase();
+
+  try {
+    const [byEntity, byCode, userNames] = await Promise.all([
+      item._id
+        ? api(`/admin/audit-logs?entityType=item&entityId=${encodeURIComponent(item._id)}&limit=200`)
+        : Promise.resolve([]),
+      code
+        ? api(`/admin/audit-logs?itemCode=${encodeURIComponent(code)}&limit=200`)
+        : Promise.resolve([]),
+      getAuditUserNames()
+    ]);
+
+    const seen = new Set();
+    const logs = [];
+
+    (Array.isArray(byEntity) ? byEntity : []).forEach(log => {
+      const id = String(log._id);
+      if (!seen.has(id)) { seen.add(id); logs.push(log); }
+    });
+
+    (Array.isArray(byCode) ? byCode : []).forEach(log => {
+      const id = String(log._id);
+      // Zawężenie: tylko dokładny kod (regex łapie np. CAM-1 w CAM-10).
+      if (String(log.payload?.itemCode || '').toUpperCase() !== code) return;
+      if (!seen.has(id)) { seen.add(id); logs.push(log); }
+    });
+
+    logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    if (!logs.length) {
+      modalItemHistory.innerHTML = '<li class="muted">Brak zapisów w historii.</li>';
+      return;
+    }
+
+    modalItemHistory.innerHTML = logs.map(log => `
+      <li class="history-entry">
+        <span class="history-when">${log.createdAt ? new Date(log.createdAt).toLocaleString('pl-PL') : '-'}</span>
+        <span class="history-who">${escapeHtml(userNames[log.actorEmail] || log.actorEmail || '—')}</span>
+        <span class="history-what">${escapeHtml(describeAudit(log))}</span>
+      </li>
+    `).join('');
+  } catch (err) {
+    modalItemHistory.innerHTML = `<li class="muted">Nie udało się pobrać historii: ${escapeHtml(err.message || 'błąd')}</li>`;
+  }
 }
 
 async function loadSession() {
@@ -917,31 +1001,22 @@ async function loadAdminItems() {
     });
 
     const actionsTd = document.createElement('td');
+    actionsTd.className = 'table-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn btn-secondary';
+    editBtn.textContent = 'Edytuj';
+    editBtn.addEventListener('click', () => openEditItemModal(item));
+    actionsTd.appendChild(editBtn);
+
     const discardBtn = document.createElement('button');
     discardBtn.type = 'button';
     discardBtn.className = 'btn btn-danger';
     discardBtn.textContent = 'Wyrzuć';
-    discardBtn.addEventListener('click', async () => {
-      const reason = prompt(
-        `Wycofać „${item.name || item.itemCode}” (${item.itemCode}) z magazynu?\n` +
-        'Podaj powód — zostanie zapisany w historii (np. zepsute, zgubione):',
-        'zepsute'
-      );
-      if (reason === null) return; // anulowano
-
-      try {
-        await api(`/admin/items/${item._id}/discard`, {
-          method: 'POST',
-          body: JSON.stringify({ reason: reason.trim() || 'Wycofano' })
-        });
-        showToast(`Wycofano sprzęt: ${item.itemCode}`);
-        await loadAdminItems();
-        await refreshStats();
-      } catch (err) {
-        showToast(err.message);
-      }
-    });
+    discardBtn.addEventListener('click', () => openDiscardModal(item));
     actionsTd.appendChild(discardBtn);
+
     tr.appendChild(actionsTd);
 
     tbody.appendChild(tr);
@@ -1609,9 +1684,25 @@ if (cancelRequestFormBtn) {
   });
 }
 
-// ===== Modal dodawania sprzętu (listy rozwijane) =====
+// ===== Modal dodawania / edycji sprzętu (listy rozwijane) =====
 
 let formOptionsState = null;
+let editingItemId = null; // null = tryb dodawania, _id = tryb edycji
+
+// Ustawia wartość selecta; gdy wartości nie ma na liście (np. niestandardowa
+// lokalizacja istniejącego sprzętu), dorzuca ją jako opcję, by edycja jej nie gubiła.
+function setSelectValue(select, value) {
+  if (!select) return;
+  const v = value == null ? '' : String(value);
+  const exists = Array.from(select.options).some(opt => opt.value === v);
+  if (!exists && v !== '') {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    select.appendChild(opt);
+  }
+  select.value = v;
+}
 
 function fillSelect(select, options, { includeEmpty } = {}) {
   if (!select) return;
@@ -1665,6 +1756,19 @@ function syncAssignHint() {
   addItemAssignHint.hidden = !addItemAssignee.value;
 }
 
+// Przełącza modal między „Dodaj sprzęt" a „Edytuj sprzęt":
+// w edycji ukrywamy przypisanie osoby (PATCH tego nie obsługuje) i pokazujemy
+// pole statusu; w dodawaniu odwrotnie (status jest wyliczany na backendzie).
+function setItemModalMode(mode) {
+  const isEdit = mode === 'edit';
+  if (addItemModalTitle) addItemModalTitle.textContent = isEdit ? 'Edytuj sprzęt' : 'Dodaj sprzęt';
+  if (addItemSubmitBtn) addItemSubmitBtn.textContent = isEdit ? 'Zapisz zmiany' : 'Dodaj sprzęt';
+  if (addItemAssigneeField) addItemAssigneeField.hidden = isEdit;
+  if (addItemStatusField) addItemStatusField.hidden = !isEdit;
+  // W edycji nie ma przypisania, więc podpowiedź o utworzeniu wypożyczenia nie dotyczy.
+  if (isEdit && addItemAssignHint) addItemAssignHint.hidden = true;
+}
+
 async function openAddItemModal() {
   if (!addItemModal) return;
 
@@ -1675,15 +1779,59 @@ async function openAddItemModal() {
     return;
   }
 
+  editingItemId = null;
   if (addItemForm) addItemForm.reset();
+  setItemModalMode('add');
   syncCategoryCustom();
   syncAssignHint();
 
   if (!addItemModal.open) addItemModal.showModal();
 }
 
+async function openEditItemModal(item) {
+  if (!addItemModal || !item) return;
+
+  try {
+    await ensureFormOptions();
+  } catch (err) {
+    showToast(err.message);
+    return;
+  }
+
+  editingItemId = item._id;
+  if (addItemForm) addItemForm.reset();
+  setItemModalMode('edit');
+
+  const el = addItemForm?.elements;
+  if (el) {
+    el.itemCode.value = item.itemCode || '';
+    el.name.value = item.name || '';
+    el.quantity.value = item.quantity || 1;
+    if (el.brand) el.brand.value = item.brand || '';
+    if (el.model) el.model.value = item.model || '';
+    if (el.serialNumber) el.serialNumber.value = item.serialNumber || '';
+    if (el.warrantyUntil) el.warrantyUntil.value = item.warrantyUntil || '';
+    if (el.detailedLocation) el.detailedLocation.value = item.detailedLocation || '';
+    if (el.qrCodeValue) el.qrCodeValue.value = item.qrCodeValue || '';
+    if (el.tags) el.tags.value = Array.isArray(item.tags) ? item.tags.join(', ') : (item.tags || '');
+    if (el.imageUrl) el.imageUrl.value = item.imageUrl || '';
+    if (el.thumbnailUrl) el.thumbnailUrl.value = item.thumbnailUrl || '';
+    if (el.details) el.details.value = item.details || '';
+    if (el.notes) el.notes.value = item.notes || '';
+  }
+
+  setSelectValue(addItemCategory, item.category);
+  setSelectValue(addItemLocation, item.currentLocation);
+  setSelectValue(addItemCondition, item.conditionStatus);
+  setSelectValue(addItemStatus, item.operationalStatus);
+  syncCategoryCustom();
+
+  if (!addItemModal.open) addItemModal.showModal();
+}
+
 function closeAddItemModal() {
   if (addItemModal?.open) addItemModal.close();
+  editingItemId = null;
 }
 
 if (openAddItemBtn) openAddItemBtn.addEventListener('click', openAddItemModal);
@@ -1708,15 +1856,92 @@ if (addItemForm) {
       return;
     }
 
-    try {
-      await api('/admin/items', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+    const isEdit = Boolean(editingItemId);
 
-      showToast(payload.assignedToEmail ? 'Dodano sprzęt i utworzono wypożyczenie' : 'Dodano sprzęt');
+    // PATCH nie obsługuje przypisania osoby — przeniesienie to osobny temat.
+    if (isEdit) delete payload.assignedToEmail;
+
+    try {
+      if (isEdit) {
+        await api(`/admin/items/${editingItemId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+        showToast('Zapisano zmiany sprzętu');
+      } else {
+        await api('/admin/items', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        showToast(payload.assignedToEmail ? 'Dodano sprzęt i utworzono wypożyczenie' : 'Dodano sprzęt');
+      }
+
       formOptionsState = null; // odśwież listy (np. nowa kategoria) przy kolejnym otwarciu
       closeAddItemModal();
+      await loadAdminItems();
+      await refreshStats();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+// ===== Modal wycofania sprzętu (gotowe powody) =====
+
+let discardTargetItem = null;
+
+function syncDiscardOther() {
+  if (!discardItemForm || !discardOtherField) return;
+  const selected = discardItemForm.elements['discardReason']?.value;
+  const isOther = selected === '__other__';
+  discardOtherField.hidden = !isOther;
+  if (discardOtherInput) discardOtherInput.required = isOther;
+}
+
+function openDiscardModal(item) {
+  if (!discardItemModal || !item) return;
+
+  discardTargetItem = item;
+  if (discardItemForm) discardItemForm.reset();
+  if (discardItemTarget) {
+    discardItemTarget.textContent =
+      `Wycofujesz „${item.name || item.itemCode}" (${item.itemCode}). Sprzęt zniknie z list, ale zostanie w bazie jako ślad.`;
+  }
+  syncDiscardOther();
+
+  if (!discardItemModal.open) discardItemModal.showModal();
+}
+
+function closeDiscardModal() {
+  if (discardItemModal?.open) discardItemModal.close();
+  discardTargetItem = null;
+}
+
+if (closeDiscardBtn) closeDiscardBtn.addEventListener('click', closeDiscardModal);
+if (cancelDiscardBtn) cancelDiscardBtn.addEventListener('click', closeDiscardModal);
+if (discardItemForm) {
+  discardItemForm.addEventListener('change', (e) => {
+    if (e.target?.name === 'discardReason') syncDiscardOther();
+  });
+
+  discardItemForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!discardTargetItem) return;
+
+    const choice = discardItemForm.elements['discardReason']?.value || 'Zepsute';
+    const reason = choice === '__other__'
+      ? (discardOtherInput?.value || '').trim() || 'Inne'
+      : choice;
+
+    const item = discardTargetItem;
+
+    try {
+      await api(`/admin/items/${item._id}/discard`, {
+        method: 'POST',
+        body: JSON.stringify({ reason })
+      });
+      showToast(`Wycofano sprzęt: ${item.itemCode}`);
+      closeDiscardModal();
       await loadAdminItems();
       await refreshStats();
     } catch (err) {

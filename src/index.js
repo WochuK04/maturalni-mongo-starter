@@ -292,6 +292,9 @@ app.get('/items/:itemCode', requireAuth, async (req, res) => {
         model: 1,
         qrCodeValue: 1,
         tags: 1,
+        serialNumber: 1,
+        warrantyUntil: 1,
+        detailedLocation: 1,
         isStudioLocked: 1,
         assignedToEmail: 1,
         assignedToName: 1,
@@ -1113,6 +1116,9 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     model = '',
     qrCodeValue = '',
     tags = [],
+    serialNumber = '',
+    warrantyUntil = '',
+    detailedLocation = '',
     isStudioLocked = false,
     assignedToEmail = ''
   } = req.body;
@@ -1164,6 +1170,9 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     model: String(model || '').trim(),
     qrCodeValue: String(qrCodeValue || '').trim(),
     tags: normalizeTags(tags),
+    serialNumber: String(serialNumber || '').trim(),
+    warrantyUntil: String(warrantyUntil || '').trim(),
+    detailedLocation: String(detailedLocation || '').trim(),
     isStudioLocked: parseBoolean(isStudioLocked),
     isActive: true,
     createdAt: now,
@@ -1239,6 +1248,9 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
     model,
     qrCodeValue,
     tags,
+    serialNumber,
+    warrantyUntil,
+    detailedLocation,
     isStudioLocked,
     isActive
   } = req.body;
@@ -1263,6 +1275,9 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
   if (model !== undefined) update.model = String(model || '').trim();
   if (qrCodeValue !== undefined) update.qrCodeValue = String(qrCodeValue || '').trim();
   if (tags !== undefined) update.tags = normalizeTags(tags);
+  if (serialNumber !== undefined) update.serialNumber = String(serialNumber || '').trim();
+  if (warrantyUntil !== undefined) update.warrantyUntil = String(warrantyUntil || '').trim();
+  if (detailedLocation !== undefined) update.detailedLocation = String(detailedLocation || '').trim();
   if (isStudioLocked !== undefined) update.isStudioLocked = parseBoolean(isStudioLocked);
   if (isActive !== undefined) update.isActive = parseBoolean(isActive);
 
@@ -1761,6 +1776,7 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
   const {
     actorEmail,
     entityType,
+    entityId,
     actionType,
     itemCode,
     limit = '100'
@@ -1774,6 +1790,10 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
 
   if (entityType) {
     query.entityType = entityType.trim();
+  }
+
+  if (entityId) {
+    query.entityId = String(entityId).trim();
   }
 
   if (actionType) {
