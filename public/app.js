@@ -29,9 +29,15 @@ const usersContent = document.getElementById('usersContent');
 const teamViewTab = document.getElementById('teamViewTab');
 const teamContent = document.getElementById('teamContent');
 
-const reportsViewTab = document.getElementById('reportsViewTab');
-const reportsBadge = document.getElementById('reportsBadge');
 const reportsContent = document.getElementById('reportsContent');
+
+// Skrzynka: pod-zakładki „Prośby" / „Zgłoszenia" w jednym widoku.
+const inboxTitle = document.getElementById('inboxTitle');
+const requestsSubview = document.getElementById('requestsSubview');
+const reportsSubview = document.getElementById('reportsSubview');
+const reportsSubtab = document.getElementById('reportsSubtab');
+const requestsCount = document.getElementById('requestsCount');
+const reportsCount = document.getElementById('reportsCount');
 
 const openAddItemBtn = document.getElementById('openAddItemBtn');
 const addItemModal = document.getElementById('addItemModal');
@@ -711,15 +717,11 @@ async function handleViewChange(view) {
   }
 
   if (view === 'approvals' && (currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
-    await loadActionItems();
+    await openInbox();
   }
 
   if (view === 'team' && (currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
     await loadTeam();
-  }
-
-  if (view === 'reports' && currentUser?.role === 'admin') {
-    await loadReports();
   }
 
   if (view === 'users' && currentUser?.role === 'admin') {
@@ -770,7 +772,6 @@ function applyRoleVisibility(user) {
     if (adminViewTab) adminViewTab.hidden = true;
     if (managerViewTab) managerViewTab.hidden = true;
     if (teamViewTab) teamViewTab.hidden = true;
-    if (reportsViewTab) reportsViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
@@ -791,14 +792,12 @@ function applyRoleVisibility(user) {
     if (adminQuickActions) adminQuickActions.hidden = false;
     if (adminViewTab) adminViewTab.hidden = false;
     if (usersViewTab) usersViewTab.hidden = false;
-    if (reportsViewTab) reportsViewTab.hidden = false;
     if (adminSection) adminSection.hidden = false;
     setWorkspaceMode('admin');
   } else {
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
-    if (reportsViewTab) reportsViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     setWorkspaceMode('user');
   }
@@ -816,70 +815,95 @@ function showLoginGate() {
   if (appLayout) appLayout.hidden = true;
 }
 
-// ===== Badge „Wymagane działania" =====
+// ===== Skrzynka: wspólny licznik (Prośby + Zgłoszenia) =====
 
-function setActionBadge(count) {
-  if (!actionBadge) return;
-
+// Ustawia licznik w menu (suma dla roli) oraz liczniki na pod-zakładkach.
+function setInboxBadge(requests, reports) {
   const role = currentUser?.role;
-  if (role !== 'manager' && role !== 'admin') {
-    actionBadge.hidden = true;
-    return;
-  }
+  const isStaff = role === 'manager' || role === 'admin';
+  const showReports = role === 'admin';
+  const total = isStaff ? (requests + (showReports ? reports : 0)) : 0;
 
-  actionBadge.textContent = String(count);
-  actionBadge.hidden = count <= 0;
+  if (actionBadge) {
+    actionBadge.textContent = String(total);
+    actionBadge.hidden = !isStaff || total <= 0;
+  }
+  if (requestsCount) {
+    requestsCount.textContent = String(requests);
+    requestsCount.hidden = requests <= 0;
+  }
+  if (reportsCount) {
+    reportsCount.textContent = String(reports);
+    reportsCount.hidden = reports <= 0;
+  }
 }
 
-async function refreshActionBadge() {
-  if (!actionBadge) return;
-
+// Pobiera liczbę próśb (action-items) i — dla admina — otwartych zgłoszeń.
+async function refreshInboxBadge() {
   const role = currentUser?.role;
   if (role !== 'manager' && role !== 'admin') {
-    setActionBadge(0);
+    setInboxBadge(0, 0);
     return;
   }
-
+  let requests = 0;
+  let reports = 0;
   try {
     const items = await api('/my/action-items');
-    setActionBadge(Array.isArray(items) ? items.length : 0);
-  } catch {
-    // W razie błędu zostawiamy ostatnią znaną wartość badge'a.
+    requests = Array.isArray(items) ? items.length : 0;
+  } catch { /* zostawiamy ostatnią znaną wartość */ }
+  if (role === 'admin') {
+    try {
+      const data = await api('/admin/notifications/count');
+      reports = Number(data?.open) || 0;
+    } catch { /* j.w. */ }
+  }
+  setInboxBadge(requests, reports);
+}
+
+// ===== Skrzynka: przełączanie pod-widoków „Prośby" / „Zgłoszenia" =====
+
+let inboxSubview = 'requests';
+
+function setInboxSubview(subview) {
+  inboxSubview = subview;
+  document.querySelectorAll('#inboxSubtabs .subtab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.subview === subview);
+  });
+  if (requestsSubview) requestsSubview.hidden = subview !== 'requests';
+  if (reportsSubview) reportsSubview.hidden = subview !== 'reports';
+  if (inboxTitle) {
+    inboxTitle.textContent = subview === 'reports'
+      ? 'Zgłoszenia o sprzęcie i transfery'
+      : 'Wnioski wymagające Twojej decyzji';
   }
 }
 
-// ===== Badge „Zgłoszenia" (powiadomienia/zgłoszenia dla admina) =====
+// Otwiera Skrzynkę na wskazanym pod-widoku i wczytuje jego dane.
+async function openInbox(subview) {
+  const isAdmin = currentUser?.role === 'admin';
+  // „Zgłoszenia" widzi tylko admin; kierownik ma samą zakładkę „Prośby".
+  if (reportsSubtab) reportsSubtab.hidden = !isAdmin;
 
-function setReportsBadge(count) {
-  if (!reportsBadge) return;
-  if (currentUser?.role !== 'admin') {
-    reportsBadge.hidden = true;
-    return;
-  }
-  reportsBadge.textContent = String(count);
-  reportsBadge.hidden = count <= 0;
-}
+  let target = subview || inboxSubview || 'requests';
+  if (target === 'reports' && !isAdmin) target = 'requests';
 
-async function refreshReportsBadge() {
-  if (!reportsBadge || currentUser?.role !== 'admin') return;
-  try {
-    const data = await api('/admin/notifications/count');
-    setReportsBadge(Number(data?.open) || 0);
-  } catch {
-    // Zostawiamy ostatnią znaną wartość.
+  setInboxSubview(target);
+  if (target === 'reports') {
+    await loadReports();
+  } else {
+    await loadActionItems();
   }
 }
 
 let actionBadgeTimer = null;
 
-// Lekki polling, żeby kierownik/admin zobaczył nowe wnioski/zgłoszenia bez odświeżania strony.
+// Lekki polling, żeby kierownik/admin zobaczył nowe prośby/zgłoszenia bez odświeżania strony.
 function startActionBadgePolling() {
   if (actionBadgeTimer) return;
   const role = currentUser?.role;
   if (role !== 'manager' && role !== 'admin') return;
   actionBadgeTimer = setInterval(() => {
-    refreshActionBadge();
-    refreshReportsBadge();
+    refreshInboxBadge();
   }, 30000);
 }
 
@@ -1137,15 +1161,13 @@ async function loadSession() {
       await handleViewChange('available');
     }
 
-    await refreshActionBadge();
-    await refreshReportsBadge();
+    await refreshInboxBadge();
     startActionBadgePolling();
   } catch {
     currentUser = null;
     showLoginGate();
     renderAuthBox();
-    setActionBadge(0);
-    setReportsBadge(0);
+    setInboxBadge(0, 0);
     stats.innerHTML = '';
     if (viewSwitcher) viewSwitcher.hidden = true;
     if (adminSection) adminSection.hidden = true;
@@ -1748,7 +1770,7 @@ async function loadAdminRequests() {
           : `Wydano sprzęt: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
-        await refreshActionBadge();
+        await refreshInboxBadge();
       } catch (err) {
         showToast(err.message);
       }
@@ -1764,7 +1786,7 @@ async function loadAdminRequests() {
         showToast(`Odrzucono wniosek: ${req.itemCode}`);
         await refreshStats();
         await loadAdminRequests();
-        await refreshActionBadge();
+        await refreshInboxBadge();
       } catch (err) {
         showToast(err.message);
       }
@@ -1836,7 +1858,7 @@ async function loadActionItems() {
   if (role !== 'manager' && role !== 'admin') return;
 
   const requests = await api('/my/action-items');
-  setActionBadge(Array.isArray(requests) ? requests.length : 0);
+  refreshInboxBadge();
 
   if (!requests.length) {
     return renderEmpty(managerRequestsList, 'Brak wniosków wymagających Twojej decyzji.');
@@ -1884,7 +1906,7 @@ async function loadActionItems() {
           showToast(cfg.rejectMsg || 'Wniosek odrzucony');
           await loadActionItems();
           await refreshStats();
-          await refreshActionBadge();
+          await refreshInboxBadge();
         } catch (err) {
           showToast(err.message);
         }
@@ -2120,7 +2142,7 @@ async function loadReports() {
   hideAuditFilters();
 
   const notifications = await api('/admin/notifications');
-  await refreshReportsBadge();
+  await refreshInboxBadge();
 
   if (!Array.isArray(notifications) || !notifications.length) {
     reportsContent.innerHTML = '<div class="empty">Brak zgłoszeń.</div>';
@@ -2344,11 +2366,10 @@ viewTabs.forEach((tab) => {
 
     if (view === 'admin' && currentUser?.role !== 'admin') return;
     if (view === 'users' && currentUser?.role !== 'admin') return;
-    if (view === 'reports' && currentUser?.role !== 'admin') return;
     if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
     if (view === 'team' && !['manager', 'admin'].includes(currentUser?.role)) return;
 
-    if (view === 'admin' || view === 'users' || view === 'reports') {
+    if (view === 'admin' || view === 'users') {
       workspaceMode = 'admin';
     } else {
       workspaceMode = 'user';
@@ -2356,6 +2377,17 @@ viewTabs.forEach((tab) => {
 
     try {
       await handleViewChange(view);
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+});
+
+// Pod-zakładki Skrzynki: „Prośby" / „Zgłoszenia".
+document.querySelectorAll('#inboxSubtabs .subtab').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    try {
+      await openInbox(btn.dataset.subview);
     } catch (err) {
       showToast(err.message);
     }
@@ -2377,8 +2409,9 @@ document.addEventListener('click', async (e) => {
     await withButtonLoading(target, () => handleViewChange('returns')).catch(err => showToast(err.message));
   }
 
-  if (target.id === 'loadManagerRequestsBtn') {
-    await withButtonLoading(target, () => handleViewChange('approvals')).catch(err => showToast(err.message));
+  if (target.id === 'loadInboxBtn') {
+    // Odśwież aktywny pod-widok Skrzynki (Prośby albo Zgłoszenia).
+    await withButtonLoading(target, () => openInbox(inboxSubview)).catch(err => showToast(err.message));
   }
 
   if (target.id === 'loadUsersBtn') {
@@ -2387,10 +2420,6 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadTeamBtn') {
     await withButtonLoading(target, () => handleViewChange('team')).catch(err => showToast(err.message));
-  }
-
-  if (target.id === 'loadReportsBtn') {
-    await withButtonLoading(target, () => handleViewChange('reports')).catch(err => showToast(err.message));
   }
 
   if (target.closest('.open-purchase-btn')) {
@@ -3039,7 +3068,7 @@ if (transferItemForm) {
         closeTransferModal();
         await loadAdminItems();
         await refreshStats();
-        await refreshReportsBadge();
+        await refreshInboxBadge();
       }
     } catch (err) {
       showToast(err.message);

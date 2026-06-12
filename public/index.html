@@ -41,15 +41,11 @@
           Mój sprzęt
         </button>
         <button class="view-tab" data-view="approvals" type="button" id="managerViewTab" hidden>
-          <span>Wymagane działania</span>
+          <span>Skrzynka</span>
           <span class="nav-badge" id="actionBadge" hidden>0</span>
         </button>
         <button class="view-tab" data-view="team" type="button" id="teamViewTab" hidden>
           Mój zespół
-        </button>
-        <button class="view-tab" data-view="reports" type="button" id="reportsViewTab" hidden>
-          <span>Zgłoszenia</span>
-          <span class="nav-badge" id="reportsBadge" hidden>0</span>
         </button>
         <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
           Użytkownicy
@@ -221,14 +217,34 @@
       <section class="card card-section">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Wymagane działania</p>
-            <h2>Wnioski wymagające Twojej decyzji</h2>
+            <p class="eyebrow">Skrzynka</p>
+            <h2 id="inboxTitle">Wnioski wymagające Twojej decyzji</h2>
           </div>
-          <button id="loadManagerRequestsBtn" class="btn btn-secondary" type="button">
+          <button id="loadInboxBtn" class="btn btn-secondary" type="button">
             Odśwież
           </button>
         </div>
-        <div id="managerRequestsList" class="list"></div>
+
+        <div class="subtabs" id="inboxSubtabs" role="tablist">
+          <button class="subtab active" data-subview="requests" type="button">
+            <span>Prośby</span>
+            <span class="subtab-count" id="requestsCount" hidden>0</span>
+          </button>
+          <button class="subtab" data-subview="reports" type="button" id="reportsSubtab" hidden>
+            <span>Zgłoszenia</span>
+            <span class="subtab-count" id="reportsCount" hidden>0</span>
+          </button>
+        </div>
+
+        <div id="requestsSubview">
+          <div id="managerRequestsList" class="list"></div>
+        </div>
+        <div id="reportsSubview" hidden>
+          <p class="muted" style="margin: 0 0 12px;">
+            Zgłoszenia pracowników o sprzęcie (np. uszkodzenie) oraz ślad wykonanych transferów.
+          </p>
+          <div id="reportsContent" class="admin-content"></div>
+        </div>
       </section>
     </section>
 
@@ -247,24 +263,6 @@
           </button>
         </div>
         <div id="teamContent" class="team-content"></div>
-      </section>
-    </section>
-
-    <section class="view-panel" id="reportsPanel" data-panel="reports" hidden>
-      <section class="card card-section">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">Admin</p>
-            <h2>Zgłoszenia</h2>
-            <p class="muted">
-              Zgłoszenia pracowników o sprzęcie (np. uszkodzenie) oraz ślad wykonanych transferów.
-            </p>
-          </div>
-          <button id="loadReportsBtn" class="btn btn-secondary" type="button">
-            Odśwież
-          </button>
-        </div>
-        <div id="reportsContent" class="admin-content"></div>
       </section>
     </section>
 
