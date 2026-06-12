@@ -1077,3 +1077,73 @@ th {
   width: auto;
   min-width: 160px;
 }
+/* ===== Karta sprzętu 2.0: akcje w tabeli, historia, modal wycofania ===== */
+.table-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.history-entry {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.history-entry .history-when {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.history-entry .history-who {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.history-entry .history-what {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.discard-reasons {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin: 0;
+}
+
+.discard-reasons legend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.radio-row input {
+  width: auto;
+  margin: 0;
+}

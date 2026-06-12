@@ -323,8 +323,20 @@
             <dd id="modalItemLocation">-</dd>
           </div>
           <div class="detail-item">
+            <dt>Lokalizacja szczegółowa</dt>
+            <dd id="modalItemDetailedLocation">-</dd>
+          </div>
+          <div class="detail-item">
             <dt>Stan techniczny</dt>
             <dd id="modalItemCondition">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Numer seryjny</dt>
+            <dd id="modalItemSerial">-</dd>
+          </div>
+          <div class="detail-item">
+            <dt>Gwarancja do</dt>
+            <dd id="modalItemWarranty">-</dd>
           </div>
           <div class="detail-item">
             <dt>QR</dt>
@@ -353,6 +365,11 @@
           </p>
         </div>
 
+        <div class="modal-block" id="modalHistoryBlock" hidden>
+          <h4>Historia</h4>
+          <ol id="modalItemHistory" class="history-list"></ol>
+        </div>
+
         <div class="actions-inline modal-actions">
           <button id="modalRequestBtn" class="btn btn-primary" type="button">
             Złóż wniosek
@@ -370,7 +387,7 @@
       <div class="modal-form-head">
         <div>
           <p class="eyebrow">Panel admina</p>
-          <h3>Dodaj sprzęt</h3>
+          <h3 id="addItemModalTitle">Dodaj sprzęt</h3>
         </div>
         <button type="button" class="modal-close" id="closeAddItemBtn" aria-label="Zamknij okno">×</button>
       </div>
@@ -403,22 +420,72 @@
           <select name="conditionStatus" id="addItemCondition"></select>
         </label>
 
-        <label class="field">
+        <label class="field" id="addItemAssigneeField">
           <span>Przypisany do</span>
           <select name="assignedToEmail" id="addItemAssignee"></select>
+        </label>
+        <label class="field" id="addItemStatusField" hidden>
+          <span>Status</span>
+          <select name="operationalStatus" id="addItemStatus">
+            <option value="available">Dostępny</option>
+            <option value="loaned">Wypożyczony</option>
+            <option value="unavailable">Niedostępny</option>
+            <option value="inactive">Nieaktywny</option>
+          </select>
         </label>
         <label class="field">
           <span>Ilość</span>
           <input name="quantity" type="number" min="1" value="1" />
         </label>
 
+        <label class="field">
+          <span>Marka</span>
+          <input name="brand" id="addItemBrand" placeholder="np. Sony" />
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input name="model" id="addItemModel" placeholder="np. A7 III" />
+        </label>
+
+        <label class="field">
+          <span>Numer seryjny</span>
+          <input name="serialNumber" id="addItemSerial" placeholder="np. SN-12345" />
+        </label>
+        <label class="field">
+          <span>Gwarancja do</span>
+          <input name="warrantyUntil" id="addItemWarranty" type="date" />
+        </label>
+
+        <label class="field">
+          <span>Lokalizacja szczegółowa</span>
+          <input name="detailedLocation" id="addItemDetailedLocation" placeholder="np. Regał B, półka 3" />
+        </label>
+        <label class="field">
+          <span>Kod QR</span>
+          <input name="qrCodeValue" id="addItemQr" placeholder="Wartość kodu QR (opcjonalnie)" />
+        </label>
+
+        <label class="field field-wide">
+          <span>Tagi</span>
+          <input name="tags" id="addItemTags" placeholder="Po przecinku, np. 4K, gimbal, plener" />
+        </label>
+
+        <label class="field field-wide">
+          <span>Link do zdjęcia (URL)</span>
+          <input name="imageUrl" id="addItemImageUrl" type="url" placeholder="https://..." />
+        </label>
+        <label class="field field-wide">
+          <span>Link do miniatury (URL, opcjonalnie)</span>
+          <input name="thumbnailUrl" id="addItemThumbnailUrl" type="url" placeholder="https://..." />
+        </label>
+
         <label class="field field-wide">
           <span>Szczegóły</span>
-          <input name="details" placeholder="Krótki opis (opcjonalnie)" />
+          <input name="details" id="addItemDetailsInput" placeholder="Krótki opis (opcjonalnie)" />
         </label>
         <label class="field field-wide">
           <span>Uwagi</span>
-          <input name="notes" placeholder="Uwagi (opcjonalnie)" />
+          <input name="notes" id="addItemNotes" placeholder="Uwagi (opcjonalnie)" />
         </label>
       </div>
 
@@ -427,7 +494,7 @@
       </p>
 
       <div class="actions-inline modal-form-actions">
-        <button type="submit" class="btn btn-primary">Dodaj sprzęt</button>
+        <button type="submit" class="btn btn-primary" id="addItemSubmitBtn">Dodaj sprzęt</button>
         <button type="button" class="btn btn-secondary" id="cancelAddItemBtn">Anuluj</button>
       </div>
     </form>
@@ -486,6 +553,52 @@
       <div class="actions-inline modal-form-actions">
         <button type="submit" class="btn btn-primary">Wyślij wniosek o zakup</button>
         <button type="button" class="btn btn-secondary" id="cancelPurchaseBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="discardItemModal" class="form-modal">
+    <form id="discardItemForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Panel admina</p>
+          <h3>Wycofaj sprzęt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeDiscardBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted" id="discardItemTarget">
+        Sprzęt zostanie wycofany z magazynu i zniknie z list, ale pozostanie w bazie jako ślad.
+      </p>
+
+      <fieldset class="discard-reasons">
+        <legend>Powód wycofania</legend>
+        <label class="radio-row">
+          <input type="radio" name="discardReason" value="Zepsute" checked />
+          <span>Zepsute</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="discardReason" value="Zgubione" />
+          <span>Zgubione</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="discardReason" value="Zniszczone" />
+          <span>Zniszczone</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="discardReason" value="__other__" />
+          <span>Inne</span>
+        </label>
+      </fieldset>
+
+      <label class="field field-wide" id="discardOtherField" hidden>
+        <span>Opisz powód</span>
+        <input id="discardOtherInput" placeholder="np. zalane wodą podczas plenerów" />
+      </label>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="submit" class="btn btn-danger" id="confirmDiscardBtn">Wycofaj sprzęt</button>
+        <button type="button" class="btn btn-secondary" id="cancelDiscardBtn">Anuluj</button>
       </div>
     </form>
   </dialog>

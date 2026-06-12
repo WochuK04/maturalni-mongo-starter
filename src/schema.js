@@ -26,6 +26,9 @@ export const itemShape = {
   model: '',
   qrCodeValue: '',
   tags: [],
+  serialNumber: '',
+  warrantyUntil: '',
+  detailedLocation: '',
   isStudioLocked: false,
 
   isActive: true,
