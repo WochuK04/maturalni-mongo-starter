@@ -1523,3 +1523,51 @@ th {
 .report-card.report-resolved {
   opacity: 0.65;
 }
+
+/* === Skrzynka: pod-zakładki „Prośby" / „Zgłoszenia" === */
+.subtabs {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 2px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.subtab:hover { color: var(--text); }
+
+.subtab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.subtab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.subtab.active .subtab-count {
+  background: var(--primary);
+  color: #fff;
+}
