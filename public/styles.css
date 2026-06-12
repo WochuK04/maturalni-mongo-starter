@@ -1147,3 +1147,33 @@ th {
   width: auto;
   margin: 0;
 }
+
+/* Modal szczegółów: ograniczenie wysokości + scroll treści, by przyciski
+   ("Złóż wniosek"/"Zamknij") nie znikały przy długiej zawartości (np. historia). */
+.item-modal {
+  max-height: calc(100vh - 28px);
+}
+
+/* Kolumna treści przewija się samodzielnie, gdy zawartość przekracza ekran —
+   dzięki temu przyciski na dole modalu są zawsze osiągalne. */
+.modal-content {
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+}
+
+/* Zwijana sekcja historii sprzętu. */
+.history-details > summary {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  list-style-position: inside;
+}
+
+.history-details > summary:hover {
+  color: var(--primary);
+}
+
+.history-details[open] > summary {
+  margin-bottom: 10px;
+}
