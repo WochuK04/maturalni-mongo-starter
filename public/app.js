@@ -270,6 +270,23 @@ function getStatusLabel(status) {
   }
 }
 
+// Stan techniczny: w bazie trzymamy wartość (np. 'very_good'), w UI pokazujemy
+// polską etykietę. Mapa odpowiada ITEM_CONDITIONS z backendu (src/index.js).
+const CONDITION_LABELS = {
+  new: 'Nowy',
+  very_good: 'Bardzo dobry',
+  good: 'Dobry',
+  ok: 'Zadowalający',
+  poor: 'Wymaga uwagi',
+  damaged: 'Uszkodzony',
+  for_repair: 'Do naprawy'
+};
+
+function getConditionLabel(value) {
+  if (!value) return '-';
+  return CONDITION_LABELS[value] || value;
+}
+
 function getRequestStatusLabel(status) {
   switch (status) {
     case 'pending': return 'Oczekuje';
@@ -651,7 +668,7 @@ function renderAvailableItems(items) {
     code.textContent = `${item.itemCode || '-'}${item.brand ? ` · ${item.brand}` : ''}${item.model ? ` ${item.model}` : ''}`;
     description.textContent = item.details || 'Brak krótkiego opisu sprzętu.';
     location.textContent = item.currentLocation || 'Brak lokalizacji';
-    condition.textContent = `stan: ${item.conditionStatus || '-'}`;
+    condition.textContent = `stan: ${getConditionLabel(item.conditionStatus)}`;
 
     renderTags(tags, item.tags);
     fragment.appendChild(node);
@@ -679,8 +696,21 @@ async function loadAvailableItems() {
 async function openItemDetails(itemCode) {
   if (!itemCode || !itemDetailsModal) return;
 
+  // Wyczyść WSZYSTKIE pola, żeby podczas pobierania nie było widać danych
+  // poprzednio otwartego sprzętu (efekt „zawieszonego" starego przedmiotu).
+  modalItemImage.onerror = null;
+  modalItemImage.src = createPlaceholderImage({});
+  modalItemImage.alt = 'Ładowanie zdjęcia...';
+  modalItemStatus.textContent = '…';
+  modalItemStatus.dataset.status = '';
+  modalItemCategory.textContent = '…';
   modalItemTitle.textContent = 'Ładowanie...';
   modalItemSubtitle.textContent = '';
+  modalItemBrandModel.textContent = '—';
+  modalItemLocation.textContent = '—';
+  modalItemCondition.textContent = '—';
+  modalItemSerial.textContent = '—';
+  modalItemAssigned.textContent = '—';
   modalItemDetails.textContent = 'Pobieranie szczegółów sprzętu...';
   modalItemTags.innerHTML = '';
   modalActiveLoan.textContent = 'Ładowanie...';
@@ -713,7 +743,7 @@ async function openItemDetails(itemCode) {
 
     modalItemBrandModel.textContent = [item.brand, item.model].filter(Boolean).join(' / ') || '-';
     modalItemLocation.textContent = item.currentLocation || '-';
-    modalItemCondition.textContent = item.conditionStatus || '-';
+    modalItemCondition.textContent = getConditionLabel(item.conditionStatus);
     modalItemSerial.textContent = item.serialNumber || '-';
     modalItemAssigned.textContent =
       item.assignedToName || item.assignedToEmail
@@ -898,7 +928,7 @@ async function loadMyLoans() {
     node.querySelector('.item-title').textContent =
       `${item.name || item.itemCode} (${item.itemCode})`;
     node.querySelector('.item-meta').textContent =
-      `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${item.conditionStatus || '-'}`;
+      `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${getConditionLabel(item.conditionStatus)}`;
 
     const form = node.querySelector('.return-form');
     const locationSelect = node.querySelector('.return-location');
@@ -964,7 +994,6 @@ async function loadAdminItems() {
   table.innerHTML = `
     <thead>
       <tr>
-        <th>Kod</th>
         <th>Kategoria</th>
         <th>Nazwa</th>
         <th>Status</th>
@@ -982,12 +1011,11 @@ async function loadAdminItems() {
     const tr = document.createElement('tr');
 
     [
-      item.itemCode || '-',
       item.category || '-',
       item.name || '-',
       getStatusLabel(item.operationalStatus),
       item.currentLocation || '-',
-      item.conditionStatus || '-',
+      getConditionLabel(item.conditionStatus),
       item.assignedToEmail || '—'
     ].forEach(text => {
       const td = document.createElement('td');
