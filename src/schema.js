@@ -5,7 +5,8 @@ export const collections = {
   loanRequests: 'loanRequests',
   auditLogs: 'auditLogs',
   locations: 'locations',
-  comments: 'comments'
+  comments: 'comments',
+  notifications: 'notifications'
 };
 
 export const itemShape = {
@@ -74,5 +75,11 @@ export async function ensureIndexes(db) {
   // Komentarze do wniosku (Pakiet C – wątek dyskusji wnioskodawca/decydent).
   await db.collection(collections.comments).createIndexes([
     { key: { requestId: 1, createdAt: 1 }, name: 'idx_comments_request' }
+  ]);
+
+  // Powiadomienia/zgłoszenia dla administracji (zgłoszenia pracowników o sprzęcie
+  // + ślad o transferach). status: 'open' | 'resolved'.
+  await db.collection(collections.notifications).createIndexes([
+    { key: { status: 1, createdAt: -1 }, name: 'idx_notifications_status' }
   ]);
 }

@@ -1514,3 +1514,12 @@ th {
   flex: 1;
   min-width: 0;
 }
+
+/* === Zgłoszenia / powiadomienia dla admina (Mój sprzęt + transfery) === */
+.report-card {
+  align-items: flex-start;
+}
+
+.report-card.report-resolved {
+  opacity: 0.65;
+}
