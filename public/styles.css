@@ -1403,3 +1403,114 @@ th {
     margin-left: 0;
   }
 }
+
+/* === Pakiet C: Przepływy i uprawnienia === */
+
+/* „Mój zespół" — karty podwładnych kierownika (C2). */
+.team-content {
+  display: grid;
+  gap: 16px;
+}
+
+.team-card {
+  display: grid;
+  gap: 14px;
+}
+
+.team-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.team-name {
+  margin: 0;
+  font-size: 17px;
+}
+
+.team-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.team-block h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.team-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.team-list li {
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+/* Wątek komentarzy do wniosku (C3) — zwijany, leniwie ładowany. */
+.comments-block {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.comments-block > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  list-style-position: inside;
+}
+
+.comments-block > summary:hover {
+  color: var(--primary-hover);
+}
+
+.comments-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.comment-entry {
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.comment-meta {
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.comment-text {
+  font-size: 14px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.comment-form .comment-input {
+  flex: 1;
+  min-width: 0;
+}

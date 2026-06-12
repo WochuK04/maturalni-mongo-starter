@@ -60,6 +60,11 @@ app.use(passport.session());
 
 app.use(express.static('public'));
 
+// Escape znaków specjalnych regexu — do bezpiecznego dopasowania tekstu z usera.
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function normalizeItemCode(value) {
   return String(value || '').trim().toUpperCase();
 }
@@ -617,6 +622,21 @@ app.post('/purchase-requests', requireAuth, async (req, res) => {
     return res.status(400).json({ message: 'Uzasadnienie jest wymagane' });
   }
 
+  // Twardsza blokada duplikatów: ten sam wnioskodawca nie może mieć dwóch
+  // oczekujących wniosków o zakup tej samej rzeczy (porównanie po nazwie).
+  const existingPurchase = await db.collection(collections.loanRequests).findOne({
+    kind: 'purchase',
+    requesterEmail: req.user.email,
+    status: { $in: ACTIVE_REQUEST_STATUSES },
+    itemName: { $regex: `^${escapeRegex(name)}$`, $options: 'i' }
+  });
+
+  if (existingPurchase) {
+    return res.status(409).json({
+      message: 'Masz już oczekujący wniosek o zakup tej rzeczy'
+    });
+  }
+
   const approverEmail = await resolveApproverEmail(db, req.user.email);
 
   const purchaseRequest = {
@@ -705,6 +725,100 @@ app.post('/my/loan-requests/:id/cancel', requireAuth, async (req, res) => {
   res.json({ message: 'Wniosek anulowany' });
 });
 
+// Kto może czytać/komentować wątek wniosku: wnioskodawca, przypisany decydent
+// (kierownik) oraz administracja. Wspólne dla GET i POST komentarzy (Pakiet C).
+function canAccessRequestThread(requestDoc, user) {
+  if (!requestDoc || !user) return false;
+  if (user.role === 'admin') return true;
+  if (requestDoc.requesterEmail === user.email) return true;
+  if (requestDoc.approverEmail && requestDoc.approverEmail === user.email) return true;
+  return false;
+}
+
+// Wątek komentarzy do wniosku (osobna kolekcja `comments`). Odczyt.
+app.get('/loan-requests/:id/comments', requireAuth, async (req, res) => {
+  const db = await getDb();
+
+  let requestId;
+  try {
+    requestId = new ObjectId(req.params.id);
+  } catch {
+    return res.status(400).json({ message: 'Nieprawidłowy identyfikator wniosku' });
+  }
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({ _id: requestId });
+  if (!requestDoc) {
+    return res.status(404).json({ message: 'Wniosek nie istnieje' });
+  }
+
+  if (!canAccessRequestThread(requestDoc, req.user)) {
+    return res.status(403).json({ message: 'Brak dostępu do tego wątku' });
+  }
+
+  const comments = await db.collection(collections.comments)
+    .find({ requestId: String(requestDoc._id) })
+    .sort({ createdAt: 1 })
+    .toArray();
+
+  res.json(comments);
+});
+
+// Dodanie komentarza do wątku wniosku.
+app.post('/loan-requests/:id/comments', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const text = String(req.body?.text || '').trim();
+
+  if (!text) {
+    return res.status(400).json({ message: 'Treść komentarza jest wymagana' });
+  }
+
+  if (text.length > 2000) {
+    return res.status(400).json({ message: 'Komentarz jest za długi (max 2000 znaków)' });
+  }
+
+  let requestId;
+  try {
+    requestId = new ObjectId(req.params.id);
+  } catch {
+    return res.status(400).json({ message: 'Nieprawidłowy identyfikator wniosku' });
+  }
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({ _id: requestId });
+  if (!requestDoc) {
+    return res.status(404).json({ message: 'Wniosek nie istnieje' });
+  }
+
+  if (!canAccessRequestThread(requestDoc, req.user)) {
+    return res.status(403).json({ message: 'Brak dostępu do tego wątku' });
+  }
+
+  const now = new Date();
+  const comment = {
+    requestId: String(requestDoc._id),
+    authorEmail: req.user.email,
+    authorName: req.user.fullName || req.user.email,
+    text,
+    createdAt: now
+  };
+
+  const result = await db.collection(collections.comments).insertOne(comment);
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'request_comment_added',
+    entityType: 'loan_request',
+    entityId: String(requestDoc._id),
+    payload: {
+      itemCode: requestDoc.itemCode || null,
+      itemName: requestDoc.itemName || null,
+      requesterEmail: requestDoc.requesterEmail
+    },
+    createdAt: now
+  });
+
+  res.status(201).json({ ...comment, _id: result.insertedId });
+});
+
 // ===== Etap 1 obiegu: akceptacja kierownika działu =====
 
 app.get('/manager/loan-requests', requireAuth, requireManager, async (req, res) => {
@@ -720,6 +834,55 @@ app.get('/manager/loan-requests', requireAuth, requireManager, async (req, res) 
     .toArray();
 
   res.json(requests);
+});
+
+// Zespół kierownika: użytkownicy, którzy mają tego kierownika ustawionego jako
+// odbiorcę wniosków (managerEmail), wraz z przypisanym im sprzętem i aktywnymi
+// wnioskami. Zasila boczną zakładkę „Mój zespół" (Pakiet C).
+app.get('/manager/team', requireAuth, requireManager, async (req, res) => {
+  const db = await getDb();
+  const managerEmail = req.user.email;
+
+  const members = await db.collection(collections.users)
+    .find({ managerEmail, isActive: { $ne: false } })
+    .sort({ fullName: 1 })
+    .toArray();
+
+  const emails = members.map(m => m.email);
+
+  if (!emails.length) {
+    return res.json([]);
+  }
+
+  const [items, requests] = await Promise.all([
+    db.collection(collections.items)
+      .find({ assignedToEmail: { $in: emails }, isActive: { $ne: false } })
+      .sort({ name: 1 })
+      .toArray(),
+    db.collection(collections.loanRequests)
+      .find({ requesterEmail: { $in: emails }, status: { $in: ACTIVE_REQUEST_STATUSES } })
+      .sort({ requestedAt: -1 })
+      .toArray()
+  ]);
+
+  const itemsByUser = new Map();
+  const requestsByUser = new Map();
+  for (const it of items) {
+    if (!itemsByUser.has(it.assignedToEmail)) itemsByUser.set(it.assignedToEmail, []);
+    itemsByUser.get(it.assignedToEmail).push(it);
+  }
+  for (const rq of requests) {
+    if (!requestsByUser.has(rq.requesterEmail)) requestsByUser.set(rq.requesterEmail, []);
+    requestsByUser.get(rq.requesterEmail).push(rq);
+  }
+
+  res.json(members.map(m => ({
+    email: m.email,
+    fullName: m.fullName || m.email,
+    role: m.role || 'user',
+    items: itemsByUser.get(m.email) || [],
+    activeRequests: requestsByUser.get(m.email) || []
+  })));
 });
 
 function isRequestApprover(requestDoc, user) {
@@ -1639,6 +1802,44 @@ app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res)
     }
   );
 
+  // Aktywne wnioski o wypożyczenie tego sprzętu nie mają już sensu — odrzuć je
+  // z czytelną notatką i zostaw ślad w historii (Pakiet C).
+  const affectedRequests = await db.collection(collections.loanRequests)
+    .find({ itemCode: item.itemCode, status: { $in: ACTIVE_REQUEST_STATUSES } })
+    .project({ _id: 1, requesterEmail: 1 })
+    .toArray();
+
+  if (affectedRequests.length) {
+    const rejectionNote = `Sprzęt wycofany z magazynu: ${discardReason}`;
+
+    await db.collection(collections.loanRequests).updateMany(
+      { itemCode: item.itemCode, status: { $in: ACTIVE_REQUEST_STATUSES } },
+      {
+        $set: {
+          status: 'rejected',
+          rejectedAt: now,
+          rejectedByEmail: req.user.email,
+          decisionNote: rejectionNote
+        }
+      }
+    );
+
+    await db.collection(collections.auditLogs).insertMany(
+      affectedRequests.map(rq => ({
+        actorEmail: req.user.email,
+        actionType: 'loan_request_auto_rejected',
+        entityType: 'loan_request',
+        entityId: String(rq._id),
+        payload: {
+          itemCode: item.itemCode,
+          requesterEmail: rq.requesterEmail,
+          reason: discardReason
+        },
+        createdAt: now
+      }))
+    );
+  }
+
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
     actionType: 'item_discarded',
@@ -1649,6 +1850,122 @@ app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res)
   });
 
   res.json({ message: 'Sprzęt wycofany z magazynu' });
+});
+
+// Przeniesienie sprzętu na inną osobę (transfer). Zamyka ewentualne aktywne
+// wypożyczenie obecnego posiadacza i otwiera nowe dla wskazanej osoby. Osoba
+// docelowa jest wymagana — zwrot do magazynu robi się zwykłym przepływem zwrotu.
+app.post('/admin/items/:id/transfer', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { toEmail = '', note = '' } = req.body;
+  const targetEmail = String(toEmail || '').trim().toLowerCase();
+  const transferNote = String(note || '').trim();
+
+  if (!targetEmail) {
+    return res.status(400).json({ message: 'Wskaż osobę, na którą przenosisz sprzęt' });
+  }
+
+  let itemId;
+  try {
+    itemId = new ObjectId(req.params.id);
+  } catch {
+    return res.status(400).json({ message: 'Nieprawidłowy identyfikator sprzętu' });
+  }
+
+  const item = await db.collection(collections.items).findOne({ _id: itemId });
+
+  if (!item || item.isActive === false) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  if (isBlockedFromLoan(item)) {
+    return res.status(400).json({ message: 'Tego sprzętu nie można przenosić' });
+  }
+
+  if (item.assignedToEmail === targetEmail) {
+    return res.status(400).json({ message: 'Sprzęt jest już przypisany do tej osoby' });
+  }
+
+  const targetUser = await db.collection(collections.users).findOne({
+    email: targetEmail,
+    isActive: { $ne: false }
+  });
+
+  if (!targetUser) {
+    return res.status(404).json({ message: 'Nie znaleziono aktywnego użytkownika o tym adresie' });
+  }
+
+  const now = new Date();
+  const targetName = targetUser.fullName || targetUser.email;
+  const fromEmail = item.assignedToEmail || null;
+
+  // Zamknij aktywne wypożyczenie obecnego posiadacza (jeśli sprzęt był u kogoś).
+  await db.collection(collections.loans).updateMany(
+    { itemCode: item.itemCode, status: 'active' },
+    {
+      $set: {
+        status: 'returned',
+        returnedAt: now,
+        returnLocation: 'Transfer',
+        returnNote: transferNote
+          ? `Przeniesiono na ${targetName}: ${transferNote}`
+          : `Przeniesiono na ${targetName}`,
+        closedByEmail: req.user.email
+      }
+    }
+  );
+
+  // Otwórz nowe wypożyczenie dla osoby docelowej.
+  const loan = {
+    itemId: item._id,
+    itemCode: item.itemCode,
+    userEmail: targetEmail,
+    userDisplayName: targetName,
+    quantity: 1,
+    fromLocation: item.currentLocation || 'Transfer',
+    targetUseLocation: 'U pracownika',
+    status: 'active',
+    borrowedAt: now,
+    dueAt: null,
+    returnedAt: null,
+    borrowNote: transferNote
+      ? `Transfer od ${fromEmail || 'magazynu'}: ${transferNote}`
+      : `Transfer od ${fromEmail || 'magazynu'}`,
+    returnNote: null,
+    createdByEmail: req.user.email,
+    closedByEmail: null
+  };
+
+  const loanResult = await db.collection(collections.loans).insertOne(loan);
+
+  await db.collection(collections.items).updateOne(
+    { _id: item._id },
+    {
+      $set: {
+        operationalStatus: 'loaned',
+        currentLocation: 'U pracownika',
+        assignedToEmail: targetEmail,
+        assignedToName: targetName,
+        updatedAt: now
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'item_transferred',
+    entityType: 'item',
+    entityId: String(item._id),
+    payload: {
+      itemCode: item.itemCode,
+      fromEmail,
+      toEmail: targetEmail,
+      loanId: String(loanResult.insertedId)
+    },
+    createdAt: now
+  });
+
+  res.json({ message: `Przeniesiono na ${targetName}`, itemCode: item.itemCode });
 });
 
 app.get('/admin/loans', requireAuth, requireAdmin, async (req, res) => {
@@ -2001,6 +2318,57 @@ app.post('/admin/purchase-requests/:id/stock', requireAuth, requireAdmin, async 
     message: 'Dodano do magazynu i przypisano wnioskodawcy',
     itemCode
   });
+});
+
+// Anulowanie zatwierdzonego zakupu w trakcie procedury (Do zamówienia /
+// Zamówiony) — np. towar zniknął ze sklepu albo decyzja się zmieniła.
+app.post('/admin/purchase-requests/:id/cancel', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { decisionNote = '' } = req.body;
+
+  let requestId;
+  try {
+    requestId = new ObjectId(req.params.id);
+  } catch {
+    return res.status(400).json({ message: 'Nieprawidłowy identyfikator wniosku' });
+  }
+
+  const requestDoc = await db.collection(collections.loanRequests).findOne({ _id: requestId });
+
+  if (!requestDoc || requestDoc.kind !== 'purchase') {
+    return res.status(404).json({ message: 'Wniosek o zakup nie istnieje' });
+  }
+
+  if (!['to_order', 'ordered'].includes(requestDoc.status)) {
+    return res.status(400).json({
+      message: 'Anulować można tylko zakup w trakcie procedury (Do zamówienia / Zamówiony)'
+    });
+  }
+
+  const now = new Date();
+
+  await db.collection(collections.loanRequests).updateOne(
+    { _id: requestDoc._id },
+    {
+      $set: {
+        status: 'cancelled',
+        cancelledAt: now,
+        cancelledByEmail: req.user.email,
+        decisionNote: String(decisionNote || '').trim()
+      }
+    }
+  );
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'purchase_request_cancelled',
+    entityType: 'purchase_request',
+    entityId: String(requestDoc._id),
+    payload: { itemName: requestDoc.itemName, shopUrl: requestDoc.shopUrl },
+    createdAt: now
+  });
+
+  res.json({ message: 'Zakup anulowany' });
 });
 
 app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {

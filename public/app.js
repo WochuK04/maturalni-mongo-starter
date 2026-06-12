@@ -26,6 +26,9 @@ const appLayout = document.getElementById('appLayout');
 const usersViewTab = document.getElementById('usersViewTab');
 const usersContent = document.getElementById('usersContent');
 
+const teamViewTab = document.getElementById('teamViewTab');
+const teamContent = document.getElementById('teamContent');
+
 const openAddItemBtn = document.getElementById('openAddItemBtn');
 const addItemModal = document.getElementById('addItemModal');
 const addItemForm = document.getElementById('addItemForm');
@@ -51,6 +54,14 @@ const discardOtherField = document.getElementById('discardOtherField');
 const discardOtherInput = document.getElementById('discardOtherInput');
 const closeDiscardBtn = document.getElementById('closeDiscardBtn');
 const cancelDiscardBtn = document.getElementById('cancelDiscardBtn');
+
+const transferItemModal = document.getElementById('transferItemModal');
+const transferItemForm = document.getElementById('transferItemForm');
+const transferItemTarget = document.getElementById('transferItemTarget');
+const transferAssignee = document.getElementById('transferAssignee');
+const transferNote = document.getElementById('transferNote');
+const closeTransferBtn = document.getElementById('closeTransferBtn');
+const cancelTransferBtn = document.getElementById('cancelTransferBtn');
 
 const purchaseModal = document.getElementById('purchaseModal');
 const purchaseForm = document.getElementById('purchaseForm');
@@ -480,6 +491,99 @@ function appendDecisionNote(node, req) {
   container.appendChild(p);
 }
 
+// Renderuje listę komentarzy do wątku wniosku.
+function renderComments(list, comments) {
+  if (!Array.isArray(comments) || !comments.length) {
+    list.innerHTML = '<p class="muted">Brak komentarzy. Napisz pierwszy.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  comments.forEach(c => {
+    const entry = document.createElement('div');
+    entry.className = 'comment-entry';
+    const when = c.createdAt ? new Date(c.createdAt).toLocaleString('pl-PL') : '';
+
+    const meta = document.createElement('div');
+    meta.className = 'comment-meta';
+    meta.innerHTML = `<strong>${escapeHtml(c.authorName || c.authorEmail || '—')}</strong> <span class="muted">${escapeHtml(when)}</span>`;
+
+    const text = document.createElement('div');
+    text.className = 'comment-text';
+    text.textContent = c.text || '';
+
+    entry.append(meta, text);
+    list.appendChild(entry);
+  });
+}
+
+// Dopina zwijany wątek komentarzy do karty wniosku. Komentarze ładują się
+// leniwie (przy rozwinięciu). Uprawnienia pilnuje backend (Pakiet C).
+// Wołać PRZED dołączeniem węzła do DOM (operuje na fragmencie szablonu).
+function attachCommentsThread(node, req) {
+  const container = node.querySelector('.item-title')?.parentElement;
+  if (!container || !req?._id) return;
+
+  const details = document.createElement('details');
+  details.className = 'comments-block';
+
+  const summary = document.createElement('summary');
+  summary.textContent = '💬 Komentarze';
+  details.appendChild(summary);
+
+  const list = document.createElement('div');
+  list.className = 'comments-list';
+  list.innerHTML = '<p class="muted">Rozwiń, aby wczytać komentarze.</p>';
+  details.appendChild(list);
+
+  const form = document.createElement('form');
+  form.className = 'comment-form';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'comment-input';
+  input.placeholder = 'Napisz komentarz...';
+  input.maxLength = 2000;
+  const sendBtn = document.createElement('button');
+  sendBtn.type = 'submit';
+  sendBtn.className = 'btn btn-secondary';
+  sendBtn.textContent = 'Wyślij';
+  form.append(input, sendBtn);
+  details.appendChild(form);
+
+  let loaded = false;
+  async function loadThread() {
+    try {
+      const comments = await api(`/loan-requests/${req._id}/comments`);
+      renderComments(list, comments);
+      loaded = true;
+    } catch (err) {
+      list.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  details.addEventListener('toggle', () => {
+    if (details.open && !loaded) loadThread();
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = (input.value || '').trim();
+    if (!text) return;
+    try {
+      await api(`/loan-requests/${req._id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ text })
+      });
+      input.value = '';
+      await loadThread();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  container.appendChild(details);
+}
+
 function renderTags(container, tags = []) {
   container.innerHTML = '';
   if (!Array.isArray(tags) || !tags.length) {
@@ -597,6 +701,10 @@ async function handleViewChange(view) {
     await loadActionItems();
   }
 
+  if (view === 'team' && (currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
+    await loadTeam();
+  }
+
   if (view === 'users' && currentUser?.role === 'admin') {
     await loadUsers();
   }
@@ -644,6 +752,7 @@ function applyRoleVisibility(user) {
     if (adminQuickActions) adminQuickActions.hidden = true;
     if (adminViewTab) adminViewTab.hidden = true;
     if (managerViewTab) managerViewTab.hidden = true;
+    if (teamViewTab) teamViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
@@ -657,6 +766,8 @@ function applyRoleVisibility(user) {
   const isManager = user.role === 'manager';
   const isAdmin = user.role === 'admin';
   if (managerViewTab) managerViewTab.hidden = !(isManager || isAdmin);
+  // „Mój zespół" — dla kierownika i admina (obaj mogą mieć podwładnych).
+  if (teamViewTab) teamViewTab.hidden = !(isManager || isAdmin);
 
   if (user.role === 'admin') {
     if (adminQuickActions) adminQuickActions.hidden = false;
@@ -1009,6 +1120,7 @@ async function loadMyRequests() {
     const node = requestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: false });
     appendDecisionNote(node, req);
+    attachCommentsThread(node, req);
 
     const badge = node.querySelector('.request-status');
     badge.textContent = getRequestStatusLabel(req.status);
@@ -1210,6 +1322,13 @@ function buildAdminItemRow(item) {
   editBtn.textContent = 'Edytuj';
   editBtn.addEventListener('click', () => openEditItemModal(item));
   actionsTd.appendChild(editBtn);
+
+  const transferBtn = document.createElement('button');
+  transferBtn.type = 'button';
+  transferBtn.className = 'btn btn-secondary';
+  transferBtn.textContent = 'Przenieś';
+  transferBtn.addEventListener('click', () => openTransferModal(item));
+  actionsTd.appendChild(transferBtn);
 
   const discardBtn = document.createElement('button');
   discardBtn.type = 'button';
@@ -1545,6 +1664,7 @@ async function loadAdminRequests() {
     const node = adminRequestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: true });
     appendDecisionNote(node, req);
+    attachCommentsThread(node, req);
 
     // Etap 1 (czeka na kierownika) – administracja jeszcze nie realizuje wydania.
     if (req.status === 'pending_manager') {
@@ -1622,7 +1742,9 @@ function getActionConfig(req) {
       return {
         approveLabel: 'Oznacz jako zamówiony',
         approveUrl: `/admin/purchase-requests/${id}/order`,
-        rejectUrl: null,
+        rejectUrl: `/admin/purchase-requests/${id}/cancel`,
+        rejectLabel: 'Anuluj zakup',
+        rejectMsg: 'Zakup anulowany',
         successMsg: 'Oznaczono jako zamówiony'
       };
     }
@@ -1630,7 +1752,9 @@ function getActionConfig(req) {
       return {
         approveLabel: 'Dodaj do magazynu',
         approveUrl: `/admin/purchase-requests/${id}/stock`,
-        rejectUrl: null,
+        rejectUrl: `/admin/purchase-requests/${id}/cancel`,
+        rejectLabel: 'Anuluj zakup',
+        rejectMsg: 'Zakup anulowany',
         successMsg: 'Dodano do magazynu i przypisano wnioskodawcy'
       };
     }
@@ -1671,6 +1795,7 @@ async function loadActionItems() {
     const node = adminRequestTpl.content.cloneNode(true);
     fillRequestNode(node, req, { withRequester: true });
     appendDecisionNote(node, req);
+    attachCommentsThread(node, req);
 
     const noteInput = node.querySelector('.decision-note');
     const approveBtn = node.querySelector('.approve-btn');
@@ -1695,6 +1820,7 @@ async function loadActionItems() {
     });
 
     if (cfg.rejectUrl) {
+      rejectBtn.textContent = cfg.rejectLabel || 'Odrzuć';
       rejectBtn.addEventListener('click', async () => {
         try {
           await api(cfg.rejectUrl, {
@@ -1702,9 +1828,10 @@ async function loadActionItems() {
             body: JSON.stringify({ decisionNote: noteInput.value || '' })
           });
 
-          showToast('Wniosek odrzucony');
+          showToast(cfg.rejectMsg || 'Wniosek odrzucony');
           await loadActionItems();
           await refreshStats();
+          await refreshActionBadge();
         } catch (err) {
           showToast(err.message);
         }
@@ -1851,6 +1978,86 @@ async function loadUsers() {
   usersContent.appendChild(table);
 }
 
+// „Mój zespół" — lista podwładnych kierownika z przypisanym sprzętem i wnioskami
+// w toku. Tylko podgląd (decyzje robi się w „Wymagane działania").
+async function loadTeam() {
+  const role = currentUser?.role;
+  if (role !== 'manager' && role !== 'admin') return;
+  if (!teamContent) return;
+
+  const members = await api('/manager/team');
+
+  if (!Array.isArray(members) || !members.length) {
+    teamContent.innerHTML =
+      '<div class="empty">Nikt nie ma Cię ustawionego jako kierownika. Przypisanie ustawia administrator w zakładce „Użytkownicy".</div>';
+    return;
+  }
+
+  teamContent.innerHTML = '';
+
+  members.forEach(member => {
+    const card = document.createElement('article');
+    card.className = 'team-card card-section';
+
+    const head = document.createElement('div');
+    head.className = 'team-card-head';
+    head.innerHTML = `
+      <div>
+        <h3 class="team-name">${escapeHtml(member.fullName)}</h3>
+        <p class="muted">${escapeHtml(member.email)} · ${escapeHtml(getRoleLabel(member.role))}</p>
+      </div>
+      <div class="team-counts">
+        <span class="badge">Sprzęt: ${member.items.length}</span>
+        <span class="badge">Wnioski w toku: ${member.activeRequests.length}</span>
+      </div>
+    `;
+    card.appendChild(head);
+
+    // Przypisany sprzęt
+    const itemsBlock = document.createElement('div');
+    itemsBlock.className = 'team-block';
+    if (member.items.length) {
+      const list = document.createElement('ul');
+      list.className = 'team-list';
+      member.items.forEach(item => {
+        const li = document.createElement('li');
+        li.innerHTML = `<strong>${escapeHtml(item.name || item.itemCode)}</strong>
+          <span class="muted">(${escapeHtml(item.itemCode)}) · ${escapeHtml(getStatusLabel(item.operationalStatus))} · ${escapeHtml(item.currentLocation || '-')}</span>`;
+        list.appendChild(li);
+      });
+      itemsBlock.innerHTML = '<h4>Przypisany sprzęt</h4>';
+      itemsBlock.appendChild(list);
+    } else {
+      itemsBlock.innerHTML = '<h4>Przypisany sprzęt</h4><p class="muted">Brak przypisanego sprzętu.</p>';
+    }
+    card.appendChild(itemsBlock);
+
+    // Wnioski w toku
+    const reqBlock = document.createElement('div');
+    reqBlock.className = 'team-block';
+    if (member.activeRequests.length) {
+      const list = document.createElement('ul');
+      list.className = 'team-list';
+      member.activeRequests.forEach(req => {
+        const li = document.createElement('li');
+        const label = req.kind === 'purchase'
+          ? `🛒 ${req.itemName || 'Nowy sprzęt'}`
+          : `${req.itemName || req.itemCode} (${req.itemCode})`;
+        li.innerHTML = `<strong>${escapeHtml(label)}</strong>
+          <span class="muted">· ${escapeHtml(getRequestStatusLabel(req.status))}</span>`;
+        list.appendChild(li);
+      });
+      reqBlock.innerHTML = '<h4>Wnioski w toku</h4>';
+      reqBlock.appendChild(list);
+    } else {
+      reqBlock.innerHTML = '<h4>Wnioski w toku</h4><p class="muted">Brak wniosków w toku.</p>';
+    }
+    card.appendChild(reqBlock);
+
+    teamContent.appendChild(card);
+  });
+}
+
 // Słownik akcji po polsku — historia ma być zrozumiała dla laika.
 const AUDIT_ACTION_LABELS = {
   loan_request_created: 'Złożył wniosek o wypożyczenie',
@@ -1863,12 +2070,16 @@ const AUDIT_ACTION_LABELS = {
   purchase_request_approved: 'Zatwierdził zakup (do zamówienia)',
   purchase_request_ordered: 'Oznaczył zakup jako zamówiony',
   purchase_request_stocked: 'Dodał zakup do magazynu i przypisał wnioskodawcy',
+  purchase_request_cancelled: 'Anulował zakup w trakcie procedury',
+  loan_request_auto_rejected: 'Odrzucił wniosek (sprzęt wycofany)',
+  request_comment_added: 'Dodał komentarz do wniosku',
   loan_created: 'Utworzył wypożyczenie',
   loan_returned: 'Przyjął zwrot sprzętu',
   item_created: 'Dodał sprzęt',
   item_updated: 'Zaktualizował sprzęt',
   item_deactivated: 'Wycofał sprzęt',
   item_discarded: 'Wyrzucił sprzęt z magazynu',
+  item_transferred: 'Przeniósł sprzęt na inną osobę',
   user_updated: 'Zmienił ustawienia użytkownika',
   user_deleted: 'Usunął użytkownika'
 };
@@ -1981,6 +2192,7 @@ viewTabs.forEach((tab) => {
     if (view === 'admin' && currentUser?.role !== 'admin') return;
     if (view === 'users' && currentUser?.role !== 'admin') return;
     if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
+    if (view === 'team' && !['manager', 'admin'].includes(currentUser?.role)) return;
 
     if (view === 'admin' || view === 'users') {
       workspaceMode = 'admin';
@@ -2017,6 +2229,10 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadUsersBtn') {
     await withButtonLoading(target, () => handleViewChange('users')).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'loadTeamBtn') {
+    await withButtonLoading(target, () => handleViewChange('team')).catch(err => showToast(err.message));
   }
 
   if (target.closest('.open-purchase-btn')) {
@@ -2570,6 +2786,76 @@ if (discardItemForm) {
       });
       showToast(`Wycofano sprzęt: ${item.itemCode}`);
       closeDiscardModal();
+      await loadAdminItems();
+      await refreshStats();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+// ===== Modal „Przenieś sprzęt" (transfer między osobami, Pakiet C) =====
+
+let transferTargetItem = null;
+
+async function openTransferModal(item) {
+  if (!transferItemModal || !item) return;
+
+  try {
+    await ensureFormOptions();
+  } catch (err) {
+    showToast(err.message);
+    return;
+  }
+
+  transferTargetItem = item;
+  if (transferItemForm) transferItemForm.reset();
+
+  // Lista osób bez obecnego posiadacza (transfer ma zmienić właściciela).
+  const userOptions = (formOptionsState?.users || [])
+    .filter(u => u.email !== item.assignedToEmail)
+    .map(u => ({ value: u.email, label: `${u.fullName} (${u.email})` }));
+  fillSelect(transferAssignee, userOptions, { includeEmpty: '— wybierz osobę —' });
+
+  if (transferItemTarget) {
+    const holder = item.assignedToEmail
+      ? `Obecnie u: ${item.assignedToName || item.assignedToEmail}.`
+      : 'Sprzęt nie jest obecnie przypisany.';
+    transferItemTarget.textContent =
+      `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}). ${holder} Dotychczasowe wypożyczenie zostanie zamknięte, a sprzęt przypisany nowej osobie.`;
+  }
+
+  if (!transferItemModal.open) transferItemModal.showModal();
+}
+
+function closeTransferModal() {
+  if (transferItemModal?.open) transferItemModal.close();
+  transferTargetItem = null;
+}
+
+if (closeTransferBtn) closeTransferBtn.addEventListener('click', closeTransferModal);
+if (cancelTransferBtn) cancelTransferBtn.addEventListener('click', closeTransferModal);
+
+if (transferItemForm) {
+  transferItemForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!transferTargetItem) return;
+
+    const toEmail = transferAssignee?.value || '';
+    if (!toEmail) {
+      showToast('Wybierz osobę, na którą przenosisz sprzęt');
+      return;
+    }
+
+    const item = transferTargetItem;
+
+    try {
+      await api(`/admin/items/${item._id}/transfer`, {
+        method: 'POST',
+        body: JSON.stringify({ toEmail, note: transferNote?.value || '' })
+      });
+      showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
+      closeTransferModal();
       await loadAdminItems();
       await refreshStats();
     } catch (err) {

@@ -4,7 +4,8 @@ export const collections = {
   loans: 'loans',
   loanRequests: 'loanRequests',
   auditLogs: 'auditLogs',
-  locations: 'locations'
+  locations: 'locations',
+  comments: 'comments'
 };
 
 export const itemShape = {
@@ -68,5 +69,10 @@ export async function ensureIndexes(db) {
 
   await db.collection(collections.locations).createIndexes([
     { key: { name: 1 }, unique: true, name: 'uniq_location_name' }
+  ]);
+
+  // Komentarze do wniosku (Pakiet C – wątek dyskusji wnioskodawca/decydent).
+  await db.collection(collections.comments).createIndexes([
+    { key: { requestId: 1, createdAt: 1 }, name: 'idx_comments_request' }
   ]);
 }
