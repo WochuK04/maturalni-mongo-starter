@@ -134,17 +134,49 @@ const adminViewTab = document.getElementById('adminViewTab');
 const viewTabs = Array.from(document.querySelectorAll('.view-tab'));
 const viewPanels = Array.from(document.querySelectorAll('.view-panel'));
 
-// Magazyn „w stylu Odoo" (Faza 1 – odczyt, role viewer/manager/admin).
+// Magazyn „w stylu Odoo" (Faza 2 – układ: Przegląd/Operacje/Produkty/Raportowanie/Konfiguracja).
 const warehouseViewTab = document.getElementById('warehouseViewTab');
 const warehouseSummary = document.getElementById('warehouseSummary');
-const warehouseStockView = document.getElementById('warehouseStockView');
-const warehouseLocationsView = document.getElementById('warehouseLocationsView');
-const warehouseMovesView = document.getElementById('warehouseMovesView');
+const whOverviewView = document.getElementById('whOverviewView');
+const whOverviewContent = document.getElementById('whOverviewContent');
+const whOperationsView = document.getElementById('whOperationsView');
+const whOpTypeNav = document.getElementById('whOpTypeNav');
+const whNewOperationBtn = document.getElementById('whNewOperationBtn');
+const whOperationsContent = document.getElementById('whOperationsContent');
+const whProductsView = document.getElementById('whProductsView');
+const whProductsSearch = document.getElementById('whProductsSearch');
+const whProductsContent = document.getElementById('whProductsContent');
+const whReportingView = document.getElementById('whReportingView');
+const whReportStock = document.getElementById('whReportStock');
+const whReportMoves = document.getElementById('whReportMoves');
+const whConfigView = document.getElementById('whConfigView');
+// Raportowanie / Konfiguracja — kontenery reużyte z Fazy 1.
 const warehouseStockContent = document.getElementById('warehouseStockContent');
 const warehouseLocationsContent = document.getElementById('warehouseLocationsContent');
 const warehouseMovesContent = document.getElementById('warehouseMovesContent');
 const warehouseSearchInput = document.getElementById('warehouseSearchInput');
 const warehouseLocationFilter = document.getElementById('warehouseLocationFilter');
+// Modal operacji.
+const operationModal = document.getElementById('operationModal');
+const operationModalType = document.getElementById('operationModalType');
+const operationModalTitle = document.getElementById('operationModalTitle');
+const operationFromField = document.getElementById('operationFromField');
+const operationToField = document.getElementById('operationToField');
+const operationFrom = document.getElementById('operationFrom');
+const operationTo = document.getElementById('operationTo');
+const operationContact = document.getElementById('operationContact');
+const operationScheduled = document.getElementById('operationScheduled');
+const operationSource = document.getElementById('operationSource');
+const operationNote = document.getElementById('operationNote');
+const operationLinesHead = document.getElementById('operationLinesHead');
+const operationLines = document.getElementById('operationLines');
+const operationAddLineBtn = document.getElementById('operationAddLineBtn');
+const operationStateHint = document.getElementById('operationStateHint');
+const operationSaveBtn = document.getElementById('operationSaveBtn');
+const operationValidateBtn = document.getElementById('operationValidateBtn');
+const operationCancelOpBtn = document.getElementById('operationCancelOpBtn');
+const operationCloseBtn2 = document.getElementById('operationCloseBtn2');
+const closeOperationBtn = document.getElementById('closeOperationBtn');
 
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
@@ -206,10 +238,15 @@ let availableItemsState = [];
 let availableSearchTerm = '';
 let activeModalItem = null;
 
-// Magazyn: aktywny pod-widok + cache lokalizacji (drzewo + stan).
+// Magazyn: stan nawigacji + cache danych.
 const WAREHOUSE_ROLES = ['viewer', 'manager', 'admin'];
-let warehouseView = 'stock';
+let warehouseMenu = 'overview';
+let warehouseReportView = 'stock';
+let warehouseOpType = 'receipt';
 let warehouseLocationsCache = null;
+let warehouseFormData = null;
+let warehouseProductsState = [];
+let currentOperation = null;
 
 function showToast(message) {
   const old = document.querySelector('.toast');
@@ -2429,7 +2466,7 @@ document.querySelectorAll('#inboxSubtabs .subtab').forEach(btn => {
   });
 });
 
-// ===== Magazyn „w stylu Odoo" – widoki odczytu (Faza 1) =====
+// ===== Magazyn „w stylu Odoo" – moduł (Faza 2) =====
 
 const WAREHOUSE_KIND_LABELS = {
   view: 'Grupa', internal: 'Magazyn', employee: 'U pracownika',
@@ -2439,6 +2476,12 @@ const MOVE_KIND_LABELS = {
   opening: 'Stan otwarcia', internal: 'Przesunięcie', receipt: 'Przyjęcie',
   delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta'
 };
+const OP_STATE_LABELS = { draft: 'Wersja robocza', ready: 'Gotowe', done: 'Wykonano', cancelled: 'Anulowano' };
+const OP_TYPE_ORDER = ['receipt', 'delivery', 'internal', 'scrap', 'adjustment'];
+const OP_TYPE_NAV_LABELS = {
+  receipt: 'Przyjęcia', delivery: 'Dostawy', internal: 'Wewnętrzne',
+  scrap: 'Odpad', adjustment: 'Inwentarz fizyczny'
+};
 
 let warehouseStockState = [];
 
@@ -2446,6 +2489,12 @@ async function fetchWarehouseLocations(force = false) {
   if (warehouseLocationsCache && !force) return warehouseLocationsCache;
   warehouseLocationsCache = await api('/warehouse/locations');
   return warehouseLocationsCache;
+}
+
+async function fetchWarehouseFormData(force = false) {
+  if (warehouseFormData && !force) return warehouseFormData;
+  warehouseFormData = await api('/warehouse/form-data');
+  return warehouseFormData;
 }
 
 function isPhysicalLocation(loc) {
@@ -2477,19 +2526,307 @@ async function openWarehouse() {
   const locations = await fetchWarehouseLocations(true);
   renderWarehouseSummary(locations);
   populateLocationFilter(locations);
-  await switchWarehouseView(warehouseView);
+  await switchWarehouseMenu(warehouseMenu);
 }
 
-async function switchWarehouseView(view) {
-  warehouseView = view;
-  document.querySelectorAll('#warehouseSubtabs .subtab').forEach(b =>
-    b.classList.toggle('active', b.dataset.whview === view));
-  if (warehouseStockView) warehouseStockView.hidden = view !== 'stock';
-  if (warehouseLocationsView) warehouseLocationsView.hidden = view !== 'locations';
-  if (warehouseMovesView) warehouseMovesView.hidden = view !== 'moves';
+// Górne menu modułu (Przegląd / Operacje / Produkty / Raportowanie / Konfiguracja).
+async function switchWarehouseMenu(menu) {
+  warehouseMenu = menu;
+  document.querySelectorAll('#warehouseMenu .subtab').forEach(b =>
+    b.classList.toggle('active', b.dataset.whmenu === menu));
+  if (whOverviewView) whOverviewView.hidden = menu !== 'overview';
+  if (whOperationsView) whOperationsView.hidden = menu !== 'operations';
+  if (whProductsView) whProductsView.hidden = menu !== 'products';
+  if (whReportingView) whReportingView.hidden = menu !== 'reporting';
+  if (whConfigView) whConfigView.hidden = menu !== 'config';
 
+  if (menu === 'overview') await loadWarehouseOverview();
+  else if (menu === 'operations') await openOperations(warehouseOpType);
+  else if (menu === 'products') await loadWarehouseProducts();
+  else if (menu === 'reporting') await switchReportView(warehouseReportView);
+  else if (menu === 'config') renderWarehouseLocations(await fetchWarehouseLocations());
+}
+
+// --- Przegląd (dashboard kafelków) ---
+async function loadWarehouseOverview() {
+  const data = await api('/warehouse/overview');
+  renderOverview(data.types || []);
+}
+
+function renderOverview(types) {
+  if (!types.length) { renderEmpty(whOverviewContent, 'Brak danych.'); return; }
+  const groups = {};
+  for (const t of types) (groups[t.group] = groups[t.group] || []).push(t);
+  const groupOrder = ['Przekazy', 'Korekty', 'Zapotrzebowanie'];
+
+  whOverviewContent.innerHTML = Object.keys(groups)
+    .sort((a, b) => groupOrder.indexOf(a) - groupOrder.indexOf(b))
+    .map(group => {
+      const cards = groups[group]
+        .sort((a, b) => OP_TYPE_ORDER.indexOf(a.type) - OP_TYPE_ORDER.indexOf(b.type))
+        .map(t => {
+          const todo = (t.draft || 0) + (t.ready || 0);
+          return `
+            <button class="wh-card" type="button" data-whgo="${escapeHtml(t.type)}">
+              <span class="wh-card-title">${escapeHtml(OP_TYPE_NAV_LABELS[t.type] || t.label)}</span>
+              <span class="wh-card-todo">${todo}</span>
+              <span class="wh-card-sub muted">do zrobienia · ${t.done || 0} wykonano</span>
+            </button>`;
+        }).join('');
+      return `<div class="wh-group"><p class="eyebrow">${escapeHtml(group)}</p><div class="wh-cards">${cards}</div></div>`;
+    }).join('');
+}
+
+// --- Operacje (dokumenty) ---
+function renderOpTypeNav() {
+  whOpTypeNav.innerHTML = OP_TYPE_ORDER.map(type =>
+    `<button class="subtab${type === warehouseOpType ? ' active' : ''}" data-whoptype="${escapeHtml(type)}" type="button">${escapeHtml(OP_TYPE_NAV_LABELS[type])}</button>`).join('');
+}
+
+async function openOperations(type) {
+  warehouseOpType = type;
+  renderOpTypeNav();
+  if (whNewOperationBtn) whNewOperationBtn.hidden = currentUser?.role !== 'admin';
+  await loadOperationsList(type);
+}
+
+async function loadOperationsList(type) {
+  const ops = await api(`/warehouse/operations?type=${encodeURIComponent(type)}`);
+  renderOperationsList(ops);
+}
+
+function renderOperationsList(ops) {
+  if (!ops.length) { renderEmpty(whOperationsContent, 'Brak operacji tego typu.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Odnośnik</th><th>Z</th><th>Do</th><th>Kontakt</th><th>Zaplanowana data</th><th>Dokument źródłowy</th><th>Status</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  ops.forEach(op => {
+    const tr = document.createElement('tr');
+    tr.className = 'wh-op-row';
+    tr.innerHTML = `
+      <td>${escapeHtml(op.reference)}</td>
+      <td>${escapeHtml(op.fromName || '—')}</td>
+      <td>${escapeHtml(op.toName || '—')}</td>
+      <td>${escapeHtml(op.contact || '—')}</td>
+      <td>${op.scheduledAt ? escapeHtml(formatDate(op.scheduledAt)) : '—'}</td>
+      <td>${escapeHtml(op.sourceDocument || '—')}</td>
+      <td><span class="badge${op.state === 'done' ? ' badge-status' : ''}">${escapeHtml(OP_STATE_LABELS[op.state] || op.state)}</span></td>`;
+    tr.addEventListener('click', () => openOperationModal(op.type, op.id).catch(err => showToast(err.message)));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  whOperationsContent.innerHTML = '';
+  whOperationsContent.appendChild(table);
+}
+
+// --- Modal operacji ---
+function locationOptions(selectedId, kinds) {
+  const locs = (warehouseFormData?.locations || []).filter(l => !kinds || kinds.includes(l.kind));
+  return locs.map(l =>
+    `<option value="${escapeHtml(l.id)}"${l.id === selectedId ? ' selected' : ''}>${escapeHtml(l.name)} (${escapeHtml(l.code || '')})</option>`).join('');
+}
+
+function itemOptions(selectedCode) {
+  const items = warehouseFormData?.items || [];
+  return '<option value="">— wybierz sprzęt —</option>' + items.map(it =>
+    `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.itemCode)} · ${escapeHtml(it.name)}</option>`).join('');
+}
+
+function resolveDefaultLocId(code) {
+  const l = (warehouseFormData?.locations || []).find(x => x.code === code);
+  return l ? l.id : '';
+}
+
+function addOperationLine(line = {}) {
+  const isAdj = warehouseOpType === 'adjustment';
+  const row = document.createElement('div');
+  row.className = 'op-line';
+  if (isAdj) {
+    row.innerHTML = `
+      <select class="op-line-item">${itemOptions(line.itemCode)}</select>
+      <select class="op-line-loc">${locationOptions(line.locationId || resolveDefaultLocId('WH/Stock'), ['internal', 'employee'])}</select>
+      <input class="op-line-counted" type="number" min="0" value="${line.countedQty ?? 0}" />
+      <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
+  } else {
+    row.innerHTML = `
+      <select class="op-line-item">${itemOptions(line.itemCode)}</select>
+      <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
+      <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
+  }
+  row.querySelector('.op-line-remove').addEventListener('click', () => row.remove());
+  operationLines.appendChild(row);
+}
+
+function renderOperationLinesHead() {
+  operationLinesHead.innerHTML = warehouseOpType === 'adjustment'
+    ? '<span>Sprzęt</span><span>Lokalizacja</span><span>Policzono</span><span></span>'
+    : '<span>Sprzęt</span><span>Ilość</span><span></span>';
+}
+
+async function openOperationModal(type, id = null) {
+  await fetchWarehouseFormData();
+  warehouseOpType = type;
+  currentOperation = { id, type, state: id ? null : 'draft' };
+
+  const cfg = warehouseFormData?.types?.[type] || {};
+  const isAdj = type === 'adjustment';
+  operationModalType.textContent = OP_TYPE_NAV_LABELS[type] || cfg.label || 'Operacja';
+  renderOperationLinesHead();
+  operationLines.innerHTML = '';
+
+  operationFromField.hidden = isAdj;
+  operationToField.hidden = isAdj;
+  operationFrom.innerHTML = locationOptions(null);
+  operationTo.innerHTML = locationOptions(null);
+
+  if (id) {
+    const op = await api(`/warehouse/operations/${encodeURIComponent(id)}`);
+    currentOperation.state = op.state;
+    operationModalTitle.textContent = op.reference;
+    if (!isAdj) {
+      operationFrom.value = op.fromLocationId || '';
+      operationTo.value = op.toLocationId || '';
+    }
+    operationContact.value = op.contact || '';
+    operationScheduled.value = op.scheduledAt ? String(op.scheduledAt).slice(0, 10) : '';
+    operationSource.value = op.sourceDocument || '';
+    operationNote.value = op.note || '';
+    (op.lines || []).forEach(addOperationLine);
+    if (!(op.lines || []).length) addOperationLine();
+  } else {
+    operationModalTitle.textContent = 'Nowa operacja';
+    if (!isAdj) {
+      operationFrom.value = resolveDefaultLocId(cfg.defaultFrom);
+      operationTo.value = resolveDefaultLocId(cfg.defaultTo);
+    }
+    operationContact.value = '';
+    operationScheduled.value = '';
+    operationSource.value = '';
+    operationNote.value = '';
+    addOperationLine();
+  }
+
+  const isAdmin = currentUser?.role === 'admin';
+  const locked = currentOperation.state === 'done' || currentOperation.state === 'cancelled';
+  const editable = isAdmin && !locked;
+
+  [operationFrom, operationTo, operationContact, operationScheduled, operationSource, operationNote]
+    .forEach(el => { el.disabled = !editable; });
+  operationAddLineBtn.hidden = !editable;
+  operationLines.querySelectorAll('.op-line').forEach(row => {
+    row.querySelectorAll('select, input').forEach(el => { el.disabled = !editable; });
+    const rm = row.querySelector('.op-line-remove');
+    if (rm) rm.style.display = editable ? '' : 'none';
+  });
+  operationSaveBtn.hidden = !editable;
+  operationValidateBtn.hidden = !editable;
+  operationCancelOpBtn.hidden = !(editable && id);
+
+  operationStateHint.hidden = !locked;
+  if (currentOperation.state === 'done') operationStateHint.textContent = 'Operacja wykonana — wygenerowała ruchy w rejestrze.';
+  if (currentOperation.state === 'cancelled') operationStateHint.textContent = 'Operacja anulowana.';
+
+  if (!operationModal.open) operationModal.showModal();
+}
+
+function closeOperationModal() {
+  if (operationModal.open) operationModal.close();
+  currentOperation = null;
+}
+
+function collectOperationPayload() {
+  const isAdj = warehouseOpType === 'adjustment';
+  const lines = [];
+  operationLines.querySelectorAll('.op-line').forEach(row => {
+    const itemCode = row.querySelector('.op-line-item')?.value;
+    if (!itemCode) return;
+    if (isAdj) {
+      lines.push({
+        itemCode,
+        locationId: row.querySelector('.op-line-loc')?.value || null,
+        countedQty: Number(row.querySelector('.op-line-counted')?.value) || 0
+      });
+    } else {
+      lines.push({ itemCode, quantity: Number(row.querySelector('.op-line-qty')?.value) || 1 });
+    }
+  });
+  const payload = {
+    type: warehouseOpType,
+    contact: operationContact.value.trim(),
+    scheduledAt: operationScheduled.value || null,
+    sourceDocument: operationSource.value.trim(),
+    note: operationNote.value.trim(),
+    lines
+  };
+  if (!isAdj) {
+    payload.fromLocationId = operationFrom.value || null;
+    payload.toLocationId = operationTo.value || null;
+  } else {
+    payload.toLocationId = lines[0]?.locationId || resolveDefaultLocId('WH/Stock');
+  }
+  return payload;
+}
+
+async function saveOperation() {
+  const payload = collectOperationPayload();
+  if (!payload.lines.length) throw new Error('Dodaj przynajmniej jedną pozycję');
+  if (currentOperation?.id) {
+    await api(`/warehouse/operations/${encodeURIComponent(currentOperation.id)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) });
+    return currentOperation.id;
+  }
+  const res = await api('/warehouse/operations', { method: 'POST', body: JSON.stringify(payload) });
+  currentOperation.id = res.id;
+  return res.id;
+}
+
+async function refreshWarehouseHeader() {
+  warehouseLocationsCache = null;
+  const locations = await fetchWarehouseLocations(true);
+  renderWarehouseSummary(locations);
+  populateLocationFilter(locations);
+}
+
+// --- Produkty (kartoteka ze stanem łącznym) ---
+async function loadWarehouseProducts() {
+  const rows = await api('/warehouse/stock');
+  const byCode = new Map();
+  for (const r of rows) {
+    const e = byCode.get(r.itemCode) || { itemCode: r.itemCode, name: r.name, category: r.category, total: 0 };
+    e.total += r.quantity;
+    byCode.set(r.itemCode, e);
+  }
+  warehouseProductsState = [...byCode.values()].sort((a, b) => a.itemCode.localeCompare(b.itemCode));
+  applyProductsFilter();
+}
+
+function applyProductsFilter() {
+  const q = normalizeText(whProductsSearch?.value || '');
+  let rows = warehouseProductsState;
+  if (q) rows = rows.filter(r =>
+    normalizeText(r.itemCode).includes(q) || normalizeText(r.name).includes(q) || normalizeText(r.category).includes(q));
+  if (!rows.length) { renderEmpty(whProductsContent, 'Brak sprzętu.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Na stanie (łącznie)</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = rows.map(r =>
+    `<tr><td>${escapeHtml(r.itemCode)}</td><td>${escapeHtml(r.name || '—')}</td><td>${escapeHtml(r.category || '—')}</td><td>${escapeHtml(r.total)}</td></tr>`).join('');
+  table.appendChild(tbody);
+  whProductsContent.innerHTML = '';
+  whProductsContent.appendChild(table);
+}
+
+// --- Raportowanie (Stan / Historia ruchów) ---
+async function switchReportView(view) {
+  warehouseReportView = view;
+  document.querySelectorAll('#whReportNav .subtab').forEach(b =>
+    b.classList.toggle('active', b.dataset.whreport === view));
+  if (whReportStock) whReportStock.hidden = view !== 'stock';
+  if (whReportMoves) whReportMoves.hidden = view !== 'moves';
   if (view === 'stock') await loadWarehouseStock();
-  else if (view === 'locations') renderWarehouseLocations(await fetchWarehouseLocations());
   else if (view === 'moves') await loadWarehouseMoves();
 }
 
@@ -2532,34 +2869,6 @@ function renderWarehouseStock(rows) {
   warehouseStockContent.appendChild(table);
 }
 
-function renderWarehouseLocations(locations) {
-  const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
-  if (!tree.length) { renderEmpty(warehouseLocationsContent, 'Brak lokalizacji.'); return; }
-  const table = document.createElement('table');
-  table.innerHTML = `
-    <thead><tr>
-      <th>Lokalizacja</th><th>Kod</th><th>Typ</th><th>Na stanie</th>
-    </tr></thead>`;
-  const tbody = document.createElement('tbody');
-  tbody.innerHTML = tree.map(l => {
-    const indent = '&nbsp;'.repeat((l.depth || 0) * 3);
-    const isGroup = l.kind === 'view';
-    const nameCell = isGroup
-      ? `${indent}<strong>${escapeHtml(l.name)}</strong>`
-      : `${indent}${escapeHtml(l.name)}`;
-    return `
-      <tr>
-        <td>${nameCell}</td>
-        <td class="muted">${escapeHtml(l.code || '—')}</td>
-        <td>${escapeHtml(WAREHOUSE_KIND_LABELS[l.kind] || l.kind || '—')}</td>
-        <td>${isGroup ? '<span class="muted">—</span>' : escapeHtml(l.onHand || 0)}</td>
-      </tr>`;
-  }).join('');
-  table.appendChild(tbody);
-  warehouseLocationsContent.innerHTML = '';
-  warehouseLocationsContent.appendChild(table);
-}
-
 async function loadWarehouseMoves() {
   const moves = await api('/warehouse/moves?limit=200');
   renderWarehouseMoves(moves);
@@ -2588,19 +2897,93 @@ function renderWarehouseMoves(moves) {
   warehouseMovesContent.appendChild(table);
 }
 
-// Pod-zakładki Magazynu: Stan / Lokalizacje / Historia ruchów.
-document.querySelectorAll('#warehouseSubtabs .subtab').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    try { await switchWarehouseView(btn.dataset.whview); }
+// --- Konfiguracja (lokalizacje) ---
+function renderWarehouseLocations(locations) {
+  const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
+  if (!tree.length) { renderEmpty(warehouseLocationsContent, 'Brak lokalizacji.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Lokalizacja</th><th>Kod</th><th>Typ</th><th>Na stanie</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = tree.map(l => {
+    const indent = '&nbsp;'.repeat((l.depth || 0) * 3);
+    const isGroup = l.kind === 'view';
+    const nameCell = isGroup
+      ? `${indent}<strong>${escapeHtml(l.name)}</strong>`
+      : `${indent}${escapeHtml(l.name)}`;
+    return `
+      <tr>
+        <td>${nameCell}</td>
+        <td class="muted">${escapeHtml(l.code || '—')}</td>
+        <td>${escapeHtml(WAREHOUSE_KIND_LABELS[l.kind] || l.kind || '—')}</td>
+        <td>${isGroup ? '<span class="muted">—</span>' : escapeHtml(l.onHand || 0)}</td>
+      </tr>`;
+  }).join('');
+  table.appendChild(tbody);
+  warehouseLocationsContent.innerHTML = '';
+  warehouseLocationsContent.appendChild(table);
+}
+
+// --- Listenery modułu Magazyn ---
+document.querySelectorAll('#warehouseMenu .subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchWarehouseMenu(btn.dataset.whmenu).catch(err => showToast(err.message)));
+});
+document.querySelectorAll('#whReportNav .subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchReportView(btn.dataset.whreport).catch(err => showToast(err.message)));
+});
+if (whOpTypeNav) {
+  whOpTypeNav.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-whoptype]');
+    if (btn) openOperations(btn.dataset.whoptype).catch(err => showToast(err.message));
+  });
+}
+if (whOverviewContent) {
+  whOverviewContent.addEventListener('click', (e) => {
+    const card = e.target.closest('[data-whgo]');
+    if (!card) return;
+    warehouseOpType = card.dataset.whgo;
+    switchWarehouseMenu('operations').catch(err => showToast(err.message));
+  });
+}
+if (whNewOperationBtn) {
+  whNewOperationBtn.addEventListener('click', () => openOperationModal(warehouseOpType, null).catch(err => showToast(err.message)));
+}
+if (whProductsSearch) whProductsSearch.addEventListener('input', applyProductsFilter);
+if (warehouseSearchInput) warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);
+if (warehouseLocationFilter) warehouseLocationFilter.addEventListener('change', applyWarehouseStockFilter);
+
+if (operationAddLineBtn) operationAddLineBtn.addEventListener('click', () => addOperationLine());
+[operationCloseBtn2, closeOperationBtn].forEach(b => b && b.addEventListener('click', closeOperationModal));
+if (operationSaveBtn) {
+  operationSaveBtn.addEventListener('click', async () => {
+    try { await saveOperation(); showToast('Zapisano wersję roboczą'); closeOperationModal(); await loadOperationsList(warehouseOpType); }
     catch (err) { showToast(err.message); }
   });
-});
-
-if (warehouseSearchInput) {
-  warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);
 }
-if (warehouseLocationFilter) {
-  warehouseLocationFilter.addEventListener('change', applyWarehouseStockFilter);
+if (operationValidateBtn) {
+  operationValidateBtn.addEventListener('click', async () => {
+    try {
+      const id = await saveOperation();
+      const res = await api(`/warehouse/operations/${encodeURIComponent(id)}/validate`, { method: 'POST' });
+      showToast(res.message || 'Wykonano');
+      closeOperationModal();
+      await loadOperationsList(warehouseOpType);
+      await refreshWarehouseHeader();
+    } catch (err) { showToast(err.message); }
+  });
+}
+if (operationCancelOpBtn) {
+  operationCancelOpBtn.addEventListener('click', async () => {
+    if (!currentOperation?.id) return;
+    try {
+      await api(`/warehouse/operations/${encodeURIComponent(currentOperation.id)}/cancel`, { method: 'POST' });
+      showToast('Anulowano operację');
+      closeOperationModal();
+      await loadOperationsList(warehouseOpType);
+    } catch (err) { showToast(err.message); }
+  });
 }
 
 document.addEventListener('click', async (e) => {

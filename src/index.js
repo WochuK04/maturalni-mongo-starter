@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, nextReference, isOperationType } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -446,6 +446,231 @@ app.get('/warehouse/moves', requireAuth, requireWarehouseRead, async (req, res) 
       doneAt: m.doneAt || m.createdAt || null
     };
   }));
+});
+
+// ----- Operacje magazynowe (dokumenty: Przekazy + Korekty) -----
+
+const OPERATION_LOC_KINDS = [
+  LOCATION_KINDS.INTERNAL, LOCATION_KINDS.EMPLOYEE,
+  LOCATION_KINDS.SUPPLIER, LOCATION_KINDS.SCRAP, LOCATION_KINDS.INVENTORY, LOCATION_KINDS.TRANSIT
+];
+
+function normalizeOperationLines(type, rawLines) {
+  const lines = Array.isArray(rawLines) ? rawLines : [];
+  return lines
+    .map(l => {
+      const itemCode = normalizeItemCode(l.itemCode || '');
+      if (!itemCode) return null;
+      if (type === 'adjustment') {
+        return {
+          itemCode,
+          locationId: l.locationId ? String(l.locationId) : null,
+          countedQty: Math.max(0, Number(l.countedQty) || 0),
+          lot: l.lot ? String(l.lot) : null
+        };
+      }
+      return { itemCode, quantity: Math.max(1, Number(l.quantity) || 1), lot: l.lot ? String(l.lot) : null };
+    })
+    .filter(Boolean);
+}
+
+// Akceptuje id lokalizacji albo jej kod (np. 'WH/Stock'); zwraca string id albo null.
+async function resolveLocationId(db, idOrCode) {
+  if (!idOrCode) return null;
+  const s = String(idOrCode);
+  try {
+    const byId = await db.collection(collections.locations).findOne({ _id: new ObjectId(s) });
+    if (byId) return String(byId._id);
+  } catch { /* nie ObjectId — próbujemy po code */ }
+  const byCode = await db.collection(collections.locations).findOne({ code: s });
+  return byCode ? String(byCode._id) : null;
+}
+
+// Dane do formularza operacji: lokalizacje (z wirtualnymi), sprzęt, definicje typów.
+app.get('/warehouse/form-data', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const locations = await db.collection(collections.locations)
+    .find({ isActive: { $ne: false }, kind: { $in: OPERATION_LOC_KINDS } })
+    .sort({ code: 1 }).toArray();
+  const items = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1 } })
+    .sort({ itemCode: 1 }).toArray();
+  res.json({
+    locations: locations.map(l => ({ id: String(l._id), code: l.code, name: l.name, kind: l.kind })),
+    items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '' })),
+    types: OPERATION_TYPES
+  });
+});
+
+// Dashboard „Przegląd": liczniki dokumentów per typ i stan.
+app.get('/warehouse/overview', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const agg = await db.collection(collections.stockOperations).aggregate([
+    { $group: { _id: { type: '$type', state: '$state' }, n: { $sum: 1 } } }
+  ]).toArray();
+  const counts = {};
+  for (const row of agg) {
+    const t = row._id.type;
+    const s = row._id.state || 'draft';
+    counts[t] = counts[t] || { draft: 0, ready: 0, done: 0, cancelled: 0, total: 0 };
+    counts[t][s] = (counts[t][s] || 0) + row.n;
+    counts[t].total += row.n;
+  }
+  const types = Object.entries(OPERATION_TYPES).map(([type, cfg]) => ({
+    type, label: cfg.label, group: cfg.group,
+    ...(counts[type] || { draft: 0, ready: 0, done: 0, cancelled: 0, total: 0 })
+  }));
+  res.json({ types });
+});
+
+// Lista operacji danego typu (z nazwami lokalizacji). Filtr: ?type=&state=.
+app.get('/warehouse/operations', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+  const filter = {};
+  if (req.query.type && isOperationType(req.query.type)) filter.type = req.query.type;
+  if (req.query.state) filter.state = String(req.query.state);
+
+  const ops = await db.collection(collections.stockOperations)
+    .find(filter).sort({ createdAt: -1 }).limit(500).toArray();
+
+  const locations = await db.collection(collections.locations).find({}).toArray();
+  const locById = new Map(locations.map(l => [String(l._id), l]));
+
+  res.json(ops.map(op => ({
+    id: String(op._id),
+    reference: op.reference,
+    type: op.type,
+    typeLabel: OPERATION_TYPES[op.type]?.label || op.type,
+    state: op.state,
+    fromName: op.fromLocationId ? (locById.get(String(op.fromLocationId))?.name || null) : null,
+    toName: op.toLocationId ? (locById.get(String(op.toLocationId))?.name || null) : null,
+    contact: op.contact || '',
+    scheduledAt: op.scheduledAt || null,
+    sourceDocument: op.sourceDocument || '',
+    lineCount: Array.isArray(op.lines) ? op.lines.length : 0,
+    createdAt: op.createdAt || null
+  })));
+});
+
+// Szczegół operacji z pozycjami.
+app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+  let op;
+  try { op = await db.collection(collections.stockOperations).findOne({ _id: new ObjectId(req.params.id) }); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  if (!op) return res.status(404).json({ message: 'Operacja nie istnieje' });
+
+  const locations = await db.collection(collections.locations).find({}).toArray();
+  const locById = new Map(locations.map(l => [String(l._id), l]));
+  const codes = (op.lines || []).map(l => l.itemCode);
+  const items = codes.length
+    ? await db.collection(collections.items).find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, name: 1 } }).toArray()
+    : [];
+  const nameByCode = new Map(items.map(i => [i.itemCode, i.name]));
+
+  res.json({
+    id: String(op._id),
+    reference: op.reference,
+    type: op.type,
+    typeLabel: OPERATION_TYPES[op.type]?.label || op.type,
+    state: op.state,
+    fromLocationId: op.fromLocationId ? String(op.fromLocationId) : null,
+    toLocationId: op.toLocationId ? String(op.toLocationId) : null,
+    fromName: op.fromLocationId ? (locById.get(String(op.fromLocationId))?.name || null) : null,
+    toName: op.toLocationId ? (locById.get(String(op.toLocationId))?.name || null) : null,
+    contact: op.contact || '',
+    scheduledAt: op.scheduledAt || null,
+    sourceDocument: op.sourceDocument || '',
+    note: op.note || '',
+    lines: (op.lines || []).map(l => ({
+      itemCode: l.itemCode,
+      itemName: nameByCode.get(l.itemCode) || '',
+      quantity: l.quantity ?? null,
+      countedQty: l.countedQty ?? null,
+      locationId: l.locationId ? String(l.locationId) : null,
+      lot: l.lot || null
+    })),
+    doneAt: op.doneAt || null,
+    createdAt: op.createdAt || null
+  });
+});
+
+app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { type } = req.body;
+  if (!isOperationType(type)) return res.status(400).json({ message: 'Nieprawidłowy typ operacji' });
+  const cfg = OPERATION_TYPES[type];
+
+  const now = new Date();
+  const doc = {
+    reference: await nextReference(db, cfg.prefix),
+    type,
+    state: 'draft',
+    fromLocationId: await resolveLocationId(db, req.body.fromLocationId || cfg.defaultFrom),
+    toLocationId: await resolveLocationId(db, req.body.toLocationId || cfg.defaultTo),
+    contact: String(req.body.contact || '').trim(),
+    scheduledAt: req.body.scheduledAt ? new Date(req.body.scheduledAt) : null,
+    sourceDocument: String(req.body.sourceDocument || '').trim(),
+    note: String(req.body.note || '').trim(),
+    lines: normalizeOperationLines(type, req.body.lines),
+    createdByEmail: req.user.email,
+    createdAt: now,
+    updatedAt: now
+  };
+  const { insertedId } = await db.collection(collections.stockOperations).insertOne(doc);
+  res.status(201).json({ id: String(insertedId), reference: doc.reference });
+});
+
+app.patch('/warehouse/operations/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let op;
+  try { op = await db.collection(collections.stockOperations).findOne({ _id: new ObjectId(req.params.id) }); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  if (!op) return res.status(404).json({ message: 'Operacja nie istnieje' });
+  if (op.state === 'done') return res.status(400).json({ message: 'Wykonanej operacji nie można edytować' });
+  if (op.state === 'cancelled') return res.status(400).json({ message: 'Anulowanej operacji nie można edytować' });
+
+  const update = { updatedAt: new Date() };
+  if (req.body.fromLocationId !== undefined) update.fromLocationId = await resolveLocationId(db, req.body.fromLocationId);
+  if (req.body.toLocationId !== undefined) update.toLocationId = await resolveLocationId(db, req.body.toLocationId);
+  if (req.body.contact !== undefined) update.contact = String(req.body.contact || '').trim();
+  if (req.body.scheduledAt !== undefined) update.scheduledAt = req.body.scheduledAt ? new Date(req.body.scheduledAt) : null;
+  if (req.body.sourceDocument !== undefined) update.sourceDocument = String(req.body.sourceDocument || '').trim();
+  if (req.body.note !== undefined) update.note = String(req.body.note || '').trim();
+  if (req.body.lines !== undefined) update.lines = normalizeOperationLines(op.type, req.body.lines);
+  if (req.body.state === 'ready' || req.body.state === 'draft') update.state = req.body.state;
+
+  await db.collection(collections.stockOperations).updateOne({ _id: op._id }, { $set: update });
+  res.json({ message: 'Zapisano' });
+});
+
+app.post('/warehouse/operations/:id/validate', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  try {
+    const result = await validateOperation(db, req.params.id, req.user.email);
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'warehouse_operation_done',
+      entityType: 'stockOperation',
+      entityId: req.params.id,
+      payload: result,
+      createdAt: new Date()
+    });
+    res.json({ message: `Wykonano ${result.reference}`, ...result });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+app.post('/warehouse/operations/:id/cancel', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let op;
+  try { op = await db.collection(collections.stockOperations).findOne({ _id: new ObjectId(req.params.id) }); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  if (!op) return res.status(404).json({ message: 'Operacja nie istnieje' });
+  if (op.state === 'done') return res.status(400).json({ message: 'Nie można anulować wykonanej operacji' });
+  await db.collection(collections.stockOperations).updateOne({ _id: op._id }, { $set: { state: 'cancelled', updatedAt: new Date() } });
+  res.json({ message: 'Anulowano' });
 });
 
 // Lista aktywnych użytkowników (tylko imię/e-mail) — do wyboru osoby przy

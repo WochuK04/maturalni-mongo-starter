@@ -244,7 +244,7 @@ export async function refreshItemCache(db, itemCode) {
   return update;
 }
 
-// Sekwencyjny numer dokumentu operacji (np. WH/IN/00001). Użyte w Fazie 2.
+// Sekwencyjny numer dokumentu operacji (np. mag/IN/00001).
 export async function nextReference(db, prefix) {
   const res = await db.collection(collections.counters).findOneAndUpdate(
     { _id: `ref:${prefix}` },
@@ -254,4 +254,131 @@ export async function nextReference(db, prefix) {
   const doc = res && res.value !== undefined ? res.value : res;
   const seq = doc && typeof doc.seq === 'number' ? doc.seq : 1;
   return `${prefix}/${String(seq).padStart(5, '0')}`;
+}
+
+// ===== Operacje magazynowe (Faza 2 – układ jak w Odoo) =====
+//
+// Każda operacja to dokument (`stockOperations`) z obiegiem stanów:
+//   draft (Wersja robocza) -> ready (Gotowe) -> done (Wykonano).
+// Zatwierdzenie (validateOperation) zamienia pozycje dokumentu na ruchy w rejestrze.
+//
+// Typy = grupy z menu „Operacje": Przekazy (receipt/delivery/internal),
+// Korekty (scrap/adjustment). Domyślne lokalizacje to kody z drzewa (STANDARD_LOCATIONS).
+export const OPERATION_TYPES = {
+  receipt:    { label: 'Przyjęcie',             group: 'Przekazy', prefix: 'mag/IN',    defaultFrom: 'VIRT/Suppliers', defaultTo: 'WH/Stock' },
+  delivery:   { label: 'Dostawa',               group: 'Przekazy', prefix: 'mag/OUT',   defaultFrom: 'WH/Stock',       defaultTo: 'WH/Employees' },
+  internal:   { label: 'Przesunięcie wewnętrzne', group: 'Przekazy', prefix: 'mag/INT', defaultFrom: 'WH/Stock',       defaultTo: 'WH/Studio' },
+  scrap:      { label: 'Odpad',                 group: 'Korekty',  prefix: 'mag/SCRAP', defaultFrom: 'WH/Stock',       defaultTo: 'VIRT/Scrap' },
+  adjustment: { label: 'Inwentarz fizyczny',    group: 'Korekty',  prefix: 'mag/ADJ',   defaultFrom: null,             defaultTo: 'WH/Stock' }
+};
+
+export function isOperationType(type) {
+  return Object.prototype.hasOwnProperty.call(OPERATION_TYPES, type);
+}
+
+// Stan danej sztuki na konkretnej lokalizacji (z materializowanych quantów).
+export async function onHandAt(db, itemCode, locationId, lot = null) {
+  const q = await db.collection(collections.quants).findOne({
+    itemCode: String(itemCode),
+    locationId: String(locationId),
+    lot: lot ?? null
+  });
+  return q ? q.quantity : 0;
+}
+
+async function locationByCode(db, code) {
+  return db.collection(collections.locations).findOne({ code });
+}
+
+// Zatwierdza operację: generuje ruchy z pozycji dokumentu i ustawia stan „done".
+// Dla inwentaryzacji liczy różnicę (policzone − stan systemowy) i koryguje przez
+// wirtualną lokalizację „Korekta stanu". Dla przekazów/odpadu sprawdza dostępność
+// na lokalizacji fizycznej, by nie zejść poniżej zera.
+export async function validateOperation(db, operationId, actorEmail) {
+  const ops = db.collection(collections.stockOperations);
+  const op = await ops.findOne({ _id: new ObjectId(String(operationId)) });
+  if (!op) throw new Error('Operacja nie istnieje');
+  if (op.state === 'done') throw new Error('Operacja jest już wykonana');
+  if (op.state === 'cancelled') throw new Error('Operacja anulowana — nie można zatwierdzić');
+
+  const lines = Array.isArray(op.lines) ? op.lines : [];
+  if (!lines.length) throw new Error('Operacja nie ma pozycji');
+
+  const now = new Date();
+  const affected = new Set();
+
+  if (op.type === 'adjustment') {
+    const inv = await locationByCode(db, 'VIRT/Inventory');
+    if (!inv) throw new Error('Brak wirtualnej lokalizacji korekty (VIRT/Inventory)');
+
+    for (const ln of lines) {
+      const itemCode = String(ln.itemCode || '').trim();
+      const locationId = String(ln.locationId || op.toLocationId || '');
+      if (!itemCode || !locationId) throw new Error('Pozycja inwentarza bez sprzętu/lokalizacji');
+      const lot = ln.lot != null && ln.lot !== '' ? String(ln.lot) : null;
+      const counted = Number(ln.countedQty);
+      if (!Number.isFinite(counted) || counted < 0) throw new Error(`Niepoprawny policzony stan dla ${itemCode}`);
+
+      const theoretical = await onHandAt(db, itemCode, locationId, lot);
+      const diff = counted - theoretical;
+      if (diff === 0) continue;
+
+      await applyMove(db, {
+        itemCode,
+        fromLocationId: diff > 0 ? String(inv._id) : locationId,
+        toLocationId: diff > 0 ? locationId : String(inv._id),
+        quantity: Math.abs(diff),
+        lot,
+        kind: 'adjustment',
+        operationId: String(op._id),
+        actorEmail,
+        note: op.reference,
+        doneAt: now
+      });
+      affected.add(itemCode);
+    }
+  } else {
+    const from = op.fromLocationId ? String(op.fromLocationId) : null;
+    const to = op.toLocationId ? String(op.toLocationId) : null;
+
+    // Kontrola dostępności, gdy źródłem jest lokalizacja fizyczna (nie dotyczy przyjęć).
+    if (from) {
+      const fromLoc = await db.collection(collections.locations).findOne({ _id: new ObjectId(from) });
+      if (fromLoc && isStockableKind(fromLoc.kind)) {
+        for (const ln of lines) {
+          const lot = ln.lot != null && ln.lot !== '' ? String(ln.lot) : null;
+          const avail = await onHandAt(db, ln.itemCode, from, lot);
+          if (Number(ln.quantity) > avail) {
+            throw new Error(`Za mało na stanie: ${ln.itemCode} (dostępne ${avail}, żądane ${ln.quantity})`);
+          }
+        }
+      }
+    }
+
+    for (const ln of lines) {
+      const qty = Number(ln.quantity);
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error(`Niepoprawna ilość dla ${ln.itemCode}`);
+      await applyMove(db, {
+        itemCode: ln.itemCode,
+        fromLocationId: from,
+        toLocationId: to,
+        quantity: qty,
+        lot: ln.lot != null && ln.lot !== '' ? String(ln.lot) : null,
+        kind: op.type,
+        operationId: String(op._id),
+        actorEmail,
+        note: op.reference,
+        doneAt: now
+      });
+      affected.add(ln.itemCode);
+    }
+  }
+
+  await ops.updateOne(
+    { _id: op._id },
+    { $set: { state: 'done', doneAt: now, doneByEmail: actorEmail, updatedAt: now } }
+  );
+  for (const code of affected) await refreshItemCache(db, code);
+
+  return { reference: op.reference, affected: [...affected] };
 }
