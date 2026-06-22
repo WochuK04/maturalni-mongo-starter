@@ -15,6 +15,7 @@ export const collections = {
   stockOperations: 'stockOperations',
   lots: 'lots',
   inventoryAdjustments: 'inventoryAdjustments',
+  reorderRules: 'reorderRules',
   counters: 'counters'
 };
 
@@ -134,5 +135,13 @@ export async function ensureIndexes(db) {
   // Inwentaryzacje (spis z natury) – Faza 3.
   await db.collection(collections.inventoryAdjustments).createIndexes([
     { key: { state: 1, createdAt: -1 }, name: 'idx_inv_adj_state' }
+  ]);
+
+  // Reguły uzupełniania zapasów (min-max / orderpoint) – „Zapotrzebowanie".
+  // `scope` = 'category' | 'item'; `target` = nazwa kategorii albo itemCode.
+  // Jedna reguła na cel (unikalność po scope+target).
+  await db.collection(collections.reorderRules).createIndexes([
+    { key: { scope: 1, target: 1 }, unique: true, name: 'uniq_reorder_scope_target' },
+    { key: { isActive: 1 }, name: 'idx_reorder_active' }
   ]);
 }
