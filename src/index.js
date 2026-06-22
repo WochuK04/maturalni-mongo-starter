@@ -9,7 +9,8 @@ import { ObjectId } from 'mongodb';
 
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
-import { setupPassport, requireAuth, requireAdmin, requireManager } from './auth.js';
+import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
+import { LOCATION_KINDS } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -286,14 +287,165 @@ app.get('/items/available', requireAuth, async (_req, res) => {
 app.get('/locations', requireAuth, async (_req, res) => {
   const db = await getDb();
 
+  // Wykluczamy węzły grupujące (view) i wirtualne (korekta/złom/dostawcy/tranzyt) –
+  // do list rozwijanych (np. miejsce zwrotu) pasują tylko lokalizacje fizyczne.
+  // Stare dokumenty bez pola `kind` przechodzą ($nin obejmuje brak pola).
   const locationDocs = await db.collection(collections.locations)
-    .find({ isActive: { $ne: false } })
+    .find({
+      isActive: { $ne: false },
+      kind: { $nin: [LOCATION_KINDS.VIEW, LOCATION_KINDS.INVENTORY, LOCATION_KINDS.SCRAP, LOCATION_KINDS.SUPPLIER, LOCATION_KINDS.TRANSIT] }
+    })
     .sort({ name: 1 })
     .toArray();
 
   const locationNames = locationDocs.map(loc => loc.name).filter(Boolean);
 
   res.json([...new Set([...locationNames, ...FALLBACK_LOCATIONS])]);
+});
+
+// ===== Magazyn „w stylu Odoo" – endpointy odczytu (Faza 1) =====
+// Wszystkie pod `requireWarehouseRead` (viewer/manager/admin). Tylko odczyt.
+
+const PHYSICAL_KINDS = [LOCATION_KINDS.INTERNAL, LOCATION_KINDS.EMPLOYEE];
+const TREE_KINDS = [LOCATION_KINDS.VIEW, LOCATION_KINDS.INTERNAL, LOCATION_KINDS.EMPLOYEE];
+
+// Drzewo lokalizacji (fizyczne + węzły grupujące) ze stanem na każdej z nich.
+app.get('/warehouse/locations', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+
+  const locations = await db.collection(collections.locations)
+    .find({ isActive: { $ne: false }, kind: { $in: TREE_KINDS } })
+    .sort({ code: 1, name: 1 })
+    .toArray();
+
+  const onHand = await db.collection(collections.quants).aggregate([
+    { $group: { _id: '$locationId', qty: { $sum: '$quantity' }, lines: { $sum: 1 } } }
+  ]).toArray();
+  const byLoc = new Map(onHand.map(r => [r._id, r]));
+
+  res.json(locations.map(l => {
+    const agg = byLoc.get(String(l._id));
+    return {
+      id: String(l._id),
+      code: l.code || null,
+      name: l.name,
+      kind: l.kind || null,
+      parentId: l.parentId || null,
+      depth: Array.isArray(l.ancestors) ? l.ancestors.length : 0,
+      onHand: agg?.qty || 0,
+      lines: agg?.lines || 0
+    };
+  }));
+});
+
+// Stan magazynowy: pozycje na lokalizacjach fizycznych, z danymi sprzętu.
+// Opcjonalne filtry: ?location=<id|code|name>&q=<szukaj>.
+app.get('/warehouse/stock', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+
+  const physical = await db.collection(collections.locations)
+    .find({ isActive: { $ne: false }, kind: { $in: PHYSICAL_KINDS } })
+    .toArray();
+  const locById = new Map(physical.map(l => [String(l._id), l]));
+
+  // Filtr lokalizacji po id / code / name.
+  const locFilter = String(req.query.location || '').trim();
+  let allowedLocIds = physical.map(l => String(l._id));
+  if (locFilter) {
+    const match = physical.find(l =>
+      String(l._id) === locFilter || l.code === locFilter || l.name === locFilter);
+    allowedLocIds = match ? [String(match._id)] : [];
+  }
+
+  const quants = allowedLocIds.length
+    ? await db.collection(collections.quants)
+        .find({ locationId: { $in: allowedLocIds }, quantity: { $gt: 0 } })
+        .toArray()
+    : [];
+
+  const itemCodes = [...new Set(quants.map(q => q.itemCode))];
+  const items = itemCodes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: itemCodes } },
+          { projection: { itemCode: 1, name: 1, category: 1, conditionStatus: 1 } })
+        .toArray()
+    : [];
+  const itemByCode = new Map(items.map(it => [it.itemCode, it]));
+
+  const q = String(req.query.q || '').trim().toLowerCase();
+  let rows = quants.map(quant => {
+    const it = itemByCode.get(quant.itemCode) || {};
+    const loc = locById.get(quant.locationId) || {};
+    return {
+      itemCode: quant.itemCode,
+      name: it.name || '',
+      category: it.category || '',
+      conditionStatus: it.conditionStatus || '',
+      locationId: quant.locationId,
+      locationName: loc.name || '',
+      locationCode: loc.code || '',
+      lot: quant.lot || null,
+      quantity: quant.quantity
+    };
+  });
+
+  if (q) {
+    rows = rows.filter(r =>
+      r.itemCode.toLowerCase().includes(q) ||
+      r.name.toLowerCase().includes(q) ||
+      r.category.toLowerCase().includes(q));
+  }
+
+  rows.sort((a, b) =>
+    a.itemCode.localeCompare(b.itemCode) || a.locationName.localeCompare(b.locationName));
+
+  res.json(rows);
+});
+
+// Historia ruchów (rejestr). Opcjonalne: ?itemCode=&limit=.
+app.get('/warehouse/moves', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+
+  const filter = {};
+  const itemCode = normalizeItemCode(req.query.itemCode || '');
+  if (itemCode) filter.itemCode = itemCode;
+
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+
+  const moves = await db.collection(collections.stockMoves)
+    .find(filter)
+    .sort({ doneAt: -1, _id: -1 })
+    .limit(limit)
+    .toArray();
+
+  const locations = await db.collection(collections.locations).find({}).toArray();
+  const locById = new Map(locations.map(l => [String(l._id), l]));
+
+  const itemCodes = [...new Set(moves.map(m => m.itemCode))];
+  const items = itemCodes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: itemCodes } }, { projection: { itemCode: 1, name: 1 } })
+        .toArray()
+    : [];
+  const itemByCode = new Map(items.map(it => [it.itemCode, it.name]));
+
+  res.json(moves.map(m => {
+    const from = m.fromLocationId ? locById.get(m.fromLocationId) : null;
+    const to = m.toLocationId ? locById.get(m.toLocationId) : null;
+    return {
+      id: String(m._id),
+      itemCode: m.itemCode,
+      itemName: itemByCode.get(m.itemCode) || '',
+      fromName: from?.name || null,
+      toName: to?.name || null,
+      quantity: m.quantity,
+      lot: m.lot || null,
+      kind: m.kind || 'internal',
+      actorEmail: m.actorEmail || null,
+      note: m.note || '',
+      doneAt: m.doneAt || m.createdAt || null
+    };
+  }));
 });
 
 // Lista aktywnych użytkowników (tylko imię/e-mail) — do wyboru osoby przy
@@ -1427,7 +1579,7 @@ app.patch('/admin/users/:email', requireAuth, requireAdmin, async (req, res) => 
   const update = { updatedAt: new Date() };
 
   if (role !== undefined) {
-    if (!['user', 'manager', 'admin'].includes(role)) {
+    if (!['user', 'manager', 'admin', 'viewer'].includes(role)) {
       return res.status(400).json({ message: 'Nieprawidłowa rola' });
     }
     if (email === req.user.email && role !== 'admin') {

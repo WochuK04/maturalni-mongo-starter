@@ -50,6 +50,9 @@
         <button class="view-tab" data-view="users" type="button" id="usersViewTab" hidden>
           Użytkownicy
         </button>
+        <button class="view-tab" data-view="warehouse" type="button" id="warehouseViewTab" hidden>
+          Magazyn
+        </button>
         <button class="view-tab" data-view="admin" type="button" id="adminViewTab" hidden>
           Panel admina
         </button>
@@ -315,6 +318,46 @@
         </form>
 
         <div id="adminContent" class="admin-content"></div>
+      </section>
+    </section>
+
+    <section class="view-panel" id="warehousePanel" data-panel="warehouse" hidden>
+      <section class="card card-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Magazyn</p>
+            <h2>Magazyn (w stylu Odoo)</h2>
+            <p class="muted" id="warehouseSummary">Ładowanie…</p>
+          </div>
+          <button id="loadWarehouseBtn" class="btn btn-secondary" type="button">Odśwież</button>
+        </div>
+
+        <div class="subtabs" id="warehouseSubtabs" role="tablist">
+          <button class="subtab active" data-whview="stock" type="button">Stan</button>
+          <button class="subtab" data-whview="locations" type="button">Lokalizacje</button>
+          <button class="subtab" data-whview="moves" type="button">Historia ruchów</button>
+        </div>
+
+        <div id="warehouseStockView">
+          <div class="toolbar">
+            <input
+              id="warehouseSearchInput"
+              class="search-input"
+              type="search"
+              placeholder="Szukaj po nazwie, kodzie, kategorii…"
+            />
+            <select id="warehouseLocationFilter" class="search-input" aria-label="Filtruj po lokalizacji"></select>
+          </div>
+          <div id="warehouseStockContent" class="admin-content"></div>
+        </div>
+
+        <div id="warehouseLocationsView" hidden>
+          <div id="warehouseLocationsContent" class="admin-content"></div>
+        </div>
+
+        <div id="warehouseMovesView" hidden>
+          <div id="warehouseMovesContent" class="admin-content"></div>
+        </div>
       </section>
     </section>
     </main>
