@@ -326,37 +326,69 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Magazyn</p>
-            <h2>Magazyn (w stylu Odoo)</h2>
+            <h2>Magazyn</h2>
             <p class="muted" id="warehouseSummary">Ładowanie…</p>
           </div>
           <button id="loadWarehouseBtn" class="btn btn-secondary" type="button">Odśwież</button>
         </div>
 
-        <div class="subtabs" id="warehouseSubtabs" role="tablist">
-          <button class="subtab active" data-whview="stock" type="button">Stan</button>
-          <button class="subtab" data-whview="locations" type="button">Lokalizacje</button>
-          <button class="subtab" data-whview="moves" type="button">Historia ruchów</button>
+        <!-- Górne menu modułu (układ jak w Odoo Inventory) -->
+        <div class="subtabs" id="warehouseMenu" role="tablist">
+          <button class="subtab active" data-whmenu="overview" type="button">Przegląd</button>
+          <button class="subtab" data-whmenu="operations" type="button">Operacje</button>
+          <button class="subtab" data-whmenu="products" type="button">Produkty</button>
+          <button class="subtab" data-whmenu="reporting" type="button">Raportowanie</button>
+          <button class="subtab" data-whmenu="config" type="button">Konfiguracja</button>
         </div>
 
-        <div id="warehouseStockView">
-          <div class="toolbar">
-            <input
-              id="warehouseSearchInput"
-              class="search-input"
-              type="search"
-              placeholder="Szukaj po nazwie, kodzie, kategorii…"
-            />
-            <select id="warehouseLocationFilter" class="search-input" aria-label="Filtruj po lokalizacji"></select>
+        <!-- Przegląd: kafelki per typ operacji -->
+        <div id="whOverviewView">
+          <div id="whOverviewContent" class="warehouse-dashboard admin-content"></div>
+        </div>
+
+        <!-- Operacje: pod-nawigacja typów + lista dokumentów -->
+        <div id="whOperationsView" hidden>
+          <div class="subtabs" id="whOpTypeNav" role="tablist"></div>
+          <div class="admin-toolbar">
+            <button id="whNewOperationBtn" class="btn btn-primary" type="button">+ Nowa operacja</button>
           </div>
-          <div id="warehouseStockContent" class="admin-content"></div>
+          <div id="whOperationsContent" class="admin-content"></div>
         </div>
 
-        <div id="warehouseLocationsView" hidden>
+        <!-- Produkty: kartoteka sprzętu ze stanem łącznym -->
+        <div id="whProductsView" hidden>
+          <div class="toolbar">
+            <input id="whProductsSearch" class="search-input" type="search" placeholder="Szukaj sprzętu…" />
+          </div>
+          <div id="whProductsContent" class="admin-content"></div>
+        </div>
+
+        <!-- Raportowanie: Stan + Historia ruchów (z Fazy 1) -->
+        <div id="whReportingView" hidden>
+          <div class="subtabs" id="whReportNav" role="tablist">
+            <button class="subtab active" data-whreport="stock" type="button">Stan</button>
+            <button class="subtab" data-whreport="moves" type="button">Historia ruchów</button>
+          </div>
+          <div id="whReportStock">
+            <div class="toolbar">
+              <input
+                id="warehouseSearchInput"
+                class="search-input"
+                type="search"
+                placeholder="Szukaj po nazwie, kodzie, kategorii…"
+              />
+              <select id="warehouseLocationFilter" class="search-input" aria-label="Filtruj po lokalizacji"></select>
+            </div>
+            <div id="warehouseStockContent" class="admin-content"></div>
+          </div>
+          <div id="whReportMoves" hidden>
+            <div id="warehouseMovesContent" class="admin-content"></div>
+          </div>
+        </div>
+
+        <!-- Konfiguracja: lokalizacje (z Fazy 1) -->
+        <div id="whConfigView" hidden>
           <div id="warehouseLocationsContent" class="admin-content"></div>
-        </div>
-
-        <div id="warehouseMovesView" hidden>
-          <div id="warehouseMovesContent" class="admin-content"></div>
         </div>
       </section>
     </section>
@@ -771,6 +803,63 @@
         <button type="button" class="btn btn-secondary" id="cancelImportBtn">Zamknij</button>
       </div>
     </div>
+  </dialog>
+
+  <dialog id="operationModal" class="form-modal">
+    <form id="operationForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow" id="operationModalType">Operacja</p>
+          <h3 id="operationModalTitle">Nowa operacja</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeOperationBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <div class="modal-form-grid">
+        <label class="field" id="operationFromField">
+          <span>Z lokalizacji</span>
+          <select id="operationFrom"></select>
+        </label>
+        <label class="field" id="operationToField">
+          <span>Do lokalizacji</span>
+          <select id="operationTo"></select>
+        </label>
+        <label class="field">
+          <span>Kontakt</span>
+          <input id="operationContact" placeholder="np. dostawca / pracownik" />
+        </label>
+        <label class="field">
+          <span>Zaplanowana data</span>
+          <input id="operationScheduled" type="date" />
+        </label>
+        <label class="field field-wide">
+          <span>Dokument źródłowy</span>
+          <input id="operationSource" placeholder="np. nr faktury / zamówienia" />
+        </label>
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <input id="operationNote" placeholder="Opcjonalnie" />
+        </label>
+      </div>
+
+      <div class="operation-lines">
+        <div class="section-head">
+          <h4 style="margin:0;">Pozycje</h4>
+          <button type="button" class="btn btn-secondary" id="operationAddLineBtn">+ Pozycja</button>
+        </div>
+        <div id="operationLinesHead" class="op-line op-line-head"></div>
+        <div id="operationLines"></div>
+      </div>
+
+      <p class="modal-form-hint muted" id="operationStateHint" hidden></p>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-secondary" id="operationSaveBtn">Zapisz wersję roboczą</button>
+        <button type="button" class="btn btn-primary" id="operationValidateBtn">Zatwierdź (Wykonaj)</button>
+        <button type="button" class="btn btn-danger" id="operationCancelOpBtn" hidden>Anuluj operację</button>
+        <button type="button" class="btn btn-secondary" id="operationCloseBtn2">Zamknij</button>
+      </div>
+    </form>
   </dialog>
 
   <template id="availableItemTemplate">
