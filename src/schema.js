@@ -6,7 +6,16 @@ export const collections = {
   auditLogs: 'auditLogs',
   locations: 'locations',
   comments: 'comments',
-  notifications: 'notifications'
+  notifications: 'notifications',
+
+  // Magazyn „w stylu Odoo" (Faza 0 – fundament: stan = suma ruchów).
+  warehouses: 'warehouses',
+  stockMoves: 'stockMoves',
+  quants: 'quants',
+  stockOperations: 'stockOperations',
+  lots: 'lots',
+  inventoryAdjustments: 'inventoryAdjustments',
+  counters: 'counters'
 };
 
 export const itemShape = {
@@ -69,7 +78,12 @@ export async function ensureIndexes(db) {
   ]);
 
   await db.collection(collections.locations).createIndexes([
-    { key: { name: 1 }, unique: true, name: 'uniq_location_name' }
+    { key: { name: 1 }, unique: true, name: 'uniq_location_name' },
+    // Hierarchia „w stylu Odoo": kod ścieżki (WH/Stock/PolkaA), rodzic, przodkowie.
+    { key: { code: 1 }, unique: true, sparse: true, name: 'uniq_location_code' },
+    { key: { parentId: 1 }, name: 'idx_location_parent' },
+    { key: { ancestors: 1 }, name: 'idx_location_ancestors' },
+    { key: { kind: 1, isActive: 1 }, name: 'idx_location_kind_active' }
   ]);
 
   // Komentarze do wniosku (Pakiet C – wątek dyskusji wnioskodawca/decydent).
@@ -81,5 +95,44 @@ export async function ensureIndexes(db) {
   // + ślad o transferach). status: 'open' | 'resolved'.
   await db.collection(collections.notifications).createIndexes([
     { key: { status: 1, createdAt: -1 }, name: 'idx_notifications_status' }
+  ]);
+
+  // === Magazyn „w stylu Odoo" ===
+
+  // Magazyny (grupują lokalizacje; zwykle jeden, ale model dopuszcza wiele).
+  await db.collection(collections.warehouses).createIndexes([
+    { key: { code: 1 }, unique: true, name: 'uniq_warehouse_code' }
+  ]);
+
+  // Rejestr ruchów (append-only) – źródło prawdy o stanie.
+  await db.collection(collections.stockMoves).createIndexes([
+    { key: { itemCode: 1, doneAt: -1 }, name: 'idx_moves_item_done' },
+    { key: { toLocationId: 1, doneAt: -1 }, name: 'idx_moves_to_loc' },
+    { key: { fromLocationId: 1, doneAt: -1 }, name: 'idx_moves_from_loc' },
+    { key: { lot: 1 }, sparse: true, name: 'idx_moves_lot' },
+    { key: { operationId: 1 }, sparse: true, name: 'idx_moves_operation' },
+    { key: { kind: 1, doneAt: -1 }, name: 'idx_moves_kind' }
+  ]);
+
+  // Stan na lokalizację (materializowany z ruchów). Jeden dokument na (towar, lokalizacja, partia).
+  await db.collection(collections.quants).createIndexes([
+    { key: { itemCode: 1, locationId: 1, lot: 1 }, unique: true, name: 'uniq_quant_item_loc_lot' },
+    { key: { locationId: 1 }, name: 'idx_quant_location' }
+  ]);
+
+  // Operacje magazynowe (przyjęcia/wydania/przesunięcia/inwentaryzacja) – Faza 2.
+  await db.collection(collections.stockOperations).createIndexes([
+    { key: { reference: 1 }, unique: true, name: 'uniq_operation_reference' },
+    { key: { type: 1, state: 1, scheduledAt: -1 }, name: 'idx_operation_type_state' }
+  ]);
+
+  // Partie / numery seryjne – Faza 3.
+  await db.collection(collections.lots).createIndexes([
+    { key: { itemCode: 1, name: 1 }, unique: true, name: 'uniq_lot_item_name' }
+  ]);
+
+  // Inwentaryzacje (spis z natury) – Faza 3.
+  await db.collection(collections.inventoryAdjustments).createIndexes([
+    { key: { state: 1, createdAt: -1 }, name: 'idx_inv_adj_state' }
   ]);
 }

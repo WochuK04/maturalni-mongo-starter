@@ -115,3 +115,14 @@ export function requireManager(req, res, next) {
 
   return res.status(403).json({ message: 'Brak uprawnień kierownika' });
 }
+
+// Odczyt magazynu „w stylu Odoo": rola `viewer` (wgląd read-only) oraz kierownik/admin.
+// Zapis do magazynu pozostaje pod `requireAdmin` (Faza 2+).
+export function requireWarehouseRead(req, res, next) {
+  const role = req.user?.role;
+  if (req.isAuthenticated && req.isAuthenticated() && ['viewer', 'manager', 'admin'].includes(role)) {
+    return next();
+  }
+
+  return res.status(403).json({ message: 'Brak dostępu do magazynu' });
+}

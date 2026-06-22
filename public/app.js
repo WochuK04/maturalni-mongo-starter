@@ -134,6 +134,18 @@ const adminViewTab = document.getElementById('adminViewTab');
 const viewTabs = Array.from(document.querySelectorAll('.view-tab'));
 const viewPanels = Array.from(document.querySelectorAll('.view-panel'));
 
+// Magazyn „w stylu Odoo" (Faza 1 – odczyt, role viewer/manager/admin).
+const warehouseViewTab = document.getElementById('warehouseViewTab');
+const warehouseSummary = document.getElementById('warehouseSummary');
+const warehouseStockView = document.getElementById('warehouseStockView');
+const warehouseLocationsView = document.getElementById('warehouseLocationsView');
+const warehouseMovesView = document.getElementById('warehouseMovesView');
+const warehouseStockContent = document.getElementById('warehouseStockContent');
+const warehouseLocationsContent = document.getElementById('warehouseLocationsContent');
+const warehouseMovesContent = document.getElementById('warehouseMovesContent');
+const warehouseSearchInput = document.getElementById('warehouseSearchInput');
+const warehouseLocationFilter = document.getElementById('warehouseLocationFilter');
+
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
   const label = String(item.itemCode || item.name || category).trim();
@@ -193,6 +205,11 @@ let activeView = 'available';
 let availableItemsState = [];
 let availableSearchTerm = '';
 let activeModalItem = null;
+
+// Magazyn: aktywny pod-widok + cache lokalizacji (drzewo + stan).
+const WAREHOUSE_ROLES = ['viewer', 'manager', 'admin'];
+let warehouseView = 'stock';
+let warehouseLocationsCache = null;
 
 function showToast(message) {
   const old = document.querySelector('.toast');
@@ -288,6 +305,15 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString('pl-PL');
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('pl-PL', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
 }
 
 // --- CSV: eksport i import (Pakiet B) ---
@@ -731,6 +757,10 @@ async function handleViewChange(view) {
   if (view === 'admin' && currentUser?.role === 'admin') {
     await loadAdminItems();
   }
+
+  if (view === 'warehouse' && WAREHOUSE_ROLES.includes(currentUser?.role)) {
+    await openWarehouse();
+  }
 }
 
 function setWorkspaceMode(mode) {
@@ -773,6 +803,7 @@ function applyRoleVisibility(user) {
     if (managerViewTab) managerViewTab.hidden = true;
     if (teamViewTab) teamViewTab.hidden = true;
     if (usersViewTab) usersViewTab.hidden = true;
+    if (warehouseViewTab) warehouseViewTab.hidden = true;
     if (adminSection) adminSection.hidden = true;
     if (requestFormCard) requestFormCard.hidden = true;
     return;
@@ -787,6 +818,8 @@ function applyRoleVisibility(user) {
   if (managerViewTab) managerViewTab.hidden = !(isManager || isAdmin);
   // „Mój zespół" — dla kierownika i admina (obaj mogą mieć podwładnych).
   if (teamViewTab) teamViewTab.hidden = !(isManager || isAdmin);
+  // „Magazyn" — wgląd dla roli viewer oraz kierownika/admina (niezależnie od trybu admina).
+  if (warehouseViewTab) warehouseViewTab.hidden = !WAREHOUSE_ROLES.includes(user.role);
 
   if (user.role === 'admin') {
     if (adminQuickActions) adminQuickActions.hidden = false;
@@ -1923,6 +1956,7 @@ function getRoleLabel(role) {
   switch (role) {
     case 'admin': return 'Administrator';
     case 'manager': return 'Kierownik';
+    case 'viewer': return 'Podgląd (read-only)';
     default: return 'Użytkownik';
   }
 }
@@ -1974,7 +2008,7 @@ async function loadUsers() {
     // Rola
     const roleTd = document.createElement('td');
     const roleSelect = document.createElement('select');
-    [['user', 'Użytkownik'], ['manager', 'Kierownik'], ['admin', 'Administrator']].forEach(([value, label]) => {
+    [['user', 'Użytkownik'], ['viewer', 'Podgląd (read-only)'], ['manager', 'Kierownik'], ['admin', 'Administrator']].forEach(([value, label]) => {
       const opt = document.createElement('option');
       opt.value = value;
       opt.textContent = label;
@@ -2368,6 +2402,7 @@ viewTabs.forEach((tab) => {
     if (view === 'users' && currentUser?.role !== 'admin') return;
     if (view === 'approvals' && !['manager', 'admin'].includes(currentUser?.role)) return;
     if (view === 'team' && !['manager', 'admin'].includes(currentUser?.role)) return;
+    if (view === 'warehouse' && !WAREHOUSE_ROLES.includes(currentUser?.role)) return;
 
     if (view === 'admin' || view === 'users') {
       workspaceMode = 'admin';
@@ -2393,6 +2428,180 @@ document.querySelectorAll('#inboxSubtabs .subtab').forEach(btn => {
     }
   });
 });
+
+// ===== Magazyn „w stylu Odoo" – widoki odczytu (Faza 1) =====
+
+const WAREHOUSE_KIND_LABELS = {
+  view: 'Grupa', internal: 'Magazyn', employee: 'U pracownika',
+  inventory: 'Korekta', scrap: 'Złom', supplier: 'Dostawca', transit: 'Tranzyt'
+};
+const MOVE_KIND_LABELS = {
+  opening: 'Stan otwarcia', internal: 'Przesunięcie', receipt: 'Przyjęcie',
+  delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta'
+};
+
+let warehouseStockState = [];
+
+async function fetchWarehouseLocations(force = false) {
+  if (warehouseLocationsCache && !force) return warehouseLocationsCache;
+  warehouseLocationsCache = await api('/warehouse/locations');
+  return warehouseLocationsCache;
+}
+
+function isPhysicalLocation(loc) {
+  return loc.kind === 'internal' || loc.kind === 'employee';
+}
+
+function renderWarehouseSummary(locations) {
+  if (!warehouseSummary) return;
+  const physical = locations.filter(isPhysicalLocation);
+  const onHand = physical.reduce((sum, l) => sum + (l.onHand || 0), 0);
+  const lines = physical.reduce((sum, l) => sum + (l.lines || 0), 0);
+  warehouseSummary.textContent =
+    `${onHand} szt. na stanie · ${lines} pozycji · ${physical.length} lokalizacji fizycznych`;
+}
+
+function populateLocationFilter(locations) {
+  if (!warehouseLocationFilter) return;
+  const current = warehouseLocationFilter.value;
+  const physical = locations.filter(isPhysicalLocation);
+  warehouseLocationFilter.innerHTML =
+    '<option value="">Wszystkie lokalizacje</option>' +
+    physical.map(l =>
+      `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)} (${l.onHand || 0})</option>`).join('');
+  warehouseLocationFilter.value = current;
+}
+
+async function openWarehouse() {
+  if (!WAREHOUSE_ROLES.includes(currentUser?.role)) return;
+  const locations = await fetchWarehouseLocations(true);
+  renderWarehouseSummary(locations);
+  populateLocationFilter(locations);
+  await switchWarehouseView(warehouseView);
+}
+
+async function switchWarehouseView(view) {
+  warehouseView = view;
+  document.querySelectorAll('#warehouseSubtabs .subtab').forEach(b =>
+    b.classList.toggle('active', b.dataset.whview === view));
+  if (warehouseStockView) warehouseStockView.hidden = view !== 'stock';
+  if (warehouseLocationsView) warehouseLocationsView.hidden = view !== 'locations';
+  if (warehouseMovesView) warehouseMovesView.hidden = view !== 'moves';
+
+  if (view === 'stock') await loadWarehouseStock();
+  else if (view === 'locations') renderWarehouseLocations(await fetchWarehouseLocations());
+  else if (view === 'moves') await loadWarehouseMoves();
+}
+
+async function loadWarehouseStock() {
+  warehouseStockState = await api('/warehouse/stock');
+  applyWarehouseStockFilter();
+}
+
+// Filtr po stronie klienta (jak lista dostępnego sprzętu) — snappy, bez round-tripów.
+function applyWarehouseStockFilter() {
+  const q = normalizeText(warehouseSearchInput?.value || '');
+  const loc = warehouseLocationFilter?.value || '';
+  let rows = warehouseStockState;
+  if (loc) rows = rows.filter(r => r.locationId === loc);
+  if (q) rows = rows.filter(r =>
+    normalizeText(r.itemCode).includes(q) ||
+    normalizeText(r.name).includes(q) ||
+    normalizeText(r.category).includes(q));
+  renderWarehouseStock(rows);
+}
+
+function renderWarehouseStock(rows) {
+  if (!rows.length) { renderEmpty(warehouseStockContent, 'Brak pozycji na stanie.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.itemCode)}</td>
+      <td>${escapeHtml(r.name || '—')}</td>
+      <td>${escapeHtml(r.category || '—')}</td>
+      <td>${escapeHtml(r.locationName || '—')}</td>
+      <td>${escapeHtml(r.quantity)}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  warehouseStockContent.innerHTML = '';
+  warehouseStockContent.appendChild(table);
+}
+
+function renderWarehouseLocations(locations) {
+  const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
+  if (!tree.length) { renderEmpty(warehouseLocationsContent, 'Brak lokalizacji.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Lokalizacja</th><th>Kod</th><th>Typ</th><th>Na stanie</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = tree.map(l => {
+    const indent = '&nbsp;'.repeat((l.depth || 0) * 3);
+    const isGroup = l.kind === 'view';
+    const nameCell = isGroup
+      ? `${indent}<strong>${escapeHtml(l.name)}</strong>`
+      : `${indent}${escapeHtml(l.name)}`;
+    return `
+      <tr>
+        <td>${nameCell}</td>
+        <td class="muted">${escapeHtml(l.code || '—')}</td>
+        <td>${escapeHtml(WAREHOUSE_KIND_LABELS[l.kind] || l.kind || '—')}</td>
+        <td>${isGroup ? '<span class="muted">—</span>' : escapeHtml(l.onHand || 0)}</td>
+      </tr>`;
+  }).join('');
+  table.appendChild(tbody);
+  warehouseLocationsContent.innerHTML = '';
+  warehouseLocationsContent.appendChild(table);
+}
+
+async function loadWarehouseMoves() {
+  const moves = await api('/warehouse/moves?limit=200');
+  renderWarehouseMoves(moves);
+}
+
+function renderWarehouseMoves(moves) {
+  if (!moves.length) { renderEmpty(warehouseMovesContent, 'Brak ruchów magazynowych.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Data</th><th>Sprzęt</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Osoba</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = moves.map(m => `
+    <tr>
+      <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
+      <td>${escapeHtml(m.itemCode)}${m.itemName ? ` · ${escapeHtml(m.itemName)}` : ''}</td>
+      <td>${escapeHtml(m.fromName || '—')}</td>
+      <td>${escapeHtml(m.toName || '—')}</td>
+      <td>${escapeHtml(m.quantity)}</td>
+      <td>${escapeHtml(MOVE_KIND_LABELS[m.kind] || m.kind || '—')}</td>
+      <td class="muted">${escapeHtml(m.actorEmail || '—')}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  warehouseMovesContent.innerHTML = '';
+  warehouseMovesContent.appendChild(table);
+}
+
+// Pod-zakładki Magazynu: Stan / Lokalizacje / Historia ruchów.
+document.querySelectorAll('#warehouseSubtabs .subtab').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    try { await switchWarehouseView(btn.dataset.whview); }
+    catch (err) { showToast(err.message); }
+  });
+});
+
+if (warehouseSearchInput) {
+  warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);
+}
+if (warehouseLocationFilter) {
+  warehouseLocationFilter.addEventListener('change', applyWarehouseStockFilter);
+}
 
 document.addEventListener('click', async (e) => {
   const target = e.target;
@@ -2420,6 +2629,11 @@ document.addEventListener('click', async (e) => {
 
   if (target.id === 'loadTeamBtn') {
     await withButtonLoading(target, () => handleViewChange('team')).catch(err => showToast(err.message));
+  }
+
+  if (target.id === 'loadWarehouseBtn') {
+    warehouseLocationsCache = null;
+    await withButtonLoading(target, () => openWarehouse()).catch(err => showToast(err.message));
   }
 
   if (target.closest('.open-purchase-btn')) {

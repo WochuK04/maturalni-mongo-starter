@@ -1,18 +1,11 @@
 import dotenv from 'dotenv';
 import { connectToDatabase, closeDb } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
+import { seedStandardLocations, applyMove, recomputeQuants, refreshItemCache } from './stock.js';
 
 dotenv.config();
 
 const now = new Date();
-
-const locations = [
-  { name: 'Magazyn', type: 'storage', isActive: true },
-  { name: 'Studio', type: 'office', isActive: true },
-  { name: 'Biuro', type: 'office', isActive: true },
-  { name: 'U pracownika', type: 'employee', isActive: true },
-  { name: 'Serwis', type: 'service', isActive: true }
-];
 
 const users = [
   { email: 'admin@maturalni.com', fullName: 'Admin Maturalni', role: 'admin', isActive: true, createdAt: now },
@@ -129,12 +122,36 @@ async function run() {
   await db.collection(collections.items).deleteMany({});
   await db.collection(collections.loans).deleteMany({});
   await db.collection(collections.auditLogs).deleteMany({});
+  await db.collection(collections.stockMoves).deleteMany({});
+  await db.collection(collections.quants).deleteMany({});
+  await db.collection(collections.warehouses).deleteMany({});
 
-  await db.collection(collections.locations).insertMany(locations);
+  // Drzewo lokalizacji „w stylu Odoo" (realne + wirtualne) zamiast płaskiej listy.
+  const byCode = await seedStandardLocations(db);
+  const byName = new Map();
+  for (const loc of byCode.values()) byName.set(loc.name, loc);
+  const inventoryLoc = byCode.get('VIRT/Inventory');
+
   await db.collection(collections.users).insertMany(users);
   await db.collection(collections.items).insertMany(items);
   await db.collection(collections.loans).insertMany(loans);
   await db.collection(collections.auditLogs).insertMany(auditLogs);
+
+  // Stan otwarcia: ruch z wirtualnej „Korekta stanu" do bieżącej lokalizacji sprzętu.
+  for (const it of items) {
+    const loc = byName.get(it.currentLocation) || byName.get('Magazyn');
+    await applyMove(db, {
+      itemCode: it.itemCode,
+      fromLocationId: String(inventoryLoc._id),
+      toLocationId: String(loc._id),
+      quantity: Number(it.quantity ?? 1) || 1,
+      kind: 'opening',
+      actorEmail: 'seed',
+      note: 'Stan otwarcia (seed)'
+    });
+  }
+  await recomputeQuants(db);
+  for (const it of items) await refreshItemCache(db, it.itemCode);
 
   console.log('Seed OK');
   await closeDb();
