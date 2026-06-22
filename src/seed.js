@@ -125,6 +125,7 @@ async function run() {
   await db.collection(collections.stockMoves).deleteMany({});
   await db.collection(collections.quants).deleteMany({});
   await db.collection(collections.warehouses).deleteMany({});
+  await db.collection(collections.reorderRules).deleteMany({});
 
   // Drzewo lokalizacji „w stylu Odoo" (realne + wirtualne) zamiast płaskiej listy.
   const byCode = await seedStandardLocations(db);
@@ -152,6 +153,15 @@ async function run() {
   }
   await recomputeQuants(db);
   for (const it of items) await refreshItemCache(db, it.itemCode);
+
+  // Przykładowe reguły min-max (Zapotrzebowanie). Stan dostępny liczy się
+  // tylko z lokalizacji „Magazyn" (internal), więc M006 (Magazyn) = 1 szt.,
+  // a Lampy/Laptop są u pracowników → 0 dostępnych.
+  await db.collection(collections.reorderRules).insertMany([
+    { scope: 'category', target: 'Monitory', minQty: 3, maxQty: 6, note: 'Trzon zestawu podglądowego', isActive: true, createdByEmail: 'seed', createdAt: now, updatedAt: now },
+    { scope: 'category', target: 'Lampy', minQty: 2, maxQty: 4, note: '', isActive: true, createdByEmail: 'seed', createdAt: now, updatedAt: now },
+    { scope: 'item', target: 'M006', minQty: 1, maxQty: 2, note: '', isActive: true, createdByEmail: 'seed', createdAt: now, updatedAt: now }
+  ]);
 
   console.log('Seed OK');
   await closeDb();

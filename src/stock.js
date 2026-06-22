@@ -382,3 +382,94 @@ export async function validateOperation(db, operationId, actorEmail) {
 
   return { reference: op.reference, affected: [...affected] };
 }
+
+// ===== Zapotrzebowanie (reguły min-max / orderpoint) =====
+//
+// Jak w Odoo „Replenishment": reguła trzyma minimum i maksimum dla celu
+// (kategoria albo konkretny itemCode). Gdy dostępny stan spadnie poniżej
+// minimum, sugerujemy uzupełnienie do maksimum (do zamówienia = max − stan).
+// „Dostępny stan" liczymy tylko na lokalizacjach realnego magazynu (`internal`):
+// sprzęt u pracownika jest wydany, a lokalizacje wirtualne to źródła/ujścia.
+export const REORDER_SCOPES = ['category', 'item'];
+
+export function isReorderScope(scope) {
+  return REORDER_SCOPES.includes(scope);
+}
+
+// Dostępny stan na lokalizacjach `internal`, zgrupowany per itemCode i per kategoria.
+async function availableOnHand(db) {
+  const internal = await db.collection(collections.locations)
+    .find({ kind: LOCATION_KINDS.INTERNAL, isActive: { $ne: false } })
+    .toArray();
+  const internalIds = new Set(internal.map(l => String(l._id)));
+
+  const quants = await db.collection(collections.quants)
+    .find({ quantity: { $gt: 0 } })
+    .toArray();
+
+  const byItem = new Map();
+  for (const q of quants) {
+    if (!internalIds.has(q.locationId)) continue;
+    byItem.set(q.itemCode, (byItem.get(q.itemCode) || 0) + q.quantity);
+  }
+
+  const codes = [...byItem.keys()];
+  const items = codes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, category: 1 } })
+        .toArray()
+    : [];
+  const catByCode = new Map(items.map(it => [it.itemCode, it.category || '']));
+
+  const byCategory = new Map();
+  for (const [code, qty] of byItem) {
+    const cat = catByCode.get(code) || '';
+    byCategory.set(cat, (byCategory.get(cat) || 0) + qty);
+  }
+
+  return { byItem, byCategory };
+}
+
+// Zwraca wszystkie reguły wzbogacone o bieżący stan i sugestię zamówienia.
+export async function computeReplenishment(db) {
+  const rules = await db.collection(collections.reorderRules)
+    .find({}).sort({ scope: 1, target: 1 }).toArray();
+  if (!rules.length) return [];
+
+  const { byItem, byCategory } = await availableOnHand(db);
+
+  // Nazwy dla reguł itemowych (czytelna etykieta „K004 · Sony A7").
+  const itemCodes = rules.filter(r => r.scope === 'item').map(r => r.target);
+  const items = itemCodes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: itemCodes } }, { projection: { itemCode: 1, name: 1 } })
+        .toArray()
+    : [];
+  const nameByCode = new Map(items.map(it => [it.itemCode, it.name || '']));
+
+  return rules.map(r => {
+    const onHand = r.scope === 'item'
+      ? (byItem.get(r.target) || 0)
+      : (byCategory.get(r.target) || 0);
+    const minQty = Number(r.minQty) || 0;
+    const maxQty = Number(r.maxQty) || 0;
+    const isActive = r.isActive !== false;
+    const below = isActive && onHand < minQty;
+    const toOrder = below ? Math.max(0, maxQty - onHand) : 0;
+    const itemName = r.scope === 'item' ? (nameByCode.get(r.target) || '') : '';
+    return {
+      id: String(r._id),
+      scope: r.scope,
+      target: r.target,
+      itemName,
+      label: r.scope === 'item' && itemName ? `${r.target} · ${itemName}` : r.target,
+      minQty,
+      maxQty,
+      onHand,
+      toOrder,
+      below,
+      isActive,
+      note: r.note || ''
+    };
+  });
+}

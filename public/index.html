@@ -862,6 +862,63 @@
     </form>
   </dialog>
 
+  <dialog id="reorderRuleModal" class="form-modal">
+    <form id="reorderRuleForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Zapotrzebowanie</p>
+          <h3 id="reorderRuleTitle">Reguła min-max</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeReorderRuleBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <div class="modal-form-grid">
+        <label class="field" id="reorderScopeField">
+          <span>Poziom reguły</span>
+          <select id="reorderScope">
+            <option value="category">Kategoria</option>
+            <option value="item">Konkretny sprzęt</option>
+          </select>
+        </label>
+        <label class="field" id="reorderCategoryField">
+          <span>Kategoria</span>
+          <input id="reorderCategory" list="reorderCategoryList" placeholder="np. Kamera" autocomplete="off" />
+          <datalist id="reorderCategoryList"></datalist>
+        </label>
+        <label class="field" id="reorderItemField" hidden>
+          <span>Sprzęt</span>
+          <select id="reorderItem"></select>
+        </label>
+        <label class="field">
+          <span>Minimum</span>
+          <input id="reorderMin" type="number" min="0" step="1" value="0" />
+        </label>
+        <label class="field">
+          <span>Maksimum</span>
+          <input id="reorderMax" type="number" min="1" step="1" value="1" />
+        </label>
+        <label class="field field-wide checkbox-field" id="reorderActiveField" hidden>
+          <input id="reorderActive" type="checkbox" checked />
+          <span>Reguła aktywna</span>
+        </label>
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <input id="reorderNote" placeholder="Opcjonalnie" />
+        </label>
+      </div>
+
+      <p class="modal-form-hint muted">
+        Gdy dostępny stan (na lokalizacjach magazynowych) spadnie poniżej minimum, pozycja trafi na listę „Do uzupełnienia” z sugerowaną ilością (maksimum − stan).
+      </p>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="reorderSaveBtn">Zapisz</button>
+        <button type="button" class="btn btn-danger" id="reorderDeleteBtn" hidden>Usuń</button>
+        <button type="button" class="btn btn-secondary" id="reorderCancelBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
   <template id="availableItemTemplate">
     <article class="equipment-card">
       <div class="equipment-card-media">

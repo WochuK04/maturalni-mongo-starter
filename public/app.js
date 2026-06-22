@@ -177,6 +177,25 @@ const operationValidateBtn = document.getElementById('operationValidateBtn');
 const operationCancelOpBtn = document.getElementById('operationCancelOpBtn');
 const operationCloseBtn2 = document.getElementById('operationCloseBtn2');
 const closeOperationBtn = document.getElementById('closeOperationBtn');
+// Modal reguły min-max (Zapotrzebowanie).
+const reorderRuleModal = document.getElementById('reorderRuleModal');
+const reorderRuleTitle = document.getElementById('reorderRuleTitle');
+const reorderScope = document.getElementById('reorderScope');
+const reorderScopeField = document.getElementById('reorderScopeField');
+const reorderCategoryField = document.getElementById('reorderCategoryField');
+const reorderCategory = document.getElementById('reorderCategory');
+const reorderCategoryList = document.getElementById('reorderCategoryList');
+const reorderItemField = document.getElementById('reorderItemField');
+const reorderItem = document.getElementById('reorderItem');
+const reorderMin = document.getElementById('reorderMin');
+const reorderMax = document.getElementById('reorderMax');
+const reorderActiveField = document.getElementById('reorderActiveField');
+const reorderActive = document.getElementById('reorderActive');
+const reorderNote = document.getElementById('reorderNote');
+const reorderSaveBtn = document.getElementById('reorderSaveBtn');
+const reorderDeleteBtn = document.getElementById('reorderDeleteBtn');
+const reorderCancelBtn = document.getElementById('reorderCancelBtn');
+const closeReorderRuleBtn = document.getElementById('closeReorderRuleBtn');
 
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
@@ -247,6 +266,7 @@ let warehouseLocationsCache = null;
 let warehouseFormData = null;
 let warehouseProductsState = [];
 let currentOperation = null;
+let currentReorderRule = null;
 
 function showToast(message) {
   const old = document.querySelector('.toast');
@@ -2550,16 +2570,15 @@ async function switchWarehouseMenu(menu) {
 // --- Przegląd (dashboard kafelków) ---
 async function loadWarehouseOverview() {
   const data = await api('/warehouse/overview');
-  renderOverview(data.types || []);
+  renderOverview(data.types || [], data.replenishment || null);
 }
 
-function renderOverview(types) {
-  if (!types.length) { renderEmpty(whOverviewContent, 'Brak danych.'); return; }
+function renderOverview(types, replenishment) {
   const groups = {};
   for (const t of types) (groups[t.group] = groups[t.group] || []).push(t);
-  const groupOrder = ['Przekazy', 'Korekty', 'Zapotrzebowanie'];
+  const groupOrder = ['Przekazy', 'Korekty'];
 
-  whOverviewContent.innerHTML = Object.keys(groups)
+  let html = Object.keys(groups)
     .sort((a, b) => groupOrder.indexOf(a) - groupOrder.indexOf(b))
     .map(group => {
       const cards = groups[group]
@@ -2575,19 +2594,46 @@ function renderOverview(types) {
         }).join('');
       return `<div class="wh-group"><p class="eyebrow">${escapeHtml(group)}</p><div class="wh-cards">${cards}</div></div>`;
     }).join('');
+
+  // Grupa „Zapotrzebowanie": kafelek z liczbą pozycji poniżej minimum.
+  if (replenishment) {
+    const below = replenishment.below || 0;
+    const rules = replenishment.rules || 0;
+    html += `
+      <div class="wh-group"><p class="eyebrow">Zapotrzebowanie</p><div class="wh-cards">
+        <button class="wh-card" type="button" data-whgo="replenishment">
+          <span class="wh-card-title">Zapotrzebowanie</span>
+          <span class="wh-card-todo">${below}</span>
+          <span class="wh-card-sub muted">do uzupełnienia · ${rules} reguł min-max</span>
+        </button>
+      </div></div>`;
+  }
+
+  if (!html) { renderEmpty(whOverviewContent, 'Brak danych.'); return; }
+  whOverviewContent.innerHTML = html;
 }
 
 // --- Operacje (dokumenty) ---
+// „Zapotrzebowanie" to ostatnia zakładka Operacji — nie jest dokumentem (stockOperation),
+// tylko widokiem reguł min-max, dlatego renderujemy ją osobno za listą typów.
 function renderOpTypeNav() {
-  whOpTypeNav.innerHTML = OP_TYPE_ORDER.map(type =>
-    `<button class="subtab${type === warehouseOpType ? ' active' : ''}" data-whoptype="${escapeHtml(type)}" type="button">${escapeHtml(OP_TYPE_NAV_LABELS[type])}</button>`).join('');
+  const opTabs = OP_TYPE_ORDER.map(type =>
+    `<button class="subtab${type === warehouseOpType ? ' active' : ''}" data-whoptype="${escapeHtml(type)}" type="button">${escapeHtml(OP_TYPE_NAV_LABELS[type])}</button>`);
+  const replTab =
+    `<button class="subtab${warehouseOpType === 'replenishment' ? ' active' : ''}" data-whoptype="replenishment" type="button">Zapotrzebowanie</button>`;
+  whOpTypeNav.innerHTML = opTabs.join('') + replTab;
 }
 
 async function openOperations(type) {
   warehouseOpType = type;
   renderOpTypeNav();
-  if (whNewOperationBtn) whNewOperationBtn.hidden = currentUser?.role !== 'admin';
-  await loadOperationsList(type);
+  const isRepl = type === 'replenishment';
+  if (whNewOperationBtn) {
+    whNewOperationBtn.hidden = currentUser?.role !== 'admin';
+    whNewOperationBtn.textContent = isRepl ? '+ Reguła min-max' : '+ Nowa operacja';
+  }
+  if (isRepl) await loadReplenishment();
+  else await loadOperationsList(type);
 }
 
 async function loadOperationsList(type) {
@@ -2620,6 +2666,148 @@ function renderOperationsList(ops) {
   table.appendChild(tbody);
   whOperationsContent.innerHTML = '';
   whOperationsContent.appendChild(table);
+}
+
+// --- Zapotrzebowanie (reguły min-max) ---
+let replenishmentRows = [];
+
+async function loadReplenishment() {
+  replenishmentRows = await api('/warehouse/reorder-rules');
+  renderReplenishment(replenishmentRows);
+}
+
+function renderReplenishment(rows) {
+  const isAdmin = currentUser?.role === 'admin';
+  if (!rows.length) {
+    renderEmpty(whOperationsContent, isAdmin
+      ? 'Brak reguł min-max. Dodaj pierwszą regułę, aby śledzić zapotrzebowanie.'
+      : 'Brak reguł min-max.');
+    return;
+  }
+  const sorted = [...rows].sort((a, b) => (b.below - a.below) || a.label.localeCompare(b.label));
+  const belowCount = rows.filter(r => r.below).length;
+
+  const wrap = document.createElement('div');
+  const summary = document.createElement('p');
+  summary.className = belowCount ? 'wh-repl-summary' : 'wh-repl-summary muted';
+  summary.textContent = belowCount
+    ? `${belowCount} ${belowCount === 1 ? 'pozycja wymaga' : 'pozycji wymaga'} uzupełnienia · ${rows.length} reguł`
+    : `Wszystko powyżej minimum · ${rows.length} reguł`;
+  wrap.appendChild(summary);
+
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Poziom</th><th>Pozycja</th><th>Na stanie</th><th>Min</th><th>Max</th><th>Do zamówienia</th><th>Status</th>${isAdmin ? '<th></th>' : ''}
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = sorted.map(r => {
+    const scopeLabel = r.scope === 'item' ? 'Sprzęt' : 'Kategoria';
+    let status;
+    if (!r.isActive) status = '<span class="badge badge-muted">Wyłączona</span>';
+    else if (r.below) status = '<span class="badge badge-warn">Do uzupełnienia</span>';
+    else status = '<span class="badge badge-ok">OK</span>';
+    const actions = isAdmin
+      ? `<td class="wh-repl-actions">
+          <button type="button" class="btn btn-secondary wh-mini" data-repl-edit="${escapeHtml(r.id)}">Edytuj</button>
+          <button type="button" class="btn btn-danger wh-mini" data-repl-del="${escapeHtml(r.id)}">Usuń</button>
+        </td>`
+      : '';
+    return `
+      <tr class="${r.below ? 'wh-repl-below' : ''}">
+        <td><span class="badge badge-scope">${escapeHtml(scopeLabel)}</span></td>
+        <td>${escapeHtml(r.label)}${r.note ? `<br><span class="muted">${escapeHtml(r.note)}</span>` : ''}</td>
+        <td>${escapeHtml(r.onHand)}</td>
+        <td>${escapeHtml(r.minQty)}</td>
+        <td>${escapeHtml(r.maxQty)}</td>
+        <td>${r.toOrder ? `<strong>${escapeHtml(r.toOrder)}</strong>` : '—'}</td>
+        <td>${status}</td>
+        ${actions}
+      </tr>`;
+  }).join('');
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  whOperationsContent.innerHTML = '';
+  whOperationsContent.appendChild(wrap);
+}
+
+// Distinct kategorie z kartoteki — do podpowiedzi w polu reguły.
+function reorderCategoryNames() {
+  const cats = new Set();
+  (warehouseFormData?.items || []).forEach(it => { if (it.category) cats.add(it.category); });
+  return [...cats].sort((a, b) => a.localeCompare(b));
+}
+
+function updateReorderScopeFields() {
+  const isItem = reorderScope.value === 'item';
+  if (reorderCategoryField) reorderCategoryField.hidden = isItem;
+  if (reorderItemField) reorderItemField.hidden = !isItem;
+}
+
+async function openReorderRuleModal(id = null, existing = null) {
+  await fetchWarehouseFormData();
+  reorderCategoryList.innerHTML = reorderCategoryNames()
+    .map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  reorderItem.innerHTML = itemOptions(existing?.scope === 'item' ? existing.target : null);
+
+  currentReorderRule = id ? { id } : null;
+  const editing = !!existing;
+
+  reorderRuleTitle.textContent = editing ? 'Edytuj regułę min-max' : 'Nowa reguła min-max';
+  reorderScope.value = existing?.scope || 'category';
+  reorderCategory.value = existing?.scope === 'category' ? existing.target : '';
+  if (existing?.scope === 'item') reorderItem.value = existing.target;
+  reorderMin.value = existing ? existing.minQty : 0;
+  reorderMax.value = existing ? existing.maxQty : 1;
+  reorderNote.value = existing?.note || '';
+  reorderActive.checked = existing ? existing.isActive : true;
+
+  // Cel reguły (poziom + pozycja) jest niezmienny po utworzeniu — przy edycji blokujemy.
+  reorderScope.disabled = editing;
+  reorderCategory.disabled = editing;
+  reorderItem.disabled = editing;
+  if (reorderActiveField) reorderActiveField.hidden = !editing;
+  if (reorderDeleteBtn) reorderDeleteBtn.hidden = !editing;
+
+  updateReorderScopeFields();
+  if (!reorderRuleModal.open) reorderRuleModal.showModal();
+}
+
+function closeReorderRuleModal() {
+  if (reorderRuleModal.open) reorderRuleModal.close();
+  currentReorderRule = null;
+}
+
+async function saveReorderRule() {
+  const editing = !!currentReorderRule?.id;
+  const minQty = Math.max(0, Math.floor(Number(reorderMin.value) || 0));
+  const maxQty = Math.max(1, Math.floor(Number(reorderMax.value) || 0));
+  if (maxQty < minQty) throw new Error('Maksimum nie może być mniejsze niż minimum');
+  const note = reorderNote.value.trim();
+
+  if (editing) {
+    await api(`/warehouse/reorder-rules/${encodeURIComponent(currentReorderRule.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ minQty, maxQty, note, isActive: reorderActive.checked })
+    });
+  } else {
+    const scope = reorderScope.value;
+    const target = scope === 'category' ? reorderCategory.value.trim() : reorderItem.value;
+    if (!target) throw new Error(scope === 'category' ? 'Podaj kategorię' : 'Wybierz sprzęt');
+    await api('/warehouse/reorder-rules', {
+      method: 'POST',
+      body: JSON.stringify({ scope, target, minQty, maxQty, note })
+    });
+  }
+}
+
+async function deleteReorderRule(id) {
+  if (!confirm('Usunąć tę regułę min-max?')) return false;
+  await api(`/warehouse/reorder-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  showToast('Usunięto regułę');
+  await loadReplenishment();
+  return true;
 }
 
 // --- Modal operacji ---
@@ -2948,7 +3136,48 @@ if (whOverviewContent) {
   });
 }
 if (whNewOperationBtn) {
-  whNewOperationBtn.addEventListener('click', () => openOperationModal(warehouseOpType, null).catch(err => showToast(err.message)));
+  whNewOperationBtn.addEventListener('click', () => {
+    if (warehouseOpType === 'replenishment') openReorderRuleModal(null).catch(err => showToast(err.message));
+    else openOperationModal(warehouseOpType, null).catch(err => showToast(err.message));
+  });
+}
+// Edycja/usuwanie reguł min-max w tabeli Zapotrzebowania (delegacja).
+if (whOperationsContent) {
+  whOperationsContent.addEventListener('click', (e) => {
+    const editBtn = e.target.closest('[data-repl-edit]');
+    if (editBtn) {
+      const row = replenishmentRows.find(r => r.id === editBtn.dataset.replEdit);
+      if (row) openReorderRuleModal(row.id, row).catch(err => showToast(err.message));
+      return;
+    }
+    const delBtn = e.target.closest('[data-repl-del]');
+    if (delBtn) deleteReorderRule(delBtn.dataset.replDel).catch(err => showToast(err.message));
+  });
+}
+if (reorderScope) reorderScope.addEventListener('change', updateReorderScopeFields);
+if (reorderSaveBtn) {
+  reorderSaveBtn.addEventListener('click', async () => {
+    try {
+      await saveReorderRule();
+      showToast('Zapisano regułę');
+      closeReorderRuleModal();
+      await loadReplenishment();
+    } catch (err) { showToast(err.message); }
+  });
+}
+if (reorderDeleteBtn) {
+  reorderDeleteBtn.addEventListener('click', async () => {
+    if (!currentReorderRule?.id) return;
+    try {
+      if (await deleteReorderRule(currentReorderRule.id)) closeReorderRuleModal();
+    } catch (err) { showToast(err.message); }
+  });
+}
+[reorderCancelBtn, closeReorderRuleBtn].forEach(b => b && b.addEventListener('click', closeReorderRuleModal));
+if (reorderRuleModal) {
+  // Enter w polu nie ma wysyłać formularza (domyślny GET = przeładowanie).
+  const reorderRuleForm = document.getElementById('reorderRuleForm');
+  if (reorderRuleForm) reorderRuleForm.addEventListener('submit', (e) => { e.preventDefault(); reorderSaveBtn?.click(); });
 }
 if (whProductsSearch) whProductsSearch.addEventListener('input', applyProductsFilter);
 if (warehouseSearchInput) warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);

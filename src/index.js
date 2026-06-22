@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, nextReference, isOperationType } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, nextReference, isOperationType, computeReplenishment, isReorderScope } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -520,7 +520,15 @@ app.get('/warehouse/overview', requireAuth, requireWarehouseRead, async (_req, r
     type, label: cfg.label, group: cfg.group,
     ...(counts[type] || { draft: 0, ready: 0, done: 0, cancelled: 0, total: 0 })
   }));
-  res.json({ types });
+
+  // Zapotrzebowanie: ile kategorii/pozycji jest poniżej minimum (do uzupełnienia).
+  const replRows = await computeReplenishment(db);
+  const replenishment = {
+    rules: replRows.length,
+    below: replRows.filter(r => r.below).length
+  };
+
+  res.json({ types, replenishment });
 });
 
 // Lista operacji danego typu (z nazwami lokalizacji). Filtr: ?type=&state=.
@@ -671,6 +679,89 @@ app.post('/warehouse/operations/:id/cancel', requireAuth, requireAdmin, async (r
   if (op.state === 'done') return res.status(400).json({ message: 'Nie można anulować wykonanej operacji' });
   await db.collection(collections.stockOperations).updateOne({ _id: op._id }, { $set: { state: 'cancelled', updatedAt: new Date() } });
   res.json({ message: 'Anulowano' });
+});
+
+// ----- Zapotrzebowanie (reguły min-max / orderpoint) -----
+
+// Lista reguł wzbogacona o bieżący dostępny stan i sugestię „do zamówienia".
+app.get('/warehouse/reorder-rules', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  res.json(await computeReplenishment(db));
+});
+
+app.post('/warehouse/reorder-rules', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const scope = String(req.body.scope || '').trim();
+  if (!isReorderScope(scope)) return res.status(400).json({ message: 'Nieprawidłowy poziom reguły' });
+
+  let target = String(req.body.target || '').trim();
+  if (!target) return res.status(400).json({ message: scope === 'item' ? 'Wybierz sprzęt' : 'Podaj kategorię' });
+  if (scope === 'item') {
+    target = normalizeItemCode(target);
+    const item = await db.collection(collections.items).findOne({ itemCode: target }, { projection: { _id: 1 } });
+    if (!item) return res.status(400).json({ message: `Sprzęt ${target} nie istnieje` });
+  }
+
+  const minQty = Math.max(0, Math.floor(Number(req.body.minQty) || 0));
+  const maxQty = Math.max(1, Math.floor(Number(req.body.maxQty) || 0));
+  if (maxQty < minQty) return res.status(400).json({ message: 'Maksimum nie może być mniejsze niż minimum' });
+
+  const now = new Date();
+  const doc = {
+    scope, target, minQty, maxQty,
+    note: String(req.body.note || '').trim(),
+    isActive: true,
+    createdByEmail: req.user.email,
+    createdAt: now,
+    updatedAt: now
+  };
+  try {
+    const { insertedId } = await db.collection(collections.reorderRules).insertOne(doc);
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'reorder_rule_created',
+      entityType: 'reorderRule',
+      entityId: String(insertedId),
+      payload: { scope, target, minQty, maxQty },
+      createdAt: now
+    });
+    res.status(201).json({ id: String(insertedId) });
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ message: 'Reguła dla tego celu już istnieje' });
+    console.error('reorder-rules POST', err);
+    res.status(500).json({ message: 'Nie udało się zapisać reguły' });
+  }
+});
+
+app.patch('/warehouse/reorder-rules/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let rule;
+  try { rule = await db.collection(collections.reorderRules).findOne({ _id: new ObjectId(req.params.id) }); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  if (!rule) return res.status(404).json({ message: 'Reguła nie istnieje' });
+
+  const update = { updatedAt: new Date() };
+  if (req.body.minQty !== undefined) update.minQty = Math.max(0, Math.floor(Number(req.body.minQty) || 0));
+  if (req.body.maxQty !== undefined) update.maxQty = Math.max(1, Math.floor(Number(req.body.maxQty) || 0));
+  if (req.body.note !== undefined) update.note = String(req.body.note || '').trim();
+  if (req.body.isActive !== undefined) update.isActive = !!req.body.isActive;
+
+  const minQty = update.minQty ?? rule.minQty;
+  const maxQty = update.maxQty ?? rule.maxQty;
+  if (maxQty < minQty) return res.status(400).json({ message: 'Maksimum nie może być mniejsze niż minimum' });
+
+  await db.collection(collections.reorderRules).updateOne({ _id: rule._id }, { $set: update });
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/warehouse/reorder-rules/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const result = await db.collection(collections.reorderRules).deleteOne({ _id: id });
+  if (!result.deletedCount) return res.status(404).json({ message: 'Reguła nie istnieje' });
+  res.json({ message: 'Usunięto regułę' });
 });
 
 // Lista aktywnych użytkowników (tylko imię/e-mail) — do wyboru osoby przy
