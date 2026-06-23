@@ -188,13 +188,17 @@ async function resolveApproverEmail(db, requesterEmail) {
 
 // Generuje unikalny kod sprzętu dla pozycji dodawanej z wniosku o zakup.
 // Prefiks z kategorii (bez polskich znaków), reszta z czasu/losowości.
+// Prefiks kodu z kategorii (bez polskich znaków), np. „Towar"→TOWA, „gadżet"→GADZ.
+function itemCodePrefix(category) {
+  return String(category || 'ZAK')
+    .normalize('NFD')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .slice(0, 4)
+    .toUpperCase() || 'ZAK';
+}
+
 async function generatePurchaseItemCode(db, category) {
-  const prefix =
-    String(category || 'ZAK')
-      .normalize('NFD')
-      .replace(/[^A-Za-z0-9]/g, '')
-      .slice(0, 4)
-      .toUpperCase() || 'ZAK';
+  const prefix = itemCodePrefix(category);
 
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const suffix = attempt === 0
@@ -206,6 +210,46 @@ async function generatePurchaseItemCode(db, category) {
   }
 
   return `ZAK-${Date.now()}`;
+}
+
+// Wyznacza nowy kod produktu po zmianie kategorii: podmienia prefiks zachowując
+// sufiks (ten sam fizyczny produkt, inna kategoria). Kod bez „-" (legacy/ręczny)
+// → generuje świeży kod dla nowej kategorii. Zwraca oldCode, gdy nic nie trzeba
+// zmieniać; pilnuje unikalności.
+async function regenerateItemCodeForCategory(db, oldCode, newCategory) {
+  const code = String(oldCode || '');
+  const newPrefix = itemCodePrefix(newCategory);
+  const dash = code.indexOf('-');
+  let candidate;
+  if (dash > 0) {
+    if (code.slice(0, dash) === newPrefix) return code; // prefiks już pasuje
+    candidate = normalizeItemCode(`${newPrefix}-${code.slice(dash + 1)}`);
+  } else {
+    candidate = normalizeItemCode(await generatePurchaseItemCode(db, newCategory));
+  }
+  if (candidate === code) return code;
+  const exists = await db.collection(collections.items).findOne({ itemCode: candidate });
+  if (exists) candidate = normalizeItemCode(await generatePurchaseItemCode(db, newCategory));
+  return candidate;
+}
+
+// Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
+// obcy (stan, ruchy, wypożyczenia, wnioski, loty, reguły min-max, pozycje operacji).
+// Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
+async function cascadeItemCodeRename(db, oldCode, newCode) {
+  const o = String(oldCode), n = String(newCode);
+  if (!o || !n || o === n) return;
+  await db.collection(collections.quants).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.stockMoves).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.loans).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.loanRequests).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.lots).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.reorderRules).updateMany({ scope: 'item', target: o }, { $set: { target: n } });
+  await db.collection(collections.stockOperations).updateMany(
+    { 'lines.itemCode': o },
+    { $set: { 'lines.$[e].itemCode': n } },
+    { arrayFilters: [{ 'e.itemCode': o }] }
+  );
 }
 
 app.get('/', (_req, res) => {
@@ -2485,7 +2529,21 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
     }
   }
 
-  if (update.itemCode) {
+  const existingItem = await db.collection(collections.items).findOne({ _id: itemId });
+
+  if (!existingItem) {
+    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
+  }
+
+  // Kod podąża za kategorią: gdy zmienia się kategoria (na magazynową) i kod nie
+  // został podany ręcznie, aktualizujemy prefiks kodu względem nowej kategorii.
+  if (update.itemCode === undefined && update.category && update.category !== existingItem.category
+      && isWarehouseCategory(update.category)) {
+    const regen = await regenerateItemCodeForCategory(db, existingItem.itemCode, update.category);
+    if (regen && regen !== existingItem.itemCode) update.itemCode = regen;
+  }
+
+  if (update.itemCode && update.itemCode !== existingItem.itemCode) {
     const duplicate = await db.collection(collections.items).findOne({
       _id: { $ne: itemId },
       itemCode: update.itemCode
@@ -2496,16 +2554,15 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
     }
   }
 
-  const existingItem = await db.collection(collections.items).findOne({ _id: itemId });
-
-  if (!existingItem) {
-    return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
-  }
-
   await db.collection(collections.items).updateOne(
     { _id: itemId },
     { $set: update }
   );
+
+  // Zmiana kodu → przenieś klucze obce w pozostałych kolekcjach.
+  if (update.itemCode && update.itemCode !== existingItem.itemCode) {
+    await cascadeItemCodeRename(db, existingItem.itemCode, update.itemCode);
+  }
 
   const updatedItem = await db.collection(collections.items).findOne({ _id: itemId });
 
