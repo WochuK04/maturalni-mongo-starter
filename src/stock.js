@@ -442,6 +442,48 @@ async function applyReceiptPriceBatches(db, op, lines, preReceipt, now) {
   }
 }
 
+// Cofa wykonaną operację: usuwa jej ruchy z rejestru i przelicza stany (jakby
+// nigdy się nie zaksięgowała), a dla przyjęć usuwa partie cenowe dopisane przez
+// tę operację (rozpoznawane po prefiksie referencji). Operacja wraca do stanu
+// „draft" — można ją poprawić i zatwierdzić ponownie.
+export async function reverseOperation(db, operationId, actorEmail) {
+  const ops = db.collection(collections.stockOperations);
+  const op = await ops.findOne({ _id: new ObjectId(String(operationId)) });
+  if (!op) throw new Error('Operacja nie istnieje');
+  if (op.state !== 'done') throw new Error('Cofnąć można tylko wykonaną operację');
+
+  const opId = String(op._id);
+  const moves = await db.collection(collections.stockMoves).find({ operationId: opId }).toArray();
+  const affected = [...new Set(moves.map(m => m.itemCode))];
+  await db.collection(collections.stockMoves).deleteMany({ operationId: opId });
+  for (const code of affected) { await recomputeQuants(db, code); await refreshItemCache(db, code); }
+
+  // Przyjęcie: zdejmij partie cenowe dopisane przez tę operację (po referencji).
+  if (op.type === 'receipt') {
+    const codes = [...new Set((op.lines || []).map(l => String(l.itemCode)))];
+    for (const code of codes) {
+      const item = await db.collection(collections.items)
+        .findOne({ itemCode: code }, { projection: { priceBatches: 1 } });
+      if (!item || !Array.isArray(item.priceBatches)) continue;
+      const kept = item.priceBatches.filter(b => !String(b.note || '').startsWith(op.reference));
+      if (kept.length !== item.priceBatches.length) {
+        const totalQty = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+        await db.collection(collections.items).updateOne(
+          { itemCode: code },
+          { $set: { priceBatches: kept, quantity: totalQty, updatedAt: new Date() } }
+        );
+      }
+    }
+  }
+
+  const now = new Date();
+  await ops.updateOne(
+    { _id: op._id },
+    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '' } }
+  );
+  return { reference: op.reference, affected };
+}
+
 // ===== Zapotrzebowanie (reguły min-max / orderpoint) =====
 //
 // Jak w Odoo „Replenishment": reguła trzyma minimum i maksimum dla celu

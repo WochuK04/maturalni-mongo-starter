@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, nextReference, isOperationType, computeReplenishment, isReorderScope } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -864,6 +864,26 @@ app.post('/warehouse/operations/:id/validate', requireAuth, requireAdmin, async 
       createdAt: new Date()
     });
     res.json({ message: `Wykonano ${result.reference}`, ...result });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// Cofnięcie wykonanej operacji → wraca do „roboczej" (do edycji i ponownego
+// zatwierdzenia). Odwraca ruchy i — dla przyjęć — partie cenowe.
+app.post('/warehouse/operations/:id/reverse', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  try {
+    const result = await reverseOperation(db, req.params.id, req.user.email);
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'warehouse_operation_reversed',
+      entityType: 'stockOperation',
+      entityId: req.params.id,
+      payload: result,
+      createdAt: new Date()
+    });
+    res.json({ message: `Cofnięto ${result.reference}`, ...result });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
