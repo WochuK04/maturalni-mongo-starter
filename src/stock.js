@@ -462,7 +462,7 @@ export async function computeReplenishment(db) {
       scope: r.scope,
       target: r.target,
       itemName,
-      label: r.scope === 'item' && itemName ? `${r.target} · ${itemName}` : r.target,
+      label: r.scope === 'item' ? (itemName || r.target) : r.target,
       minQty,
       maxQty,
       onHand,

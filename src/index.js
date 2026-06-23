@@ -117,6 +117,11 @@ const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwi
 // Porównanie jest case-insensitive — trzymamy wartości po małej literze.
 const WAREHOUSE_ONLY_CATEGORIES = ['gadżet', 'opakowanie', 'sponsor', 'towar'];
 
+// Moduł „Magazyn" pokazuje DOKŁADNIE te kategorie (nie-elektronikę). Elektronika
+// (i pozostałe, np. Roll-up) żyje w widoku „Dostępny sprzęt". Case-insensitive.
+const isWarehouseCategory = (category) =>
+  WAREHOUSE_ONLY_CATEGORIES.includes(String(category || '').trim().toLowerCase());
+
 // Stan techniczny z importu CSV bywa wpisany "po polsku" albo jako surowa wartość.
 // Sprowadzamy do znanej wartości z ITEM_CONDITIONS, w razie wątpliwości fallback.
 const CONDITION_VALUES = ITEM_CONDITIONS.map(c => c.value);
@@ -400,6 +405,9 @@ app.get('/warehouse/stock', requireAuth, requireWarehouseRead, async (req, res) 
     };
   });
 
+  // Magazyn = tylko kategorie magazynowe (elektronika nie należy do tego modułu).
+  rows = rows.filter(r => isWarehouseCategory(r.category));
+
   if (q) {
     rows = rows.filter(r =>
       r.itemCode.toLowerCase().includes(q) ||
@@ -435,18 +443,19 @@ app.get('/warehouse/moves', requireAuth, requireWarehouseRead, async (req, res) 
   const itemCodes = [...new Set(moves.map(m => m.itemCode))];
   const items = itemCodes.length
     ? await db.collection(collections.items)
-        .find({ itemCode: { $in: itemCodes } }, { projection: { itemCode: 1, name: 1 } })
+        .find({ itemCode: { $in: itemCodes } }, { projection: { itemCode: 1, name: 1, category: 1 } })
         .toArray()
     : [];
-  const itemByCode = new Map(items.map(it => [it.itemCode, it.name]));
+  const itemByCode = new Map(items.map(it => [it.itemCode, it]));
 
-  res.json(moves.map(m => {
+  // Magazyn = tylko kategorie magazynowe — odfiltrowujemy ruchy elektroniki.
+  res.json(moves.filter(m => isWarehouseCategory(itemByCode.get(m.itemCode)?.category)).map(m => {
     const from = m.fromLocationId ? locById.get(m.fromLocationId) : null;
     const to = m.toLocationId ? locById.get(m.toLocationId) : null;
     return {
       id: String(m._id),
       itemCode: m.itemCode,
-      itemName: itemByCode.get(m.itemCode) || '',
+      itemName: itemByCode.get(m.itemCode)?.name || '',
       fromName: from?.name || null,
       toName: to?.name || null,
       quantity: m.quantity,
@@ -503,9 +512,11 @@ app.get('/warehouse/form-data', requireAuth, requireWarehouseRead, async (_req, 
   const locations = await db.collection(collections.locations)
     .find({ isActive: { $ne: false }, kind: { $in: OPERATION_LOC_KINDS } })
     .sort({ code: 1 }).toArray();
-  const items = await db.collection(collections.items)
+  const allItems = await db.collection(collections.items)
     .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1 } })
-    .sort({ itemCode: 1 }).toArray();
+    .sort({ name: 1 }).toArray();
+  // Operacje magazynowe dotyczą tylko kategorii magazynowych (nie elektroniki).
+  const items = allItems.filter(it => isWarehouseCategory(it.category));
   res.json({
     locations: locations.map(l => ({ id: String(l._id), code: l.code, name: l.name, kind: l.kind })),
     items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '' })),
