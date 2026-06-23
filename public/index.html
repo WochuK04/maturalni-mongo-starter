@@ -78,16 +78,6 @@
     </aside>
 
     <main class="content">
-      <header class="content-head">
-        <p class="eyebrow">Demo lokalne</p>
-        <h1>Maturalni — obieg sprzętu</h1>
-        <p class="muted intro">
-          Frontend z logowaniem Google, sesją po stronie backendu i nowym widokiem kart sprzętu.
-        </p>
-      </header>
-
-      <section class="grid stats" id="stats"></section>
-
     <section class="view-panel active" id="availablePanel" data-panel="available" hidden>
       <section class="card card-section">
         <div class="section-head">
@@ -898,6 +888,66 @@
         <button type="button" class="btn btn-primary" id="reorderSaveBtn">Zapisz</button>
         <button type="button" class="btn btn-danger" id="reorderDeleteBtn" hidden>Usuń</button>
         <button type="button" class="btn btn-secondary" id="reorderCancelBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="warehouseProductModal" class="form-modal">
+    <form id="warehouseProductForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3 id="whProductTitle">Produkt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeWhProductBtn" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <div class="modal-form-grid">
+        <label class="field">
+          <span>Nazwa</span>
+          <input id="whProductName" required />
+        </label>
+        <label class="field">
+          <span>Kategoria</span>
+          <select id="whProductCategory">
+            <option value="gadżet">gadżet</option>
+            <option value="opakowanie">opakowanie</option>
+            <option value="Towar">Towar</option>
+            <option value="sponsor">sponsor</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Marka</span>
+          <input id="whProductBrand" placeholder="Opcjonalnie" />
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input id="whProductModel" placeholder="Opcjonalnie" />
+        </label>
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <input id="whProductNotes" placeholder="Opcjonalnie" />
+        </label>
+      </div>
+
+      <div class="wh-batches">
+        <div class="wh-batches-head">
+          <h4>Partie (zakup po różnych cenach)</h4>
+          <button type="button" class="btn btn-secondary" id="whAddBatchBtn">+ Dodaj partię</button>
+        </div>
+        <div class="wh-batch-row wh-batch-row-head">
+          <span>Ilość</span>
+          <span>Cena zakupu (zł)</span>
+          <span>Notatka</span>
+          <span></span>
+        </div>
+        <div id="whBatchesList"></div>
+        <p class="wh-batches-total muted" id="whBatchesTotal"></p>
+      </div>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="whProductSaveBtn">Zapisz</button>
+        <button type="button" class="btn btn-secondary" id="whProductCancelBtn">Anuluj</button>
       </div>
     </form>
   </dialog>
