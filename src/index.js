@@ -2000,18 +2000,21 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     assignedToEmail = ''
   } = req.body;
 
-  if (!itemCode || !category || !name) {
-    return res.status(400).json({ message: 'itemCode, category i name są wymagane' });
+  if (!category || !name) {
+    return res.status(400).json({ message: 'category i name są wymagane' });
   }
 
-  const normalizedItemCode = normalizeItemCode(itemCode);
-
-  const existing = await db.collection(collections.items).findOne({
-    itemCode: normalizedItemCode
-  });
-
-  if (existing) {
-    return res.status(409).json({ message: 'Taki itemCode już istnieje' });
+  // Kod sprzętu nie jest już podawany w formularzu — generujemy go z kategorii.
+  // Jeśli mimo to przyszedł (np. import/integracja), respektujemy go i pilnujemy unikalności.
+  let normalizedItemCode;
+  if (itemCode) {
+    normalizedItemCode = normalizeItemCode(itemCode);
+    const existing = await db.collection(collections.items).findOne({ itemCode: normalizedItemCode });
+    if (existing) {
+      return res.status(409).json({ message: 'Taki itemCode już istnieje' });
+    }
+  } else {
+    normalizedItemCode = await generatePurchaseItemCode(db, category);
   }
 
   const now = new Date();

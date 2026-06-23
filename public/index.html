@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./warehouse.css" />
 </head>
 <body>
   <div class="login-gate" id="loginGate">
@@ -111,6 +112,10 @@
             type="search"
             placeholder="Szukaj po nazwie, kodzie, kategorii, tagu..."
           />
+          <div class="view-toggle" id="availableViewToggle" role="group" aria-label="Widok listy">
+            <button type="button" class="view-toggle-btn active" data-availview="gallery" aria-label="Galeria">▦ Galeria</button>
+            <button type="button" class="view-toggle-btn" data-availview="list" aria-label="Lista">☰ Lista</button>
+          </div>
         </div>
 
         <div id="availableList" class="equipment-grid"></div>
@@ -496,11 +501,7 @@
       </div>
 
       <div class="modal-form-grid">
-        <label class="field">
-          <span>Kod sprzętu *</span>
-          <input name="itemCode" placeholder="np. CAM-001" required />
-        </label>
-        <label class="field">
+        <label class="field field-wide">
           <span>Nazwa *</span>
           <input name="name" placeholder="np. Sony A7 III" required />
         </label>
@@ -559,20 +560,6 @@
           <input name="warrantyUntil" id="addItemWarranty" type="date" />
         </label>
 
-        <label class="field">
-          <span>Lokalizacja szczegółowa</span>
-          <input name="detailedLocation" id="addItemDetailedLocation" placeholder="np. Regał B, półka 3" />
-        </label>
-        <label class="field">
-          <span>Kod QR</span>
-          <input name="qrCodeValue" id="addItemQr" placeholder="Wartość kodu QR (opcjonalnie)" />
-        </label>
-
-        <label class="field field-wide">
-          <span>Tagi</span>
-          <input name="tags" id="addItemTags" placeholder="Po przecinku, np. 4K, gimbal, plener" />
-        </label>
-
         <label class="field field-wide">
           <span>Link do zdjęcia (URL)</span>
           <input name="imageUrl" id="addItemImageUrl" type="url" placeholder="https://..." />
@@ -585,10 +572,6 @@
         <label class="field field-wide">
           <span>Szczegóły</span>
           <input name="details" id="addItemDetailsInput" placeholder="Krótki opis (opcjonalnie)" />
-        </label>
-        <label class="field field-wide">
-          <span>Uwagi</span>
-          <input name="notes" id="addItemNotes" placeholder="Uwagi (opcjonalnie)" />
         </label>
       </div>
 

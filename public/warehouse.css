@@ -1,0 +1,121 @@
+/* =====================================================================
+   Magazyn „w stylu Odoo" — osobny układ modułu.
+   Ładowany PO styles.css, więc nadpisuje wspólne reguły tylko w obrębie
+   #warehousePanel. Cel: pełna szerokość obszaru roboczego + wygląd konsoli
+   (płaski, edge-to-edge), inny niż wyśrodkowane karty pozostałych zakładek.
+   ===================================================================== */
+
+/* Pełny bleed w poziomie + na dole: panel wychodzi poza boczny/dolny padding
+   .content i zajmuje 100% szerokości obszaru roboczego. Góry nie podciągamy,
+   żeby nie nachodzić na ewentualną zawartość nad panelem. */
+#warehousePanel {
+  margin: 0 -32px -60px;
+}
+@media (max-width: 900px) {
+  #warehousePanel {
+    margin: 0 -16px -48px; /* boczny/dolny padding .content na mobile */
+  }
+}
+
+/* Karta magazynu → płaska konsola na pełną szerokość i wysokość. */
+#warehousePanel .card {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--surface-2);
+  min-height: 100vh;
+}
+
+/* Sticky pasek nagłówka na całą szerokość. */
+#warehousePanel .section-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  align-items: center;
+  margin: 0;
+  padding: 18px 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Górne menu modułu jako pełnoszerokościowy pasek zakładek pod nagłówkiem. */
+#warehousePanel #warehouseMenu {
+  margin: 0;
+  padding: 6px 28px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* Obszary widoków: oddech po bokach, pełna szerokość. */
+#whOverviewView,
+#whOperationsView,
+#whProductsView,
+#whReportingView,
+#whConfigView {
+  padding: 24px 28px 40px;
+}
+
+/* Pod-nawigacje (typy operacji, raporty) — odstęp pod paskiem menu. */
+#whOpTypeNav,
+#whReportNav {
+  margin-bottom: 16px;
+}
+
+/* Tabele i toolbary w magazynie zawsze na pełną szerokość. */
+#warehousePanel table {
+  width: 100%;
+}
+#warehousePanel .admin-toolbar {
+  margin-bottom: 14px;
+}
+
+/* ===== Dashboard „Przegląd" (kafelki) ===== */
+.warehouse-dashboard { display: flex; flex-direction: column; gap: 20px; }
+.wh-group { display: flex; flex-direction: column; gap: 10px; }
+.wh-cards { display: flex; flex-wrap: wrap; gap: 14px; }
+.wh-card {
+  display: flex; flex-direction: column; gap: 4px;
+  min-width: 200px; flex: 1 1 200px; max-width: 280px;
+  padding: 18px 20px; text-align: left; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.wh-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+.wh-card-title { font-weight: 700; color: var(--text); }
+.wh-card-todo { font-size: 30px; font-weight: 700; color: var(--primary); line-height: 1.1; }
+.wh-card-sub { font-size: 12px; }
+
+.wh-op-row { cursor: pointer; }
+.wh-op-row:hover { background: var(--surface-2); }
+
+/* ===== Pozycje operacji (modal) ===== */
+.op-line, .op-line-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.op-line .op-line-item { flex: 1; }
+.op-line .op-line-qty, .op-line .op-line-counted { width: 96px; }
+.op-line .op-line-loc { width: 220px; }
+.op-line .op-line-remove { padding: 6px 12px; }
+.op-line-head span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.op-line-head span:first-child { flex: 1; }
+.op-line-head span:not(:first-child):not(:last-child) { width: 96px; }
+.operation-lines { margin-top: 14px; }
+
+/* ===== Zapotrzebowanie (reguły min-max) ===== */
+.wh-repl-summary { margin: 0 0 12px; font-weight: 600; }
+.wh-repl-below { background: var(--warning-bg); }
+.wh-repl-actions { white-space: nowrap; }
+.wh-repl-actions .wh-mini + .wh-mini { margin-left: 6px; }
+.wh-mini { min-height: 0; padding: 4px 10px; font-size: 12px; }
+
+/* Badge statusów — używane też poza magazynem, ale definicja trzymana z modułem. */
+.badge-warn { background: var(--warning-bg); color: var(--warning-text); }
+.badge-ok { background: var(--success-bg); color: var(--success-text); }
+.badge-muted { background: var(--surface-2); color: var(--muted); }
+.badge-scope { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+
+.checkbox-field { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.checkbox-field input { width: auto; }
+.checkbox-field span { color: var(--text); }

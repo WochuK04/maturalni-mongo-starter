@@ -255,6 +255,7 @@ let workspaceMode = 'user';
 let activeView = 'available';
 let availableItemsState = [];
 let availableSearchTerm = '';
+let availableViewMode = localStorage.getItem('availableViewMode') === 'list' ? 'list' : 'gallery';
 let activeModalItem = null;
 
 // Magazyn: stan nawigacji + cache danych.
@@ -1019,11 +1020,20 @@ function getFilteredAvailableItems() {
 }
 
 function renderAvailableItems(items) {
+  // Tryb decyduje o klasie kontenera (siatka kart vs lista wierszy).
+  availableList.className = availableViewMode === 'list' ? 'equipment-listing' : 'equipment-grid';
+
   if (!items.length) {
     renderEmpty(availableList, 'Brak sprzętu pasującego do wyszukiwania.');
     return;
   }
 
+  if (availableViewMode === 'list') renderAvailableListView(items);
+  else renderAvailableGallery(items);
+}
+
+// Widok 1: duża galeria kart (domyślny).
+function renderAvailableGallery(items) {
   availableList.innerHTML = '';
   const fragment = document.createDocumentFragment();
 
@@ -1068,6 +1078,66 @@ function renderAvailableItems(items) {
   });
 
   availableList.appendChild(fragment);
+}
+
+// Widok 2: zwarta lista wierszy. Przyciski mają te same klasy/dataset, więc
+// globalna delegacja kliknięć (Szczegóły / Złóż wniosek) działa bez zmian.
+function renderAvailableListView(items) {
+  availableList.innerHTML = '';
+  const fragment = document.createDocumentFragment();
+
+  items.forEach(item => {
+    const row = document.createElement('article');
+    row.className = 'equipment-row';
+    row.dataset.itemCode = item.itemCode || '';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'equipment-row-thumb';
+    thumb.loading = 'lazy';
+    thumb.alt = item.name ? `Zdjęcie: ${item.name}` : 'Zdjęcie sprzętu';
+    thumb.src = getItemImage(item);
+    thumb.addEventListener('error', () => { thumb.src = createPlaceholderImage(item); }, { once: true });
+
+    const main = document.createElement('div');
+    main.className = 'equipment-row-main';
+    const codeMeta = [item.itemCode || '-', item.category || 'Sprzęt', [item.brand, item.model].filter(Boolean).join(' ')]
+      .filter(Boolean).join(' · ');
+    main.innerHTML =
+      `<div class="equipment-row-title">${escapeHtml(item.name || item.itemCode || 'Bez nazwy')}</div>` +
+      `<div class="equipment-row-meta muted">${escapeHtml(codeMeta)}</div>`;
+
+    const loc = document.createElement('div');
+    loc.className = 'equipment-row-loc muted';
+    loc.textContent = item.currentLocation || 'Brak lokalizacji';
+
+    const cond = document.createElement('div');
+    cond.className = 'equipment-row-cond muted';
+    cond.textContent = `stan: ${getConditionLabel(item.conditionStatus)}`;
+
+    const status = document.createElement('span');
+    status.className = 'badge badge-status';
+    status.dataset.status = item.operationalStatus || '';
+    status.textContent = getStatusLabel(item.operationalStatus);
+
+    const actions = document.createElement('div');
+    actions.className = 'equipment-row-actions';
+    actions.innerHTML =
+      `<button class="btn btn-secondary details-btn" type="button" data-item-code="${escapeHtml(item.itemCode || '')}">Szczegóły</button>` +
+      `<button class="btn btn-primary request-btn" type="button" data-item-code="${escapeHtml(item.itemCode || '')}">Złóż wniosek</button>`;
+
+    row.append(thumb, main, loc, cond, status, actions);
+    fragment.appendChild(row);
+  });
+
+  availableList.appendChild(fragment);
+}
+
+function setAvailableViewMode(mode) {
+  availableViewMode = mode === 'list' ? 'list' : 'gallery';
+  localStorage.setItem('availableViewMode', availableViewMode);
+  document.querySelectorAll('#availableViewToggle .view-toggle-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.availview === availableViewMode));
+  refreshAvailableListView();
 }
 
 function refreshAvailableListView() {
@@ -3342,6 +3412,18 @@ if (availableSearchInput) {
   });
 }
 
+// Przełącznik widoku „Dostępny sprzęt": galeria / lista (zapamiętywany w localStorage).
+const availableViewToggle = document.getElementById('availableViewToggle');
+if (availableViewToggle) {
+  // Odzwierciedl zapamiętany tryb na przyciskach przy starcie (bez re-renderu).
+  availableViewToggle.querySelectorAll('.view-toggle-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.availview === availableViewMode));
+  availableViewToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-availview]');
+    if (btn) setAvailableViewMode(btn.dataset.availview);
+  });
+}
+
 if (loanRequestForm) {
   loanRequestForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -3498,7 +3580,7 @@ async function openEditItemModal(item) {
 
   const el = addItemForm?.elements;
   if (el) {
-    el.itemCode.value = item.itemCode || '';
+    if (el.itemCode) el.itemCode.value = item.itemCode || '';
     el.name.value = item.name || '';
     el.quantity.value = item.quantity || 1;
     if (el.brand) el.brand.value = item.brand || '';
