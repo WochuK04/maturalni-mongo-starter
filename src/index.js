@@ -518,6 +518,104 @@ app.get('/warehouse/products', requireAuth, requireWarehouseRead, async (_req, r
   res.json(products);
 });
 
+// Szybkie utworzenie produktu magazynowego (dla „+ Nowy produkt" w przyjęciu).
+// Ilość startowa 0 — stan dobudują przyjęcia (partie cenowe). Kategoria musi być
+// magazynowa; kod generowany automatycznie.
+app.post('/warehouse/products', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const name = String(req.body.name || '').trim();
+  const category = String(req.body.category || 'Towar').trim();
+  if (!name) return res.status(400).json({ message: 'Podaj nazwę produktu' });
+  if (!isWarehouseCategory(category)) return res.status(400).json({ message: 'Kategoria spoza Magazynu' });
+
+  const now = new Date();
+  const doc = {
+    itemCode: await generatePurchaseItemCode(db, category),
+    category,
+    name,
+    details: '',
+    quantity: 0,
+    currentLocation: 'Magazyn',
+    conditionStatus: 'ok',
+    operationalStatus: 'available',
+    assignedToName: null,
+    assignedToEmail: null,
+    notes: String(req.body.notes || '').trim(),
+    brand: String(req.body.brand || '').trim(),
+    model: String(req.body.model || '').trim(),
+    priceBatches: [],
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  const { insertedId } = await db.collection(collections.items).insertOne(doc);
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email, actionType: 'item_created', entityType: 'item',
+    entityId: String(insertedId), payload: { itemCode: doc.itemCode, source: 'warehouse-receipt' }, createdAt: now
+  });
+  res.status(201).json({ id: String(insertedId), itemCode: doc.itemCode, name: doc.name, category: doc.category });
+});
+
+// ----- Dostawcy (kartoteka kontrahentów dla przyjęć) -----
+function supplierView(s) {
+  return {
+    id: String(s._id),
+    name: s.name || '',
+    contact: s.contact || '',
+    notes: s.notes || '',
+    createdAt: s.createdAt || null
+  };
+}
+
+app.get('/warehouse/suppliers', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const list = await db.collection(collections.suppliers)
+    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
+  res.json(list.map(supplierView));
+});
+
+app.post('/warehouse/suppliers', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'Podaj nazwę dostawcy' });
+  const now = new Date();
+  const doc = {
+    name,
+    contact: String(req.body.contact || '').trim(),
+    notes: String(req.body.notes || '').trim(),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  const { insertedId } = await db.collection(collections.suppliers).insertOne(doc);
+  res.status(201).json({ id: String(insertedId), ...supplierView({ ...doc, _id: insertedId }) });
+});
+
+app.patch('/warehouse/suppliers/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const update = { updatedAt: new Date() };
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ message: 'Nazwa nie może być pusta' });
+    update.name = name;
+  }
+  if (req.body.contact !== undefined) update.contact = String(req.body.contact || '').trim();
+  if (req.body.notes !== undefined) update.notes = String(req.body.notes || '').trim();
+  const r = await db.collection(collections.suppliers).updateOne({ _id: id }, { $set: update });
+  if (!r.matchedCount) return res.status(404).json({ message: 'Dostawca nie istnieje' });
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/warehouse/suppliers/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  await db.collection(collections.suppliers).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
+  res.json({ message: 'Usunięto' });
+});
+
 // ----- Operacje magazynowe (dokumenty: Przekazy + Korekty) -----
 
 const OPERATION_LOC_KINDS = [
@@ -539,9 +637,22 @@ function normalizeOperationLines(type, rawLines) {
           lot: l.lot ? String(l.lot) : null
         };
       }
-      return { itemCode, quantity: Math.max(1, Number(l.quantity) || 1), lot: l.lot ? String(l.lot) : null };
+      const line = { itemCode, quantity: Math.max(1, Number(l.quantity) || 1), lot: l.lot ? String(l.lot) : null };
+      // Przyjęcie: cena zakupu per pozycja (zł). Zatwierdzenie dopisze partię cenową.
+      if (type === 'receipt') line.unitPrice = Math.max(0, Math.round((Number(l.unitPrice) || 0) * 100) / 100);
+      return line;
     })
     .filter(Boolean);
+}
+
+// Rozwiązuje dostawcę po id; zwraca { supplierId, supplierName } (snapshot nazwy
+// na dokumencie, by historia była czytelna nawet po usunięciu dostawcy).
+async function resolveSupplier(db, supplierId) {
+  if (!supplierId) return { supplierId: null, supplierName: '' };
+  let doc = null;
+  try { doc = await db.collection(collections.suppliers).findOne({ _id: new ObjectId(String(supplierId)) }); }
+  catch { return { supplierId: null, supplierName: '' }; }
+  return doc ? { supplierId: String(doc._id), supplierName: doc.name || '' } : { supplierId: null, supplierName: '' };
 }
 
 // Akceptuje id lokalizacji albo jej kod (np. 'WH/Stock'); zwraca string id albo null.
@@ -567,9 +678,12 @@ app.get('/warehouse/form-data', requireAuth, requireWarehouseRead, async (_req, 
     .sort({ name: 1 }).toArray();
   // Operacje magazynowe dotyczą tylko kategorii magazynowych (nie elektroniki).
   const items = allItems.filter(it => isWarehouseCategory(it.category));
+  const suppliers = await db.collection(collections.suppliers)
+    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
   res.json({
     locations: locations.map(l => ({ id: String(l._id), code: l.code, name: l.name, kind: l.kind })),
     items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '' })),
+    suppliers: suppliers.map(s => ({ id: String(s._id), name: s.name || '' })),
     types: OPERATION_TYPES
   });
 });
@@ -625,6 +739,8 @@ app.get('/warehouse/operations', requireAuth, requireWarehouseRead, async (req, 
     fromName: op.fromLocationId ? (locById.get(String(op.fromLocationId))?.name || null) : null,
     toName: op.toLocationId ? (locById.get(String(op.toLocationId))?.name || null) : null,
     contact: op.contact || '',
+    supplierId: op.supplierId ? String(op.supplierId) : null,
+    supplierName: op.supplierName || '',
     scheduledAt: op.scheduledAt || null,
     sourceDocument: op.sourceDocument || '',
     lineCount: Array.isArray(op.lines) ? op.lines.length : 0,
@@ -659,6 +775,8 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
     fromName: op.fromLocationId ? (locById.get(String(op.fromLocationId))?.name || null) : null,
     toName: op.toLocationId ? (locById.get(String(op.toLocationId))?.name || null) : null,
     contact: op.contact || '',
+    supplierId: op.supplierId ? String(op.supplierId) : null,
+    supplierName: op.supplierName || '',
     scheduledAt: op.scheduledAt || null,
     sourceDocument: op.sourceDocument || '',
     note: op.note || '',
@@ -666,6 +784,7 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
       itemCode: l.itemCode,
       itemName: nameByCode.get(l.itemCode) || '',
       quantity: l.quantity ?? null,
+      unitPrice: l.unitPrice ?? null,
       countedQty: l.countedQty ?? null,
       locationId: l.locationId ? String(l.locationId) : null,
       lot: l.lot || null
@@ -682,6 +801,7 @@ app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) =>
   const cfg = OPERATION_TYPES[type];
 
   const now = new Date();
+  const supplier = await resolveSupplier(db, req.body.supplierId);
   const doc = {
     reference: await nextReference(db, cfg.prefix),
     type,
@@ -689,6 +809,8 @@ app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) =>
     fromLocationId: await resolveLocationId(db, req.body.fromLocationId || cfg.defaultFrom),
     toLocationId: await resolveLocationId(db, req.body.toLocationId || cfg.defaultTo),
     contact: String(req.body.contact || '').trim(),
+    supplierId: supplier.supplierId,
+    supplierName: supplier.supplierName,
     scheduledAt: req.body.scheduledAt ? new Date(req.body.scheduledAt) : null,
     sourceDocument: String(req.body.sourceDocument || '').trim(),
     note: String(req.body.note || '').trim(),
@@ -714,6 +836,11 @@ app.patch('/warehouse/operations/:id', requireAuth, requireAdmin, async (req, re
   if (req.body.fromLocationId !== undefined) update.fromLocationId = await resolveLocationId(db, req.body.fromLocationId);
   if (req.body.toLocationId !== undefined) update.toLocationId = await resolveLocationId(db, req.body.toLocationId);
   if (req.body.contact !== undefined) update.contact = String(req.body.contact || '').trim();
+  if (req.body.supplierId !== undefined) {
+    const supplier = await resolveSupplier(db, req.body.supplierId);
+    update.supplierId = supplier.supplierId;
+    update.supplierName = supplier.supplierName;
+  }
   if (req.body.scheduledAt !== undefined) update.scheduledAt = req.body.scheduledAt ? new Date(req.body.scheduledAt) : null;
   if (req.body.sourceDocument !== undefined) update.sourceDocument = String(req.body.sourceDocument || '').trim();
   if (req.body.note !== undefined) update.note = String(req.body.note || '').trim();

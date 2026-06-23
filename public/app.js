@@ -189,6 +189,10 @@ const operationToField = document.getElementById('operationToField');
 const operationFrom = document.getElementById('operationFrom');
 const operationTo = document.getElementById('operationTo');
 const operationContact = document.getElementById('operationContact');
+const operationContactField = document.getElementById('operationContactField');
+const operationSupplierField = document.getElementById('operationSupplierField');
+const operationSupplier = document.getElementById('operationSupplier');
+const operationNewSupplierBtn = document.getElementById('operationNewSupplierBtn');
 const operationScheduled = document.getElementById('operationScheduled');
 const operationSource = document.getElementById('operationSource');
 const operationNote = document.getElementById('operationNote');
@@ -220,6 +224,27 @@ const reorderSaveBtn = document.getElementById('reorderSaveBtn');
 const reorderDeleteBtn = document.getElementById('reorderDeleteBtn');
 const reorderCancelBtn = document.getElementById('reorderCancelBtn');
 const closeReorderRuleBtn = document.getElementById('closeReorderRuleBtn');
+// Modal „Nowy produkt" (z poziomu przyjęcia).
+const newProductModal = document.getElementById('newProductModal');
+const newProductForm = document.getElementById('newProductForm');
+const newProductName = document.getElementById('newProductName');
+const newProductCategory = document.getElementById('newProductCategory');
+const newProductSaveBtn = document.getElementById('newProductSaveBtn');
+const newProductCancelBtn = document.getElementById('newProductCancelBtn');
+const closeNewProductBtn = document.getElementById('closeNewProductBtn');
+// Modal dostawcy + lista w Konfiguracji.
+const supplierModal = document.getElementById('supplierModal');
+const supplierForm = document.getElementById('supplierForm');
+const supplierModalTitle = document.getElementById('supplierModalTitle');
+const supplierName = document.getElementById('supplierName');
+const supplierContact = document.getElementById('supplierContact');
+const supplierNotes = document.getElementById('supplierNotes');
+const supplierSaveBtn = document.getElementById('supplierSaveBtn');
+const supplierDeleteBtn = document.getElementById('supplierDeleteBtn');
+const supplierCancelBtn = document.getElementById('supplierCancelBtn');
+const closeSupplierBtn = document.getElementById('closeSupplierBtn');
+const warehouseSuppliersContent = document.getElementById('warehouseSuppliersContent');
+const whAddSupplierBtn = document.getElementById('whAddSupplierBtn');
 
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
@@ -2664,7 +2689,7 @@ async function switchWarehouseMenu(menu) {
   else if (menu === 'operations') await openOperations(warehouseOpType);
   else if (menu === 'products') await loadWarehouseProducts();
   else if (menu === 'reporting') await switchReportView(warehouseReportView);
-  else if (menu === 'config') renderWarehouseLocations(await fetchWarehouseLocations());
+  else if (menu === 'config') await renderWarehouseConfig();
 }
 
 // --- Przegląd (dashboard kafelków) ---
@@ -2756,7 +2781,7 @@ function renderOperationsList(ops) {
       <td>${escapeHtml(op.reference)}</td>
       <td>${escapeHtml(op.fromName || '—')}</td>
       <td>${escapeHtml(op.toName || '—')}</td>
-      <td>${escapeHtml(op.contact || '—')}</td>
+      <td>${escapeHtml(op.contact || op.supplierName || '—')}</td>
       <td>${op.scheduledAt ? escapeHtml(formatDate(op.scheduledAt)) : '—'}</td>
       <td>${escapeHtml(op.sourceDocument || '—')}</td>
       <td><span class="badge${op.state === 'done' ? ' badge-status' : ''}">${escapeHtml(OP_STATE_LABELS[op.state] || op.state)}</span></td>`;
@@ -2917,10 +2942,17 @@ function locationOptions(selectedId, kinds) {
     `<option value="${escapeHtml(l.id)}"${l.id === selectedId ? ' selected' : ''}>${escapeHtml(l.name)} (${escapeHtml(l.code || '')})</option>`).join('');
 }
 
-function itemOptions(selectedCode) {
+function itemOptions(selectedCode, allowNew = false) {
   const items = warehouseFormData?.items || [];
-  return '<option value="">— wybierz sprzęt —</option>' + items.map(it =>
+  const base = '<option value="">— wybierz produkt —</option>' + items.map(it =>
     `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.name || 'Bez nazwy')}</option>`).join('');
+  return base + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
+}
+
+function supplierOptions(selectedId) {
+  const suppliers = warehouseFormData?.suppliers || [];
+  return '<option value="">— bez dostawcy —</option>' + suppliers.map(s =>
+    `<option value="${escapeHtml(s.id)}"${s.id === selectedId ? ' selected' : ''}>${escapeHtml(s.name || 'Bez nazwy')}</option>`).join('');
 }
 
 function resolveDefaultLocId(code) {
@@ -2930,6 +2962,7 @@ function resolveDefaultLocId(code) {
 
 function addOperationLine(line = {}) {
   const isAdj = warehouseOpType === 'adjustment';
+  const isReceipt = warehouseOpType === 'receipt';
   const row = document.createElement('div');
   row.className = 'op-line';
   if (isAdj) {
@@ -2938,6 +2971,12 @@ function addOperationLine(line = {}) {
       <select class="op-line-loc">${locationOptions(line.locationId || resolveDefaultLocId('WH/Stock'), ['internal', 'employee'])}</select>
       <input class="op-line-counted" type="number" min="0" value="${line.countedQty ?? 0}" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
+  } else if (isReceipt) {
+    row.innerHTML = `
+      <select class="op-line-item">${itemOptions(line.itemCode, true)}</select>
+      <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
+      <input class="op-line-price" type="number" min="0" step="0.01" value="${line.unitPrice ?? ''}" placeholder="0,00" />
+      <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else {
     row.innerHTML = `
       <select class="op-line-item">${itemOptions(line.itemCode)}</select>
@@ -2945,12 +2984,18 @@ function addOperationLine(line = {}) {
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   }
   row.querySelector('.op-line-remove').addEventListener('click', () => row.remove());
+  // „＋ Nowy produkt…" w pickerze (przyjęcie) → otwórz okno tworzenia i wskaż nowy.
+  const sel = row.querySelector('.op-line-item');
+  if (sel) sel.addEventListener('change', () => {
+    if (sel.value === '__new__') { sel.value = ''; openNewProductModal(sel); }
+  });
   operationLines.appendChild(row);
 }
 
 function renderOperationLinesHead() {
-  operationLinesHead.innerHTML = warehouseOpType === 'adjustment'
-    ? '<span>Sprzęt</span><span>Lokalizacja</span><span>Policzono</span><span></span>'
+  operationLinesHead.innerHTML =
+    warehouseOpType === 'adjustment' ? '<span>Sprzęt</span><span>Lokalizacja</span><span>Policzono</span><span></span>'
+    : warehouseOpType === 'receipt' ? '<span>Produkt</span><span>Ilość</span><span>Cena (zł)</span><span></span>'
     : '<span>Sprzęt</span><span>Ilość</span><span></span>';
 }
 
@@ -2961,23 +3006,29 @@ async function openOperationModal(type, id = null) {
 
   const cfg = warehouseFormData?.types?.[type] || {};
   const isAdj = type === 'adjustment';
+  const isReceipt = type === 'receipt';
   operationModalType.textContent = OP_TYPE_NAV_LABELS[type] || cfg.label || 'Operacja';
   renderOperationLinesHead();
   operationLines.innerHTML = '';
 
-  operationFromField.hidden = isAdj;
-  operationToField.hidden = isAdj;
+  // Przyjęcie: bez pól lokalizacji (cel zawsze Magazyn), zamiast „Kontakt" — „Dostawca".
+  operationFromField.hidden = isAdj || isReceipt;
+  operationToField.hidden = isAdj || isReceipt;
+  operationContactField.hidden = isReceipt;
+  operationSupplierField.hidden = !isReceipt;
   operationFrom.innerHTML = locationOptions(null);
   operationTo.innerHTML = locationOptions(null);
+  if (isReceipt) operationSupplier.innerHTML = supplierOptions(null);
 
   if (id) {
     const op = await api(`/warehouse/operations/${encodeURIComponent(id)}`);
     currentOperation.state = op.state;
     operationModalTitle.textContent = op.reference;
-    if (!isAdj) {
+    if (!isAdj && !isReceipt) {
       operationFrom.value = op.fromLocationId || '';
       operationTo.value = op.toLocationId || '';
     }
+    if (isReceipt) operationSupplier.value = op.supplierId || '';
     operationContact.value = op.contact || '';
     operationScheduled.value = op.scheduledAt ? String(op.scheduledAt).slice(0, 10) : '';
     operationSource.value = op.sourceDocument || '';
@@ -2986,10 +3037,11 @@ async function openOperationModal(type, id = null) {
     if (!(op.lines || []).length) addOperationLine();
   } else {
     operationModalTitle.textContent = 'Nowa operacja';
-    if (!isAdj) {
+    if (!isAdj && !isReceipt) {
       operationFrom.value = resolveDefaultLocId(cfg.defaultFrom);
       operationTo.value = resolveDefaultLocId(cfg.defaultTo);
     }
+    if (isReceipt) operationSupplier.value = '';
     operationContact.value = '';
     operationScheduled.value = '';
     operationSource.value = '';
@@ -3001,8 +3053,9 @@ async function openOperationModal(type, id = null) {
   const locked = currentOperation.state === 'done' || currentOperation.state === 'cancelled';
   const editable = isAdmin && !locked;
 
-  [operationFrom, operationTo, operationContact, operationScheduled, operationSource, operationNote]
+  [operationFrom, operationTo, operationContact, operationSupplier, operationScheduled, operationSource, operationNote]
     .forEach(el => { el.disabled = !editable; });
+  if (operationNewSupplierBtn) operationNewSupplierBtn.hidden = !(editable && isReceipt);
   operationAddLineBtn.hidden = !editable;
   operationLines.querySelectorAll('.op-line').forEach(row => {
     row.querySelectorAll('select, input').forEach(el => { el.disabled = !editable; });
@@ -3027,15 +3080,22 @@ function closeOperationModal() {
 
 function collectOperationPayload() {
   const isAdj = warehouseOpType === 'adjustment';
+  const isReceipt = warehouseOpType === 'receipt';
   const lines = [];
   operationLines.querySelectorAll('.op-line').forEach(row => {
     const itemCode = row.querySelector('.op-line-item')?.value;
-    if (!itemCode) return;
+    if (!itemCode || itemCode === '__new__') return;
     if (isAdj) {
       lines.push({
         itemCode,
         locationId: row.querySelector('.op-line-loc')?.value || null,
         countedQty: Number(row.querySelector('.op-line-counted')?.value) || 0
+      });
+    } else if (isReceipt) {
+      lines.push({
+        itemCode,
+        quantity: Number(row.querySelector('.op-line-qty')?.value) || 1,
+        unitPrice: Number(row.querySelector('.op-line-price')?.value) || 0
       });
     } else {
       lines.push({ itemCode, quantity: Number(row.querySelector('.op-line-qty')?.value) || 1 });
@@ -3043,17 +3103,21 @@ function collectOperationPayload() {
   });
   const payload = {
     type: warehouseOpType,
-    contact: operationContact.value.trim(),
     scheduledAt: operationScheduled.value || null,
     sourceDocument: operationSource.value.trim(),
     note: operationNote.value.trim(),
     lines
   };
-  if (!isAdj) {
+  if (isReceipt) {
+    // Cel zawsze Magazyn (backend domyślnie Suppliers→WH/Stock); zamiast kontaktu — dostawca.
+    payload.supplierId = operationSupplier.value || null;
+  } else if (isAdj) {
+    payload.contact = operationContact.value.trim();
+    payload.toLocationId = lines[0]?.locationId || resolveDefaultLocId('WH/Stock');
+  } else {
+    payload.contact = operationContact.value.trim();
     payload.fromLocationId = operationFrom.value || null;
     payload.toLocationId = operationTo.value || null;
-  } else {
-    payload.toLocationId = lines[0]?.locationId || resolveDefaultLocId('WH/Stock');
   }
   return payload;
 }
@@ -3069,6 +3133,134 @@ async function saveOperation() {
   const res = await api('/warehouse/operations', { method: 'POST', body: JSON.stringify(payload) });
   currentOperation.id = res.id;
   return res.id;
+}
+
+// --- „Nowy produkt" wprost z przyjęcia ---
+let newProductTargetSelect = null;
+
+function openNewProductModal(targetSelect) {
+  if (currentUser?.role !== 'admin') { showToast('Tworzenie produktu wymaga uprawnień administratora.'); return; }
+  newProductTargetSelect = targetSelect || null;
+  if (newProductName) newProductName.value = '';
+  if (newProductCategory) newProductCategory.value = 'Towar';
+  if (newProductModal && !newProductModal.open) newProductModal.showModal();
+}
+
+function closeNewProductModal() {
+  newProductTargetSelect = null;
+  if (newProductModal?.open) newProductModal.close();
+}
+
+async function saveNewProduct() {
+  const name = (newProductName?.value || '').trim();
+  const category = newProductCategory?.value || 'Towar';
+  if (!name) { showToast('Podaj nazwę produktu.'); return; }
+  try {
+    const res = await api('/warehouse/products', { method: 'POST', body: JSON.stringify({ name, category }) });
+    // Dołóż do cache, by produkt pojawił się w kolejnych pickerach.
+    (warehouseFormData?.items || []).push({ itemCode: res.itemCode, name: res.name, category: res.category });
+    if (newProductTargetSelect) {
+      const opt = document.createElement('option');
+      opt.value = res.itemCode;
+      opt.textContent = res.name;
+      const newOpt = [...newProductTargetSelect.options].find(o => o.value === '__new__');
+      newProductTargetSelect.insertBefore(opt, newOpt || null);
+      newProductTargetSelect.value = res.itemCode;
+    }
+    showToast(`Utworzono produkt: ${res.name}`);
+    closeNewProductModal();
+  } catch (err) { showToast(err.message); }
+}
+
+// --- Dostawcy: kartoteka + okno edycji ---
+let editingSupplierId = null;
+
+function openSupplierModal(supplier = null) {
+  if (currentUser?.role !== 'admin') { showToast('Zarządzanie dostawcami wymaga uprawnień administratora.'); return; }
+  editingSupplierId = supplier?.id || null;
+  if (supplierModalTitle) supplierModalTitle.textContent = supplier ? 'Edytuj dostawcę' : 'Nowy dostawca';
+  if (supplierName) supplierName.value = supplier?.name || '';
+  if (supplierContact) supplierContact.value = supplier?.contact || '';
+  if (supplierNotes) supplierNotes.value = supplier?.notes || '';
+  if (supplierDeleteBtn) supplierDeleteBtn.hidden = !supplier;
+  if (supplierModal && !supplierModal.open) supplierModal.showModal();
+}
+
+function closeSupplierModal() {
+  editingSupplierId = null;
+  if (supplierModal?.open) supplierModal.close();
+}
+
+async function saveSupplier() {
+  const name = (supplierName?.value || '').trim();
+  if (!name) { showToast('Podaj nazwę dostawcy.'); return; }
+  const body = JSON.stringify({
+    name,
+    contact: (supplierContact?.value || '').trim(),
+    notes: (supplierNotes?.value || '').trim()
+  });
+  try {
+    let created = null;
+    if (editingSupplierId) {
+      await api(`/warehouse/suppliers/${encodeURIComponent(editingSupplierId)}`, { method: 'PATCH', body });
+    } else {
+      created = await api('/warehouse/suppliers', { method: 'POST', body });
+    }
+    showToast('Zapisano dostawcę.');
+    closeSupplierModal();
+    warehouseFormData = null;
+    await fetchWarehouseFormData();
+    // Jeśli otwarte okno przyjęcia i to nowy dostawca — wskaż go od razu.
+    if (created && operationSupplier && operationSupplierField && !operationSupplierField.hidden) {
+      operationSupplier.innerHTML = supplierOptions(created.id);
+    }
+    if (whConfigView && !whConfigView.hidden) await renderWarehouseConfig();
+  } catch (err) { showToast(err.message); }
+}
+
+async function deleteSupplier() {
+  if (!editingSupplierId) return;
+  if (!confirm('Usunąć dostawcę? Historyczne przyjęcia zachowają jego nazwę.')) return;
+  try {
+    await api(`/warehouse/suppliers/${encodeURIComponent(editingSupplierId)}`, { method: 'DELETE' });
+    showToast('Usunięto dostawcę.');
+    closeSupplierModal();
+    warehouseFormData = null;
+    await fetchWarehouseFormData();
+    if (whConfigView && !whConfigView.hidden) await renderWarehouseConfig();
+  } catch (err) { showToast(err.message); }
+}
+
+// --- Konfiguracja: dostawcy + lokalizacje ---
+async function renderWarehouseConfig() {
+  const [locations, suppliers] = await Promise.all([
+    fetchWarehouseLocations(),
+    api('/warehouse/suppliers')
+  ]);
+  renderWarehouseSuppliers(suppliers);
+  renderWarehouseLocations(locations);
+}
+
+function renderWarehouseSuppliers(suppliers) {
+  if (!warehouseSuppliersContent) return;
+  if (!suppliers.length) { renderEmpty(warehouseSuppliersContent, 'Brak dostawców. Dodaj pierwszego przyciskiem powyżej.'); return; }
+  const isAdmin = currentUser?.role === 'admin';
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kontakt</th><th>Notatka</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  suppliers.forEach(s => {
+    const tr = document.createElement('tr');
+    if (isAdmin) { tr.className = 'wh-product-row'; tr.title = 'Kliknij, aby edytować dostawcę'; }
+    tr.innerHTML =
+      `<td>${escapeHtml(s.name || '—')}</td>` +
+      `<td>${escapeHtml(s.contact || '—')}</td>` +
+      `<td class="muted">${escapeHtml(s.notes || '—')}</td>`;
+    if (isAdmin) tr.addEventListener('click', () => openSupplierModal(s));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  warehouseSuppliersContent.innerHTML = '';
+  warehouseSuppliersContent.appendChild(table);
 }
 
 async function refreshWarehouseHeader() {
@@ -3466,6 +3658,21 @@ if (operationCancelOpBtn) {
     } catch (err) { showToast(err.message); }
   });
 }
+
+// „Nowy produkt" (z przyjęcia)
+if (operationNewSupplierBtn) operationNewSupplierBtn.addEventListener('click', () => openSupplierModal());
+if (newProductSaveBtn) newProductSaveBtn.addEventListener('click', saveNewProduct);
+if (newProductCancelBtn) newProductCancelBtn.addEventListener('click', closeNewProductModal);
+if (closeNewProductBtn) closeNewProductBtn.addEventListener('click', closeNewProductModal);
+if (newProductForm) newProductForm.addEventListener('submit', (e) => { e.preventDefault(); saveNewProduct(); });
+
+// Dostawcy
+if (whAddSupplierBtn) whAddSupplierBtn.addEventListener('click', () => openSupplierModal());
+if (supplierSaveBtn) supplierSaveBtn.addEventListener('click', saveSupplier);
+if (supplierDeleteBtn) supplierDeleteBtn.addEventListener('click', deleteSupplier);
+if (supplierCancelBtn) supplierCancelBtn.addEventListener('click', closeSupplierModal);
+if (closeSupplierBtn) closeSupplierBtn.addEventListener('click', closeSupplierModal);
+if (supplierForm) supplierForm.addEventListener('submit', (e) => { e.preventDefault(); saveSupplier(); });
 
 document.addEventListener('click', async (e) => {
   const target = e.target;

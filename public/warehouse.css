@@ -95,13 +95,21 @@
 /* ===== Pozycje operacji (modal) ===== */
 .op-line, .op-line-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .op-line .op-line-item { flex: 1; }
-.op-line .op-line-qty, .op-line .op-line-counted { width: 96px; }
+.op-line .op-line-qty, .op-line .op-line-counted, .op-line .op-line-price { width: 96px; }
 .op-line .op-line-loc { width: 220px; }
 .op-line .op-line-remove { padding: 6px 12px; }
 .op-line-head span { color: var(--muted); font-size: 12px; font-weight: 600; }
 .op-line-head span:first-child { flex: 1; }
 .op-line-head span:not(:first-child):not(:last-child) { width: 96px; }
 .operation-lines { margin-top: 14px; }
+
+/* Pole „Dostawca" w przyjęciu: select + przycisk „＋ Nowy" w jednej linii. */
+.op-supplier-row { display: flex; gap: 8px; align-items: center; }
+.op-supplier-row select { flex: 1; }
+
+/* Konfiguracja: sekcje Dostawcy / Lokalizacje. */
+.wh-config-section { margin-bottom: 24px; }
+.wh-config-title { margin: 0; }
 
 /* ===== Zapotrzebowanie (reguły min-max) ===== */
 .wh-repl-summary { margin: 0 0 12px; font-weight: 600; }
