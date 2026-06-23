@@ -307,6 +307,22 @@ export async function validateOperation(db, operationId, actorEmail) {
   const now = new Date();
   const affected = new Set();
 
+  // Przyjęcie: zapamiętaj stan/partie sprzed ruchów, by ochronić istniejącą ilość
+  // przy dopisywaniu partii cenowych (patrz applyReceiptPriceBatches).
+  const preReceipt = new Map();
+  if (op.type === 'receipt') {
+    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const its = codes.length
+      ? await db.collection(collections.items)
+          .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
+          .toArray()
+      : [];
+    for (const it of its) preReceipt.set(it.itemCode, {
+      quantity: Number(it.quantity) || 0,
+      hadBatches: Array.isArray(it.priceBatches) && it.priceBatches.length > 0
+    });
+  }
+
   if (op.type === 'adjustment') {
     const inv = await locationByCode(db, 'VIRT/Inventory');
     if (!inv) throw new Error('Brak wirtualnej lokalizacji korekty (VIRT/Inventory)');
@@ -380,7 +396,50 @@ export async function validateOperation(db, operationId, actorEmail) {
   );
   for (const code of affected) await refreshItemCache(db, code);
 
+  // Przyjęcie z ceną → dopisz partie cenowe (po odświeżeniu cache, by nadpisać
+  // ilość sumą partii — partie są źródłem prawdy dla produktów Magazynu, #27).
+  if (op.type === 'receipt') await applyReceiptPriceBatches(db, op, lines, preReceipt, now);
+
   return { reference: op.reference, affected: [...affected] };
+}
+
+// Dopisuje partie cenowe do produktów z pozycji przyjęcia i ustawia ilość = suma
+// partii. Jeśli produkt miał ilość, ale nie miał partii, najpierw dopisuje partię
+// „Stan początkowy" (0 zł), żeby suma partii odzwierciedlała pełny stan.
+async function applyReceiptPriceBatches(db, op, lines, preReceipt, now) {
+  const byCode = new Map();
+  for (const ln of lines) {
+    const code = String(ln.itemCode);
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push({
+      qty: Math.max(0, Math.floor(Number(ln.quantity) || 0)),
+      unitPrice: Math.max(0, Math.round((Number(ln.unitPrice) || 0) * 100) / 100)
+    });
+  }
+
+  const noteBase = op.supplierName ? `${op.reference} · ${op.supplierName}` : op.reference;
+
+  for (const [code, entries] of byCode) {
+    const item = await db.collection(collections.items)
+      .findOne({ itemCode: code }, { projection: { priceBatches: 1 } });
+    if (!item) continue;
+    const batches = Array.isArray(item.priceBatches) ? item.priceBatches.slice() : [];
+    const pre = preReceipt.get(code) || { quantity: 0, hadBatches: batches.length > 0 };
+
+    if (!pre.hadBatches && batches.length === 0 && pre.quantity > 0) {
+      batches.push({ qty: pre.quantity, unitPrice: 0, note: 'Stan początkowy', addedAt: now });
+    }
+    for (const e of entries) {
+      if (e.qty <= 0 && e.unitPrice <= 0) continue;
+      batches.push({ qty: e.qty, unitPrice: e.unitPrice, note: noteBase, addedAt: now });
+    }
+
+    const totalQty = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    await db.collection(collections.items).updateOne(
+      { itemCode: code },
+      { $set: { priceBatches: batches, quantity: totalQty, updatedAt: now } }
+    );
+  }
 }
 
 // ===== Zapotrzebowanie (reguły min-max / orderpoint) =====

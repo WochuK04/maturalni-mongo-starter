@@ -386,9 +386,19 @@
           </div>
         </div>
 
-        <!-- Konfiguracja: lokalizacje (z Fazy 1) -->
+        <!-- Konfiguracja: dostawcy + lokalizacje -->
         <div id="whConfigView" hidden>
-          <div id="warehouseLocationsContent" class="admin-content"></div>
+          <div class="wh-config-section">
+            <div class="toolbar">
+              <h4 class="wh-config-title">Dostawcy</h4>
+              <button id="whAddSupplierBtn" type="button" class="btn btn-secondary">＋ Nowy dostawca</button>
+            </div>
+            <div id="warehouseSuppliersContent" class="admin-content"></div>
+          </div>
+          <div class="wh-config-section">
+            <h4 class="wh-config-title">Lokalizacje</h4>
+            <div id="warehouseLocationsContent" class="admin-content"></div>
+          </div>
         </div>
       </section>
     </section>
@@ -802,10 +812,17 @@
           <span>Do lokalizacji</span>
           <select id="operationTo"></select>
         </label>
-        <label class="field">
+        <label class="field" id="operationContactField">
           <span>Kontakt</span>
           <input id="operationContact" placeholder="np. dostawca / pracownik" />
         </label>
+        <div class="field" id="operationSupplierField" hidden>
+          <span>Dostawca</span>
+          <div class="op-supplier-row">
+            <select id="operationSupplier"></select>
+            <button type="button" class="btn btn-secondary" id="operationNewSupplierBtn">＋ Nowy</button>
+          </div>
+        </div>
         <label class="field">
           <span>Zaplanowana data</span>
           <input id="operationScheduled" type="date" />
@@ -836,6 +853,70 @@
         <button type="button" class="btn btn-primary" id="operationValidateBtn">Zatwierdź (Wykonaj)</button>
         <button type="button" class="btn btn-danger" id="operationCancelOpBtn" hidden>Anuluj operację</button>
         <button type="button" class="btn btn-secondary" id="operationCloseBtn2">Zamknij</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Szybkie utworzenie produktu magazynowego (z poziomu przyjęcia) -->
+  <dialog id="newProductModal" class="form-modal">
+    <form id="newProductForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3>Nowy produkt</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeNewProductBtn" aria-label="Zamknij okno">×</button>
+      </div>
+      <div class="modal-form-grid">
+        <label class="field field-wide">
+          <span>Nazwa</span>
+          <input id="newProductName" required placeholder="np. Krówki E8" />
+        </label>
+        <label class="field">
+          <span>Kategoria</span>
+          <select id="newProductCategory">
+            <option value="Towar">Towar</option>
+            <option value="gadżet">gadżet</option>
+            <option value="opakowanie">opakowanie</option>
+            <option value="sponsor">sponsor</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="newProductSaveBtn">Utwórz</button>
+        <button type="button" class="btn btn-secondary" id="newProductCancelBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Dostawca: tworzenie / edycja kartoteki kontrahenta -->
+  <dialog id="supplierModal" class="form-modal">
+    <form id="supplierForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3 id="supplierModalTitle">Nowy dostawca</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeSupplierBtn" aria-label="Zamknij okno">×</button>
+      </div>
+      <div class="modal-form-grid">
+        <label class="field field-wide">
+          <span>Nazwa</span>
+          <input id="supplierName" required placeholder="np. Hurtownia ABC" />
+        </label>
+        <label class="field field-wide">
+          <span>Kontakt</span>
+          <input id="supplierContact" placeholder="osoba / telefon / e-mail" />
+        </label>
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <input id="supplierNotes" placeholder="Opcjonalnie" />
+        </label>
+      </div>
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="supplierSaveBtn">Zapisz</button>
+        <button type="button" class="btn btn-danger" id="supplierDeleteBtn" hidden>Usuń</button>
+        <button type="button" class="btn btn-secondary" id="supplierCancelBtn">Anuluj</button>
       </div>
     </form>
   </dialog>
