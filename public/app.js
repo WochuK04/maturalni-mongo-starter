@@ -146,6 +146,26 @@ const whOperationsContent = document.getElementById('whOperationsContent');
 const whProductsView = document.getElementById('whProductsView');
 const whProductsSearch = document.getElementById('whProductsSearch');
 const whProductsContent = document.getElementById('whProductsContent');
+// Okno produktu Magazynu (edycja + partie cenowe).
+const warehouseProductModal = document.getElementById('warehouseProductModal');
+const warehouseProductForm = document.getElementById('warehouseProductForm');
+const whProductTitle = document.getElementById('whProductTitle');
+const whProductName = document.getElementById('whProductName');
+const whProductCategory = document.getElementById('whProductCategory');
+const whProductBrand = document.getElementById('whProductBrand');
+const whProductModel = document.getElementById('whProductModel');
+const whProductNotes = document.getElementById('whProductNotes');
+const whBatchesList = document.getElementById('whBatchesList');
+const whBatchesTotal = document.getElementById('whBatchesTotal');
+const whAddBatchBtn = document.getElementById('whAddBatchBtn');
+const whProductSaveBtn = document.getElementById('whProductSaveBtn');
+const whProductCancelBtn = document.getElementById('whProductCancelBtn');
+const closeWhProductBtn = document.getElementById('closeWhProductBtn');
+whAddBatchBtn?.addEventListener('click', () => { addBatchRow(); recomputeBatchTotals(); });
+whProductSaveBtn?.addEventListener('click', saveWarehouseProduct);
+whProductCancelBtn?.addEventListener('click', closeWarehouseProductModal);
+closeWhProductBtn?.addEventListener('click', closeWarehouseProductModal);
+warehouseProductForm?.addEventListener('submit', (e) => { e.preventDefault(); saveWarehouseProduct(); });
 const whReportingView = document.getElementById('whReportingView');
 const whReportStock = document.getElementById('whReportStock');
 const whReportMoves = document.getElementById('whReportMoves');
@@ -725,6 +745,7 @@ function renderAuthBox() {
 }
 
 function renderStats(data) {
+  if (!stats) return; // nagłówek ze statystykami usunięty z UI
   const cards = [
     { label: 'Użytkownik', value: currentUser?.fullName || currentUser?.email || '-' },
     { label: 'Dostępny sprzęt', value: data.availableCount },
@@ -3049,17 +3070,9 @@ async function refreshWarehouseHeader() {
   populateLocationFilter(locations);
 }
 
-// --- Produkty (kartoteka ze stanem łącznym) ---
+// --- Produkty (kartoteka: produkt = pozycja z partiami cenowymi) ---
 async function loadWarehouseProducts() {
-  const rows = await api('/warehouse/stock');
-  const byCode = new Map();
-  for (const r of rows) {
-    const e = byCode.get(r.itemCode) || { itemCode: r.itemCode, name: r.name, category: r.category, total: 0 };
-    e.total += r.quantity;
-    byCode.set(r.itemCode, e);
-  }
-  warehouseProductsState = [...byCode.values()].sort((a, b) =>
-    String(a.name || '').localeCompare(String(b.name || ''), 'pl'));
+  warehouseProductsState = await api('/warehouse/products');
   applyProductsFilter();
 }
 
@@ -3067,16 +3080,123 @@ function applyProductsFilter() {
   const q = normalizeText(whProductsSearch?.value || '');
   let rows = warehouseProductsState;
   if (q) rows = rows.filter(r =>
-    normalizeText(r.itemCode).includes(q) || normalizeText(r.name).includes(q) || normalizeText(r.category).includes(q));
-  if (!rows.length) { renderEmpty(whProductsContent, 'Brak sprzętu.'); return; }
+    normalizeText(r.name).includes(q) || normalizeText(r.category).includes(q));
+  if (!rows.length) { renderEmpty(whProductsContent, 'Brak produktów.'); return; }
+
+  const isAdmin = currentUser?.role === 'admin';
   const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kategoria</th><th>Na stanie (łącznie)</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kategoria</th><th>Ilość</th><th>Partie</th><th>Wartość</th></tr></thead>';
   const tbody = document.createElement('tbody');
-  tbody.innerHTML = rows.map(r =>
-    `<tr><td>${escapeHtml(r.name || '—')}</td><td>${escapeHtml(r.category || '—')}</td><td>${escapeHtml(r.total)}</td></tr>`).join('');
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    if (isAdmin) { tr.className = 'wh-product-row'; tr.title = 'Kliknij, aby edytować produkt i partie'; }
+    tr.innerHTML =
+      `<td>${escapeHtml(r.name || '—')}</td>` +
+      `<td>${escapeHtml(r.category || '—')}</td>` +
+      `<td>${escapeHtml(r.quantity)}</td>` +
+      `<td>${escapeHtml(r.batchCount || 0)}</td>` +
+      `<td>${escapeHtml(formatPln(r.totalValue))}</td>`;
+    if (isAdmin) tr.addEventListener('click', () => openWarehouseProductModal(r));
+    tbody.appendChild(tr);
+  });
   table.appendChild(tbody);
   whProductsContent.innerHTML = '';
   whProductsContent.appendChild(table);
+
+  if (isAdmin) {
+    const hint = document.createElement('p');
+    hint.className = 'muted wh-products-hint';
+    hint.textContent = 'Kliknij produkt, aby edytować dane i partie cenowe.';
+    whProductsContent.appendChild(hint);
+  }
+}
+
+// Formatowanie kwoty w PLN (dwie miejsca po przecinku).
+function formatPln(value) {
+  return `${(Number(value) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+}
+
+// --- Okno produktu Magazynu: edycja danych + partie cenowe (Ask 2 + Ask 3) ---
+let editingWarehouseProductId = null;
+
+function addBatchRow(batch = {}) {
+  if (!whBatchesList) return;
+  const row = document.createElement('div');
+  row.className = 'wh-batch-row';
+  row.innerHTML =
+    `<input class="wh-batch-qty" type="number" min="0" step="1" value="${batch.qty ?? ''}" placeholder="0" />` +
+    `<input class="wh-batch-price" type="number" min="0" step="0.01" value="${batch.unitPrice ?? ''}" placeholder="0,00" />` +
+    `<input class="wh-batch-note" type="text" value="${escapeHtml(batch.note || '')}" placeholder="np. dostawca / data" />` +
+    `<button type="button" class="btn btn-danger wh-batch-remove" aria-label="Usuń partię">×</button>`;
+  row.querySelector('.wh-batch-remove').addEventListener('click', () => { row.remove(); recomputeBatchTotals(); });
+  row.querySelectorAll('input').forEach(i => i.addEventListener('input', recomputeBatchTotals));
+  whBatchesList.appendChild(row);
+}
+
+function collectBatches() {
+  return [...(whBatchesList?.querySelectorAll('.wh-batch-row') || [])].map(row => ({
+    qty: Number(row.querySelector('.wh-batch-qty').value) || 0,
+    unitPrice: Number(row.querySelector('.wh-batch-price').value) || 0,
+    note: row.querySelector('.wh-batch-note').value.trim()
+  })).filter(b => b.qty > 0 || b.unitPrice > 0 || b.note);
+}
+
+function recomputeBatchTotals() {
+  if (!whBatchesTotal) return;
+  const batches = collectBatches();
+  const totalQty = batches.reduce((s, b) => s + b.qty, 0);
+  const totalValue = batches.reduce((s, b) => s + b.qty * b.unitPrice, 0);
+  whBatchesTotal.textContent = `Łącznie: ${totalQty} szt. · wartość ${formatPln(totalValue)}`;
+}
+
+function openWarehouseProductModal(product) {
+  if (!warehouseProductModal || !product) return;
+  if (currentUser?.role !== 'admin') {
+    showToast('Edycja produktu wymaga uprawnień administratora.');
+    return;
+  }
+  editingWarehouseProductId = product.id;
+  if (whProductTitle) whProductTitle.textContent = product.name || 'Produkt';
+  if (whProductName) whProductName.value = product.name || '';
+  setSelectValue(whProductCategory, product.category);
+  if (whProductBrand) whProductBrand.value = product.brand || '';
+  if (whProductModel) whProductModel.value = product.model || '';
+  if (whProductNotes) whProductNotes.value = product.notes || '';
+  if (whBatchesList) whBatchesList.innerHTML = '';
+  const batches = Array.isArray(product.priceBatches) ? product.priceBatches : [];
+  if (batches.length) batches.forEach(addBatchRow);
+  else addBatchRow();
+  recomputeBatchTotals();
+  if (!warehouseProductModal.open) warehouseProductModal.showModal();
+}
+
+function closeWarehouseProductModal() {
+  editingWarehouseProductId = null;
+  if (warehouseProductModal?.open) warehouseProductModal.close();
+}
+
+async function saveWarehouseProduct() {
+  if (!editingWarehouseProductId) return;
+  const payload = {
+    name: (whProductName?.value || '').trim(),
+    category: whProductCategory?.value || '',
+    brand: (whProductBrand?.value || '').trim(),
+    model: (whProductModel?.value || '').trim(),
+    notes: (whProductNotes?.value || '').trim(),
+    priceBatches: collectBatches()
+  };
+  if (!payload.name) { showToast('Podaj nazwę produktu.'); return; }
+  try {
+    await api(`/admin/items/${editingWarehouseProductId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+    showToast(`Zapisano: ${payload.name}`);
+    closeWarehouseProductModal();
+    await loadWarehouseProducts();
+  } catch (err) {
+    showToast(err.message);
+  }
 }
 
 // --- Raportowanie (Stan / Historia ruchów) ---

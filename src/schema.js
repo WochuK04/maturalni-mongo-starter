@@ -43,6 +43,10 @@ export const itemShape = {
   detailedLocation: '',
   isStudioLocked: false,
 
+  // Partie cenowe (produkty Magazynu): zakup tej samej pozycji w transzach po
+  // różnych cenach. Gdy niepuste, łączna `quantity` = suma `qty` partii.
+  priceBatches: [], // [{ qty, unitPrice, note, addedAt }]
+
   isActive: true,
   createdAt: new Date(),
   updatedAt: new Date()

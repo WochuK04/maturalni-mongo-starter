@@ -90,6 +90,21 @@ function normalizeTags(tags) {
     .filter(Boolean);
 }
 
+// Partie cenowe produktu (Magazyn): jeden produkt kupiony w kilku transzach po
+// różnych cenach. Każda partia = { qty, unitPrice (cena zakupu), note, addedAt }.
+// Łączna ilość produktu = suma `qty` partii. Puste wiersze są odrzucane.
+function normalizePriceBatches(batches, now = new Date()) {
+  if (!Array.isArray(batches)) return [];
+  return batches
+    .map(b => ({
+      qty: Math.max(0, Math.floor(Number(b?.qty) || 0)),
+      unitPrice: Math.max(0, Math.round((Number(b?.unitPrice) || 0) * 100) / 100),
+      note: String(b?.note || '').trim(),
+      addedAt: b?.addedAt ? new Date(b.addedAt) : now
+    }))
+    .filter(b => b.qty > 0 || b.unitPrice > 0 || b.note);
+}
+
 function isBlockedFromLoan(item) {
   const location = String(item?.currentLocation || '').trim().toLowerCase();
   const isStudioLocation = location === 'studio';
@@ -466,6 +481,41 @@ app.get('/warehouse/moves', requireAuth, requireWarehouseRead, async (req, res) 
       doneAt: m.doneAt || m.createdAt || null
     };
   }));
+});
+
+// Kartoteka produktów Magazynu (tylko kategorie magazynowe) z partiami cenowymi.
+// Ilość = suma partii; wartość = Σ(ilość × cena zakupu). Zwraca też `id` (_id)
+// potrzebne do edycji (PATCH /admin/items/:id) wprost z poziomu Magazynu.
+app.get('/warehouse/products', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } },
+      { projection: { itemCode: 1, name: 1, category: 1, brand: 1, model: 1, notes: 1, quantity: 1, priceBatches: 1 } })
+    .toArray();
+
+  const products = all
+    .filter(it => isWarehouseCategory(it.category))
+    .map(it => {
+      const batches = Array.isArray(it.priceBatches) ? it.priceBatches : [];
+      const batchQty = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      const totalValue = batches.reduce((s, b) => s + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+      return {
+        id: String(it._id),
+        itemCode: it.itemCode,
+        name: it.name || '',
+        category: it.category || '',
+        brand: it.brand || '',
+        model: it.model || '',
+        notes: it.notes || '',
+        quantity: batches.length ? batchQty : (Number(it.quantity) || 0),
+        batchCount: batches.length,
+        totalValue,
+        priceBatches: batches
+      };
+    })
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), 'pl'));
+
+  res.json(products);
 });
 
 // ----- Operacje magazynowe (dokumenty: Przekazy + Korekty) -----
@@ -2268,7 +2318,8 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
     warrantyUntil,
     detailedLocation,
     isStudioLocked,
-    isActive
+    isActive,
+    priceBatches
   } = req.body;
 
   const itemId = new ObjectId(req.params.id);
@@ -2296,6 +2347,16 @@ app.patch('/admin/items/:id', requireAuth, requireAdmin, async (req, res) => {
   if (detailedLocation !== undefined) update.detailedLocation = String(detailedLocation || '').trim();
   if (isStudioLocked !== undefined) update.isStudioLocked = parseBoolean(isStudioLocked);
   if (isActive !== undefined) update.isActive = parseBoolean(isActive);
+
+  // Partie cenowe: zapis listy. Gdy są partie, łączna ilość = ich suma (partie są
+  // źródłem prawdy). Gdy brak partii, NIE ruszamy `quantity` — chroni to legacy
+  // pozycje (np. „Towar") z ręczną ilością przed wyzerowaniem przy edycji nazwy.
+  if (priceBatches !== undefined) {
+    update.priceBatches = normalizePriceBatches(priceBatches);
+    if (update.priceBatches.length) {
+      update.quantity = update.priceBatches.reduce((sum, b) => sum + b.qty, 0);
+    }
+  }
 
   if (update.itemCode) {
     const duplicate = await db.collection(collections.items).findOne({

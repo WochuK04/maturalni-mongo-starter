@@ -119,3 +119,17 @@
 .checkbox-field { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .checkbox-field input { width: auto; }
 .checkbox-field span { color: var(--text); }
+
+/* ===== Produkty: klikalne wiersze + okno produktu z partiami ===== */
+.wh-product-row { cursor: pointer; }
+.wh-product-row:hover { background: var(--surface-2); }
+.wh-products-hint { margin: 10px 2px 0; font-size: 12px; }
+
+.wh-batches { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.wh-batches-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.wh-batches-head h4 { margin: 0; font-size: 14px; }
+.wh-batch-row { display: grid; grid-template-columns: 96px 140px 1fr 40px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.wh-batch-row-head span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.wh-batch-row input { width: 100%; }
+.wh-batch-remove { padding: 6px 12px; }
+.wh-batches-total { margin: 6px 2px 0; font-weight: 600; }
