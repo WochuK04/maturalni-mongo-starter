@@ -146,10 +146,12 @@ const whOperationsContent = document.getElementById('whOperationsContent');
 const whProductsView = document.getElementById('whProductsView');
 const whProductsSearch = document.getElementById('whProductsSearch');
 const whProductsContent = document.getElementById('whProductsContent');
+const whProductsExport = document.getElementById('whProductsExport');
 // Okno produktu Magazynu (edycja + partie cenowe).
 const warehouseProductModal = document.getElementById('warehouseProductModal');
 const warehouseProductForm = document.getElementById('warehouseProductForm');
 const whProductTitle = document.getElementById('whProductTitle');
+const whProductCode = document.getElementById('whProductCode');
 const whProductName = document.getElementById('whProductName');
 const whProductCategory = document.getElementById('whProductCategory');
 const whProductBrand = document.getElementById('whProductBrand');
@@ -176,6 +178,8 @@ const warehouseLocationsContent = document.getElementById('warehouseLocationsCon
 const warehouseMovesContent = document.getElementById('warehouseMovesContent');
 const warehouseSearchInput = document.getElementById('warehouseSearchInput');
 const warehouseLocationFilter = document.getElementById('warehouseLocationFilter');
+const whStockExport = document.getElementById('whStockExport');
+const whMovesExport = document.getElementById('whMovesExport');
 // Modal operacji.
 const operationModal = document.getElementById('operationModal');
 const operationModalType = document.getElementById('operationModalType');
@@ -286,6 +290,10 @@ let warehouseOpType = 'receipt';
 let warehouseLocationsCache = null;
 let warehouseFormData = null;
 let warehouseProductsState = [];
+// Wiersze aktualnie widoczne (po filtrze) — używane przez eksport CSV Magazynu.
+let warehouseProductsFiltered = [];
+let warehouseStockFiltered = [];
+let warehouseMovesState = [];
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3080,17 +3088,22 @@ function applyProductsFilter() {
   const q = normalizeText(whProductsSearch?.value || '');
   let rows = warehouseProductsState;
   if (q) rows = rows.filter(r =>
-    normalizeText(r.name).includes(q) || normalizeText(r.category).includes(q));
+    normalizeText(r.itemCode).includes(q) ||
+    normalizeText(r.name).includes(q) ||
+    normalizeText(r.category).includes(q));
+  warehouseProductsFiltered = rows;
+  if (whProductsExport) whProductsExport.disabled = !rows.length;
   if (!rows.length) { renderEmpty(whProductsContent, 'Brak produktów.'); return; }
 
   const isAdmin = currentUser?.role === 'admin';
   const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kategoria</th><th>Ilość</th><th>Partie</th><th>Wartość</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Ilość</th><th>Partie</th><th>Wartość</th></tr></thead>';
   const tbody = document.createElement('tbody');
   rows.forEach(r => {
     const tr = document.createElement('tr');
     if (isAdmin) { tr.className = 'wh-product-row'; tr.title = 'Kliknij, aby edytować produkt i partie'; }
     tr.innerHTML =
+      `<td>${escapeHtml(r.itemCode || '—')}</td>` +
       `<td>${escapeHtml(r.name || '—')}</td>` +
       `<td>${escapeHtml(r.category || '—')}</td>` +
       `<td>${escapeHtml(r.quantity)}</td>` +
@@ -3114,6 +3127,41 @@ function applyProductsFilter() {
 // Formatowanie kwoty w PLN (dwie miejsca po przecinku).
 function formatPln(value) {
   return `${(Number(value) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+}
+
+// --- Eksport CSV widoków Magazynu (kod produktu wraca tutaj na życzenie) ---
+// Eksportujemy to, co aktualnie widać (po filtrze). Wartość liczbowa z kropką
+// dziesiętną, żeby była maszynowo czytelna; BOM/UTF-8 obsługuje downloadCsv.
+function exportWarehouseProductsCsv() {
+  const rows = warehouseProductsFiltered;
+  if (!rows.length) { showToast('Brak produktów do eksportu.'); return; }
+  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Marka', 'Model', 'Ilosc', 'Partie', 'Wartosc (zl)', 'Notatka'];
+  const data = rows.map(r => [
+    r.itemCode || '', r.name || '', r.category || '', r.brand || '', r.model || '',
+    r.quantity ?? 0, r.batchCount || 0, (Number(r.totalValue) || 0).toFixed(2), r.notes || ''
+  ]);
+  downloadCsv(`magazyn-produkty-${csvDateStamp()}.csv`, buildCsv(headers, data));
+}
+
+function exportWarehouseStockCsv() {
+  const rows = warehouseStockFiltered;
+  if (!rows.length) { showToast('Brak pozycji do eksportu.'); return; }
+  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Lokalizacja', 'Ilosc'];
+  const data = rows.map(r => [
+    r.itemCode || '', r.name || '', r.category || '', r.locationName || '', r.quantity ?? 0
+  ]);
+  downloadCsv(`magazyn-stan-${csvDateStamp()}.csv`, buildCsv(headers, data));
+}
+
+function exportWarehouseMovesCsv() {
+  const rows = warehouseMovesState;
+  if (!rows.length) { showToast('Brak ruchów do eksportu.'); return; }
+  const headers = ['Data', 'Sprzet', 'Kod', 'Z', 'Do', 'Ilosc', 'Rodzaj', 'Osoba'];
+  const data = rows.map(m => [
+    formatDateTime(m.doneAt), m.itemName || '', m.itemCode || '', m.fromName || '', m.toName || '',
+    m.quantity ?? 0, MOVE_KIND_LABELS[m.kind] || m.kind || '', m.actorEmail || ''
+  ]);
+  downloadCsv(`magazyn-ruchy-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
 // --- Okno produktu Magazynu: edycja danych + partie cenowe (Ask 2 + Ask 3) ---
@@ -3157,6 +3205,10 @@ function openWarehouseProductModal(product) {
   }
   editingWarehouseProductId = product.id;
   if (whProductTitle) whProductTitle.textContent = product.name || 'Produkt';
+  if (whProductCode) {
+    whProductCode.textContent = product.itemCode ? `Kod: ${product.itemCode}` : '';
+    whProductCode.hidden = !product.itemCode;
+  }
   if (whProductName) whProductName.value = product.name || '';
   setSelectValue(whProductCategory, product.category);
   if (whProductBrand) whProductBrand.value = product.brand || '';
@@ -3225,6 +3277,8 @@ function applyWarehouseStockFilter() {
     normalizeText(r.itemCode).includes(q) ||
     normalizeText(r.name).includes(q) ||
     normalizeText(r.category).includes(q));
+  warehouseStockFiltered = rows;
+  if (whStockExport) whStockExport.disabled = !rows.length;
   renderWarehouseStock(rows);
 }
 
@@ -3233,11 +3287,12 @@ function renderWarehouseStock(rows) {
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
+      <th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
     </tr></thead>`;
   const tbody = document.createElement('tbody');
   tbody.innerHTML = rows.map(r => `
     <tr>
+      <td>${escapeHtml(r.itemCode || '—')}</td>
       <td>${escapeHtml(r.name || '—')}</td>
       <td>${escapeHtml(r.category || '—')}</td>
       <td>${escapeHtml(r.locationName || '—')}</td>
@@ -3250,6 +3305,8 @@ function renderWarehouseStock(rows) {
 
 async function loadWarehouseMoves() {
   const moves = await api('/warehouse/moves?limit=200');
+  warehouseMovesState = moves;
+  if (whMovesExport) whMovesExport.disabled = !moves.length;
   renderWarehouseMoves(moves);
 }
 
@@ -3258,13 +3315,14 @@ function renderWarehouseMoves(moves) {
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Data</th><th>Sprzęt</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Osoba</th>
+      <th>Data</th><th>Sprzęt</th><th>Kod</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Osoba</th>
     </tr></thead>`;
   const tbody = document.createElement('tbody');
   tbody.innerHTML = moves.map(m => `
     <tr>
       <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
       <td>${escapeHtml(m.itemName || '—')}</td>
+      <td>${escapeHtml(m.itemCode || '—')}</td>
       <td>${escapeHtml(m.fromName || '—')}</td>
       <td>${escapeHtml(m.toName || '—')}</td>
       <td>${escapeHtml(m.quantity)}</td>
@@ -3373,6 +3431,9 @@ if (reorderRuleModal) {
 if (whProductsSearch) whProductsSearch.addEventListener('input', applyProductsFilter);
 if (warehouseSearchInput) warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);
 if (warehouseLocationFilter) warehouseLocationFilter.addEventListener('change', applyWarehouseStockFilter);
+if (whProductsExport) whProductsExport.addEventListener('click', exportWarehouseProductsCsv);
+if (whStockExport) whStockExport.addEventListener('click', exportWarehouseStockCsv);
+if (whMovesExport) whMovesExport.addEventListener('click', exportWarehouseMovesCsv);
 
 if (operationAddLineBtn) operationAddLineBtn.addEventListener('click', () => addOperationLine());
 [operationCloseBtn2, closeOperationBtn].forEach(b => b && b.addEventListener('click', closeOperationModal));

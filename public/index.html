@@ -353,7 +353,8 @@
         <!-- Produkty: kartoteka sprzętu ze stanem łącznym -->
         <div id="whProductsView" hidden>
           <div class="toolbar">
-            <input id="whProductsSearch" class="search-input" type="search" placeholder="Szukaj sprzętu…" />
+            <input id="whProductsSearch" class="search-input" type="search" placeholder="Szukaj po nazwie, kodzie, kategorii…" />
+            <button id="whProductsExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
           </div>
           <div id="whProductsContent" class="admin-content"></div>
         </div>
@@ -373,10 +374,14 @@
                 placeholder="Szukaj po nazwie, kodzie, kategorii…"
               />
               <select id="warehouseLocationFilter" class="search-input" aria-label="Filtruj po lokalizacji"></select>
+              <button id="whStockExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
             </div>
             <div id="warehouseStockContent" class="admin-content"></div>
           </div>
           <div id="whReportMoves" hidden>
+            <div class="toolbar">
+              <button id="whMovesExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
+            </div>
             <div id="warehouseMovesContent" class="admin-content"></div>
           </div>
         </div>
@@ -898,6 +903,7 @@
         <div>
           <p class="eyebrow">Magazyn</p>
           <h3 id="whProductTitle">Produkt</h3>
+          <p class="muted wh-product-code" id="whProductCode" hidden></p>
         </div>
         <button type="button" class="modal-close" id="closeWhProductBtn" aria-label="Zamknij okno">×</button>
       </div>
