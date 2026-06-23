@@ -202,6 +202,7 @@ const operationAddLineBtn = document.getElementById('operationAddLineBtn');
 const operationStateHint = document.getElementById('operationStateHint');
 const operationSaveBtn = document.getElementById('operationSaveBtn');
 const operationValidateBtn = document.getElementById('operationValidateBtn');
+const operationReverseBtn = document.getElementById('operationReverseBtn');
 const operationCancelOpBtn = document.getElementById('operationCancelOpBtn');
 const operationCloseBtn2 = document.getElementById('operationCloseBtn2');
 const closeOperationBtn = document.getElementById('closeOperationBtn');
@@ -2627,6 +2628,15 @@ const OP_TYPE_NAV_LABELS = {
   receipt: 'Przyjęcia', delivery: 'Dostawy', internal: 'Wewnętrzne',
   scrap: 'Odpad', adjustment: 'Inwentarz fizyczny'
 };
+// Ikona + kolor akcentu kafelka Przeglądu (per typ operacji).
+const OP_TYPE_META = {
+  receipt: { icon: '📥', accent: '#2563eb' },
+  delivery: { icon: '📤', accent: '#7c3aed' },
+  internal: { icon: '🔄', accent: '#0891b2' },
+  scrap: { icon: '🗑️', accent: '#dc2626' },
+  adjustment: { icon: '📋', accent: '#059669' },
+  replenishment: { icon: '🛒', accent: '#d97706' }
+};
 
 let warehouseStockState = [];
 
@@ -2703,35 +2713,50 @@ function renderOverview(types, replenishment) {
   for (const t of types) (groups[t.group] = groups[t.group] || []).push(t);
   const groupOrder = ['Przekazy', 'Korekty'];
 
+  const card = ({ type, title, icon, accent, num, numLabel, sub, subLabel }) => `
+    <button class="wh-card" type="button" data-whgo="${escapeHtml(type)}" style="--accent:${accent}">
+      <div class="wh-card-head">
+        <span class="wh-card-icon">${icon}</span>
+        <span class="wh-card-title">${escapeHtml(title)}</span>
+      </div>
+      <div class="wh-card-metrics">
+        <div class="wh-metric">
+          <span class="wh-metric-num${num > 0 ? ' is-active' : ''}">${num}</span>
+          <span class="wh-metric-label">${escapeHtml(numLabel)}</span>
+        </div>
+        <div class="wh-metric">
+          <span class="wh-metric-num wh-metric-done">${sub}</span>
+          <span class="wh-metric-label">${escapeHtml(subLabel)}</span>
+        </div>
+      </div>
+    </button>`;
+
   let html = Object.keys(groups)
     .sort((a, b) => groupOrder.indexOf(a) - groupOrder.indexOf(b))
     .map(group => {
       const cards = groups[group]
         .sort((a, b) => OP_TYPE_ORDER.indexOf(a.type) - OP_TYPE_ORDER.indexOf(b.type))
         .map(t => {
-          const todo = (t.draft || 0) + (t.ready || 0);
-          return `
-            <button class="wh-card" type="button" data-whgo="${escapeHtml(t.type)}">
-              <span class="wh-card-title">${escapeHtml(OP_TYPE_NAV_LABELS[t.type] || t.label)}</span>
-              <span class="wh-card-todo">${todo}</span>
-              <span class="wh-card-sub muted">do zrobienia · ${t.done || 0} wykonano</span>
-            </button>`;
+          const meta = OP_TYPE_META[t.type] || { icon: '📦', accent: 'var(--primary)' };
+          return card({
+            type: t.type, title: OP_TYPE_NAV_LABELS[t.type] || t.label,
+            icon: meta.icon, accent: meta.accent,
+            num: (t.draft || 0) + (t.ready || 0), numLabel: 'do zrobienia',
+            sub: t.done || 0, subLabel: 'wykonano'
+          });
         }).join('');
       return `<div class="wh-group"><p class="eyebrow">${escapeHtml(group)}</p><div class="wh-cards">${cards}</div></div>`;
     }).join('');
 
   // Grupa „Zapotrzebowanie": kafelek z liczbą pozycji poniżej minimum.
   if (replenishment) {
-    const below = replenishment.below || 0;
-    const rules = replenishment.rules || 0;
+    const meta = OP_TYPE_META.replenishment;
     html += `
-      <div class="wh-group"><p class="eyebrow">Zapotrzebowanie</p><div class="wh-cards">
-        <button class="wh-card" type="button" data-whgo="replenishment">
-          <span class="wh-card-title">Zapotrzebowanie</span>
-          <span class="wh-card-todo">${below}</span>
-          <span class="wh-card-sub muted">do uzupełnienia · ${rules} reguł min-max</span>
-        </button>
-      </div></div>`;
+      <div class="wh-group"><p class="eyebrow">Zapotrzebowanie</p><div class="wh-cards">${card({
+        type: 'replenishment', title: 'Zapotrzebowanie', icon: meta.icon, accent: meta.accent,
+        num: replenishment.below || 0, numLabel: 'do uzupełnienia',
+        sub: replenishment.rules || 0, subLabel: 'reguł min-max'
+      })}</div></div>`;
   }
 
   if (!html) { renderEmpty(whOverviewContent, 'Brak danych.'); return; }
@@ -3065,9 +3090,13 @@ async function openOperationModal(type, id = null) {
   operationSaveBtn.hidden = !editable;
   operationValidateBtn.hidden = !editable;
   operationCancelOpBtn.hidden = !(editable && id);
+  // „Cofnij wykonanie": tylko dla wykonanej operacji (admin) — odwraca i wraca do roboczej.
+  if (operationReverseBtn) operationReverseBtn.hidden = !(isAdmin && currentOperation.state === 'done');
 
   operationStateHint.hidden = !locked;
-  if (currentOperation.state === 'done') operationStateHint.textContent = 'Operacja wykonana — wygenerowała ruchy w rejestrze.';
+  if (currentOperation.state === 'done') operationStateHint.textContent = isAdmin
+    ? 'Operacja wykonana — wygenerowała ruchy w rejestrze. Aby poprawić, użyj „Cofnij wykonanie".'
+    : 'Operacja wykonana — wygenerowała ruchy w rejestrze.';
   if (currentOperation.state === 'cancelled') operationStateHint.textContent = 'Operacja anulowana.';
 
   if (!operationModal.open) operationModal.showModal();
@@ -3655,6 +3684,20 @@ if (operationCancelOpBtn) {
       showToast('Anulowano operację');
       closeOperationModal();
       await loadOperationsList(warehouseOpType);
+    } catch (err) { showToast(err.message); }
+  });
+}
+if (operationReverseBtn) {
+  operationReverseBtn.addEventListener('click', async () => {
+    if (!currentOperation?.id) return;
+    if (!confirm('Cofnąć wykonanie? Ruchy i partie cenowe tej operacji zostaną odwrócone, a operacja wróci do edycji.')) return;
+    const { id, type } = currentOperation;
+    try {
+      const res = await api(`/warehouse/operations/${encodeURIComponent(id)}/reverse`, { method: 'POST' });
+      showToast(res.message || 'Cofnięto wykonanie');
+      await refreshWarehouseHeader();
+      // Otwórz ponownie jako roboczą — gotową do edycji i ponownego zatwierdzenia.
+      await openOperationModal(type, id);
     } catch (err) { showToast(err.message); }
   });
 }
