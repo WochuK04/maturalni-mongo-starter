@@ -124,6 +124,7 @@
 .wh-product-row { cursor: pointer; }
 .wh-product-row:hover { background: var(--surface-2); }
 .wh-products-hint { margin: 10px 2px 0; font-size: 12px; }
+.wh-product-code { margin: 2px 0 0; font-size: 12px; font-family: var(--font-mono, monospace); }
 
 .wh-batches { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 .wh-batches-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
