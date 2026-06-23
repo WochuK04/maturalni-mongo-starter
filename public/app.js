@@ -199,7 +199,7 @@ const closeReorderRuleBtn = document.getElementById('closeReorderRuleBtn');
 
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
-  const label = String(item.itemCode || item.name || category).trim();
+  const label = String(item.name || category).trim();
 
   const paletteMap = {
     Kamera: ['#dbeafe', '#93c5fd', '#1d4ed8'],
@@ -570,7 +570,7 @@ function fillRequestNode(node, req, { withRequester } = {}) {
     metaEl.textContent = `${base}${req.estimatedPrice ? ` · ~${req.estimatedPrice}` : ''} · uzasadnienie: ${req.justification || '-'} · `;
     metaEl.appendChild(makeShopLink(req.shopUrl));
   } else {
-    titleEl.textContent = `${req.itemName} (${req.itemCode})`;
+    titleEl.textContent = `${req.itemName || 'Sprzęt'}`;
     const base = withRequester
       ? `${who} · ${req.requesterEmail}`
       : `Status: ${getRequestStatusLabel(req.status)}`;
@@ -750,7 +750,7 @@ function hideAuditFilters() {
 
 function openRequestForm(item) {
   requestItemCode.value = item.itemCode || '';
-  requestItemName.value = `${item.name || ''} (${item.itemCode || ''})`;
+  requestItemName.value = `${item.name || ''}`;
   purposeInput.value = '';
   targetUseLocationInput.value = 'Dom';
   requestedReturnDateInput.value = '';
@@ -1063,12 +1063,15 @@ function renderAvailableGallery(items) {
     }, { once: true });
 
     category.textContent = item.category || 'Sprzęt';
-    title.textContent = item.name || item.itemCode || 'Bez nazwy';
+    title.textContent = item.name || 'Bez nazwy';
     status.textContent = getStatusLabel(item.operationalStatus);
     status.classList.add('badge-status');
     status.dataset.status = item.operationalStatus || '';
 
-    code.textContent = `${item.itemCode || '-'}${item.brand ? ` · ${item.brand}` : ''}${item.model ? ` ${item.model}` : ''}`;
+    // Kod sprzętu ukryty — pokazujemy tylko markę/model (gdy są).
+    const brandModel = [item.brand, item.model].filter(Boolean).join(' ');
+    code.textContent = brandModel;
+    code.hidden = !brandModel;
     description.textContent = item.details || 'Brak krótkiego opisu sprzętu.';
     location.textContent = item.currentLocation || 'Brak lokalizacji';
     condition.textContent = `stan: ${getConditionLabel(item.conditionStatus)}`;
@@ -1100,10 +1103,10 @@ function renderAvailableListView(items) {
 
     const main = document.createElement('div');
     main.className = 'equipment-row-main';
-    const codeMeta = [item.itemCode || '-', item.category || 'Sprzęt', [item.brand, item.model].filter(Boolean).join(' ')]
+    const codeMeta = [item.category || 'Sprzęt', [item.brand, item.model].filter(Boolean).join(' ')]
       .filter(Boolean).join(' · ');
     main.innerHTML =
-      `<div class="equipment-row-title">${escapeHtml(item.name || item.itemCode || 'Bez nazwy')}</div>` +
+      `<div class="equipment-row-title">${escapeHtml(item.name || 'Bez nazwy')}</div>` +
       `<div class="equipment-row-meta muted">${escapeHtml(codeMeta)}</div>`;
 
     const loc = document.createElement('div');
@@ -1200,7 +1203,7 @@ async function openItemDetails(itemCode) {
     modalItemStatus.textContent = getStatusLabel(item.operationalStatus);
     modalItemStatus.dataset.status = item.operationalStatus || '';
     modalItemCategory.textContent = item.category || 'Sprzęt';
-    modalItemTitle.textContent = item.name || item.itemCode || 'Bez nazwy';
+    modalItemTitle.textContent = item.name || 'Bez nazwy';
     modalItemSubtitle.textContent =
       [item.brand, item.model].filter(Boolean).join(' · ') || 'Brak dodatkowych danych producenta';
 
@@ -1362,7 +1365,7 @@ async function loadMyRequests() {
       cancelBtn.addEventListener('click', async () => {
         try {
           await api(`/my/loan-requests/${req._id}/cancel`, { method: 'POST' });
-          showToast(`Anulowano wniosek: ${req.itemCode}`);
+          showToast(`Anulowano wniosek: ${req.itemName || 'sprzęt'}`);
           await refreshAll();
           await loadMyRequests();
         } catch (err) {
@@ -1390,7 +1393,7 @@ async function loadMyLoans() {
   items.forEach(item => {
     const node = loanTpl.content.cloneNode(true);
     node.querySelector('.item-title').textContent =
-      `${item.name || item.itemCode} (${item.itemCode})`;
+      `${item.name || 'Bez nazwy'}`;
     node.querySelector('.item-meta').textContent =
       `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${getConditionLabel(item.conditionStatus)}`;
 
@@ -1423,7 +1426,7 @@ async function loadMyLoans() {
           })
         });
 
-        showToast(`Oddano: ${item.itemCode}`);
+        showToast(`Oddano: ${item.name || 'sprzęt'}`);
         await refreshAll();
         await loadMyLoans();
       } catch (err) {
@@ -1803,10 +1806,9 @@ async function loadDashboard() {
 
   const warrantyHtml = warranty.items && warranty.items.length
     ? `<div class="admin-content"><table>
-        <thead><tr><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Gwarancja do</th><th>Status</th></tr></thead>
+        <thead><tr><th>Nazwa</th><th>Kategoria</th><th>Gwarancja do</th><th>Status</th></tr></thead>
         <tbody>${warranty.items.map(item => `
           <tr>
-            <td>${escapeHtml(item.itemCode || '-')}</td>
             <td>${escapeHtml(item.name || '-')}</td>
             <td>${escapeHtml(item.category || '-')}</td>
             <td>${escapeHtml(formatDate(item.warrantyUntil))}</td>
@@ -1861,7 +1863,7 @@ async function loadAdminLoans(status = 'active') {
 
   const columns = status === 'returned'
     ? [
-        { key: 'itemCode', label: 'Kod sprzętu' },
+        { key: 'itemName', label: 'Sprzęt' },
         { key: 'userEmail', label: 'Użytkownik' },
         { key: 'borrowedAtLabel', label: 'Wypożyczono' },
         { key: 'returnedAtLabel', label: 'Zwrócono' },
@@ -1869,7 +1871,7 @@ async function loadAdminLoans(status = 'active') {
         { key: 'returnNote', label: 'Notatka zwrotu' }
       ]
     : [
-        { key: 'itemCode', label: 'Kod sprzętu' },
+        { key: 'itemName', label: 'Sprzęt' },
         { key: 'userEmail', label: 'Użytkownik' },
         { key: 'fromLocation', label: 'Skąd' },
         { key: 'targetUseLocation', label: 'Gdzie używane' },
@@ -1927,7 +1929,7 @@ async function loadAdminRequests() {
 
         showToast(req.kind === 'purchase'
           ? 'Zatwierdzono zakup — do zamówienia'
-          : `Wydano sprzęt: ${req.itemCode}`);
+          : `Wydano sprzęt: ${req.itemName || 'sprzęt'}`);
         await refreshStats();
         await loadAdminRequests();
         await refreshInboxBadge();
@@ -1943,7 +1945,7 @@ async function loadAdminRequests() {
           body: JSON.stringify({ decisionNote: noteInput.value || '' })
         });
 
-        showToast(`Odrzucono wniosek: ${req.itemCode}`);
+        showToast(`Odrzucono wniosek: ${req.itemName || 'sprzęt'}`);
         await refreshStats();
         await loadAdminRequests();
         await refreshInboxBadge();
@@ -2257,8 +2259,8 @@ async function loadTeam() {
       list.className = 'team-list';
       member.items.forEach(item => {
         const li = document.createElement('li');
-        li.innerHTML = `<strong>${escapeHtml(item.name || item.itemCode)}</strong>
-          <span class="muted">(${escapeHtml(item.itemCode)}) · ${escapeHtml(getStatusLabel(item.operationalStatus))} · ${escapeHtml(item.currentLocation || '-')}</span>`;
+        li.innerHTML = `<strong>${escapeHtml(item.name || 'Bez nazwy')}</strong>
+          <span class="muted">${escapeHtml(getStatusLabel(item.operationalStatus))} · ${escapeHtml(item.currentLocation || '-')}</span>`;
         list.appendChild(li);
       });
       itemsBlock.innerHTML = '<h4>Przypisany sprzęt</h4>';
@@ -2278,7 +2280,7 @@ async function loadTeam() {
         const li = document.createElement('li');
         const label = req.kind === 'purchase'
           ? `🛒 ${req.itemName || 'Nowy sprzęt'}`
-          : `${req.itemName || req.itemCode} (${req.itemCode})`;
+          : `${req.itemName || 'Sprzęt'}`;
         li.innerHTML = `<strong>${escapeHtml(label)}</strong>
           <span class="muted">· ${escapeHtml(getRequestStatusLabel(req.status))}</span>`;
         list.appendChild(li);
@@ -2324,10 +2326,10 @@ async function loadReports() {
     const title = document.createElement('h3');
     title.className = 'item-title';
     if (n.kind === 'transfer') {
-      title.textContent = `🔄 Transfer: ${n.itemName || n.itemCode || ''} (${n.itemCode || '-'})`;
+      title.textContent = `🔄 Transfer: ${n.itemName || 'Sprzęt'}`;
     } else {
       const typeLabel = ISSUE_TYPE_LABELS[n.issueType] || 'Zgłoszenie';
-      title.textContent = `⚠️ ${typeLabel}: ${n.itemName || n.itemCode || ''} (${n.itemCode || '-'})`;
+      title.textContent = `⚠️ ${typeLabel}: ${n.itemName || 'Sprzęt'}`;
     }
     main.appendChild(title);
 
@@ -2415,9 +2417,8 @@ const AUDIT_ACTION_LABELS = {
 // Czego dotyczyła akcja — sprzęt, zakup lub inny użytkownik.
 function getAuditSubject(log) {
   const p = log.payload || {};
-  if (p.itemName && p.itemCode) return `${p.itemName} (${p.itemCode})`;
-  if (p.itemCode) return p.itemCode;
   if (p.itemName) return p.itemName;
+  if (p.itemCode) return p.itemCode;
   if (p.email) return p.email;
   if (p.requesterEmail) return p.requesterEmail;
   if (log.entityType === 'user' && log.entityId) return log.entityId;
@@ -2890,7 +2891,7 @@ function locationOptions(selectedId, kinds) {
 function itemOptions(selectedCode) {
   const items = warehouseFormData?.items || [];
   return '<option value="">— wybierz sprzęt —</option>' + items.map(it =>
-    `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.itemCode)} · ${escapeHtml(it.name)}</option>`).join('');
+    `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.name || 'Bez nazwy')}</option>`).join('');
 }
 
 function resolveDefaultLocId(code) {
@@ -3057,7 +3058,8 @@ async function loadWarehouseProducts() {
     e.total += r.quantity;
     byCode.set(r.itemCode, e);
   }
-  warehouseProductsState = [...byCode.values()].sort((a, b) => a.itemCode.localeCompare(b.itemCode));
+  warehouseProductsState = [...byCode.values()].sort((a, b) =>
+    String(a.name || '').localeCompare(String(b.name || ''), 'pl'));
   applyProductsFilter();
 }
 
@@ -3068,10 +3070,10 @@ function applyProductsFilter() {
     normalizeText(r.itemCode).includes(q) || normalizeText(r.name).includes(q) || normalizeText(r.category).includes(q));
   if (!rows.length) { renderEmpty(whProductsContent, 'Brak sprzętu.'); return; }
   const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Na stanie (łącznie)</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kategoria</th><th>Na stanie (łącznie)</th></tr></thead>';
   const tbody = document.createElement('tbody');
   tbody.innerHTML = rows.map(r =>
-    `<tr><td>${escapeHtml(r.itemCode)}</td><td>${escapeHtml(r.name || '—')}</td><td>${escapeHtml(r.category || '—')}</td><td>${escapeHtml(r.total)}</td></tr>`).join('');
+    `<tr><td>${escapeHtml(r.name || '—')}</td><td>${escapeHtml(r.category || '—')}</td><td>${escapeHtml(r.total)}</td></tr>`).join('');
   table.appendChild(tbody);
   whProductsContent.innerHTML = '';
   whProductsContent.appendChild(table);
@@ -3111,12 +3113,11 @@ function renderWarehouseStock(rows) {
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
+      <th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
     </tr></thead>`;
   const tbody = document.createElement('tbody');
   tbody.innerHTML = rows.map(r => `
     <tr>
-      <td>${escapeHtml(r.itemCode)}</td>
       <td>${escapeHtml(r.name || '—')}</td>
       <td>${escapeHtml(r.category || '—')}</td>
       <td>${escapeHtml(r.locationName || '—')}</td>
@@ -3143,7 +3144,7 @@ function renderWarehouseMoves(moves) {
   tbody.innerHTML = moves.map(m => `
     <tr>
       <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
-      <td>${escapeHtml(m.itemCode)}${m.itemName ? ` · ${escapeHtml(m.itemName)}` : ''}</td>
+      <td>${escapeHtml(m.itemName || '—')}</td>
       <td>${escapeHtml(m.fromName || '—')}</td>
       <td>${escapeHtml(m.toName || '—')}</td>
       <td>${escapeHtml(m.quantity)}</td>
@@ -3376,7 +3377,7 @@ document.addEventListener('click', async (e) => {
 
     if (item) {
       openRequestForm(item);
-      showToast(`Przygotowano wniosek: ${item.itemCode}`);
+      showToast(`Przygotowano wniosek: ${item.name || 'sprzęt'}`);
     }
   }
 });
@@ -3442,7 +3443,7 @@ if (loanRequestForm) {
         body: JSON.stringify(payload)
       });
 
-      showToast(`Wysłano wniosek: ${payload.itemCode}`);
+      showToast('Wysłano wniosek.');
       closeRequestForm();
       closeItemDetails();
       await refreshAll();
@@ -3844,7 +3845,7 @@ function openDiscardModal(item) {
   if (discardItemForm) discardItemForm.reset();
   if (discardItemTarget) {
     discardItemTarget.textContent =
-      `Wycofujesz „${item.name || item.itemCode}" (${item.itemCode}). Sprzęt zniknie z list, ale zostanie w bazie jako ślad.`;
+      `Wycofujesz „${item.name || 'sprzęt'}". Sprzęt zniknie z list, ale zostanie w bazie jako ślad.`;
   }
   syncDiscardOther();
 
@@ -3879,7 +3880,7 @@ if (discardItemForm) {
         method: 'POST',
         body: JSON.stringify({ reason })
       });
-      showToast(`Wycofano sprzęt: ${item.itemCode}`);
+      showToast(`Wycofano sprzęt: ${item.name || 'sprzęt'}`);
       closeDiscardModal();
       await loadAdminItems();
       await refreshStats();
@@ -3922,13 +3923,13 @@ async function openTransferModal(item, mode = 'admin') {
   if (transferItemTarget) {
     if (mode === 'user') {
       transferItemTarget.textContent =
-        `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}) na innego pracownika. Sprzęt zostanie przypisany wybranej osobie, a administracja zobaczy to działanie.`;
+        `Przenosisz „${item.name || 'sprzęt'}" na innego pracownika. Sprzęt zostanie przypisany wybranej osobie, a administracja zobaczy to działanie.`;
     } else {
       const holder = item.assignedToEmail
         ? `Obecnie u: ${item.assignedToName || item.assignedToEmail}.`
         : 'Sprzęt nie jest obecnie przypisany.';
       transferItemTarget.textContent =
-        `Przenosisz „${item.name || item.itemCode}" (${item.itemCode}). ${holder} Dotychczasowe wypożyczenie zostanie zamknięte, a sprzęt przypisany nowej osobie.`;
+        `Przenosisz „${item.name || 'sprzęt'}". ${holder} Dotychczasowe wypożyczenie zostanie zamknięte, a sprzęt przypisany nowej osobie.`;
     }
   }
 
@@ -3963,7 +3964,7 @@ if (transferItemForm) {
           method: 'POST',
           body: JSON.stringify({ toEmail, note })
         });
-        showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
+        showToast(`Przeniesiono sprzęt: ${item.name || 'sprzęt'}`);
         closeTransferModal();
         await loadMyLoans();
         await refreshAll();
@@ -3972,7 +3973,7 @@ if (transferItemForm) {
           method: 'POST',
           body: JSON.stringify({ toEmail, note })
         });
-        showToast(`Przeniesiono sprzęt: ${item.itemCode}`);
+        showToast(`Przeniesiono sprzęt: ${item.name || 'sprzęt'}`);
         closeTransferModal();
         await loadAdminItems();
         await refreshStats();
@@ -3995,7 +3996,7 @@ function openReportIssueModal(item) {
   if (reportIssueType) reportIssueType.value = 'damage';
   if (reportIssueTarget) {
     reportIssueTarget.textContent =
-      `Zgłaszasz problem ze sprzętem „${item.name || item.itemCode}" (${item.itemCode}). Zgłoszenie trafi do administracji.`;
+      `Zgłaszasz problem ze sprzętem „${item.name || 'sprzęt'}". Zgłoszenie trafi do administracji.`;
   }
   if (!reportIssueModal.open) reportIssueModal.showModal();
 }
@@ -4104,7 +4105,7 @@ if (modalRequestBtn) {
     if (!activeModalItem) return;
     openRequestForm(activeModalItem);
     closeItemDetails();
-    showToast(`Przygotowano wniosek: ${activeModalItem.itemCode}`);
+    showToast(`Przygotowano wniosek: ${activeModalItem.name || 'sprzęt'}`);
   });
 }
 

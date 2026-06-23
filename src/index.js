@@ -111,6 +111,12 @@ const ITEM_CONDITIONS = [
 
 const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwis'];
 
+// Kategorie „nie-elektroniczne" — materiały, które nie są sprzętem do wypożyczania.
+// Widok „Dostępny sprzęt" pokazuje TYLKO elektronikę, więc te kategorie są z niego
+// wykluczone (pozostają widoczne w module Magazyn, który prezentuje wszystkie kategorie).
+// Porównanie jest case-insensitive — trzymamy wartości po małej literze.
+const WAREHOUSE_ONLY_CATEGORIES = ['gadżet', 'opakowanie', 'sponsor', 'towar'];
+
 // Stan techniczny z importu CSV bywa wpisany "po polsku" albo jako surowa wartość.
 // Sprowadzamy do znanej wartości z ITEM_CONDITIONS, w razie wątpliwości fallback.
 const CONDITION_VALUES = ITEM_CONDITIONS.map(c => c.value);
@@ -237,6 +243,11 @@ app.get('/items/available', requireAuth, async (_req, res) => {
         operationalStatus: 'available',
         isStudioLocked: { $ne: true },
         currentLocation: { $ne: 'Studio' },
+        // „Dostępny sprzęt" = tylko elektronika. Wykluczamy kategorie magazynowe
+        // (gadżet/opakowanie/sponsor/towar) niezależnie od wielkości liter.
+        $expr: {
+          $not: [{ $in: [{ $toLower: { $ifNull: ['$category', ''] } }, WAREHOUSE_ONLY_CATEGORIES] }]
+        },
         $and: [
           {
             $or: [
@@ -2664,7 +2675,16 @@ app.get('/admin/loans', requireAuth, requireAdmin, async (req, res) => {
     .sort({ borrowedAt: -1 })
     .toArray();
 
-  res.json(loans);
+  // Dołączamy nazwę sprzętu, żeby tabela admina mogła pokazać nazwę zamiast kodu.
+  const codes = [...new Set(loans.map(l => l.itemCode).filter(Boolean))];
+  const items = codes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, name: 1 } })
+        .toArray()
+    : [];
+  const nameByCode = new Map(items.map(it => [it.itemCode, it.name]));
+
+  res.json(loans.map(l => ({ ...l, itemName: nameByCode.get(l.itemCode) || '' })));
 });
 
 app.get('/admin/loan-requests', requireAuth, requireAdmin, async (req, res) => {
