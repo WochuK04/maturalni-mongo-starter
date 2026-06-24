@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -384,6 +384,9 @@ app.get('/locations', requireAuth, async (_req, res) => {
 const PHYSICAL_KINDS = [LOCATION_KINDS.INTERNAL, LOCATION_KINDS.EMPLOYEE];
 const TREE_KINDS = [LOCATION_KINDS.VIEW, LOCATION_KINDS.INTERNAL, LOCATION_KINDS.EMPLOYEE];
 
+// Ochrona lokalizacji systemowych (isProtectedLocation) i generowanie kodu
+// (slugifyLocationCode) żyją w stock.js — przy modelu lokalizacji.
+
 // Drzewo lokalizacji (fizyczne + węzły grupujące) ze stanem na każdej z nich.
 app.get('/warehouse/locations', requireAuth, requireWarehouseRead, async (_req, res) => {
   const db = await getDb();
@@ -408,9 +411,112 @@ app.get('/warehouse/locations', requireAuth, requireWarehouseRead, async (_req, 
       parentId: l.parentId || null,
       depth: Array.isArray(l.ancestors) ? l.ancestors.length : 0,
       onHand: agg?.qty || 0,
-      lines: agg?.lines || 0
+      lines: agg?.lines || 0,
+      // editable=true tylko dla własnych fizycznych — standardowe/wirtualne są chronione.
+      editable: !isProtectedLocation(l)
     };
   }));
+});
+
+// ----- Lokalizacje: CRUD własnych fizycznych (jak dostawcy/miejsca dostaw).
+// Standardowe (kody z STANDARD_LOCATIONS) i wirtualne są chronione: logika stanu
+// trzyma się ich kodów. Nazwa fizycznej lokalizacji żyje też w items.currentLocation
+// jako tekst, więc zmiana nazwy kaskaduje na sprzęt. -----
+app.post('/warehouse/locations', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const col = db.collection(collections.locations);
+
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'Podaj nazwę lokalizacji' });
+  const kind = req.body.kind === LOCATION_KINDS.EMPLOYEE ? LOCATION_KINDS.EMPLOYEE : LOCATION_KINDS.INTERNAL;
+
+  const dupName = await col.findOne({ name });
+  if (dupName) return res.status(409).json({ message: 'Lokalizacja o tej nazwie już istnieje' });
+
+  // Rodzic: domyślnie węzeł „WH" (Magazyn główny). Akceptuje id albo kod; musi być
+  // węzłem drzewa fizycznego (view/internal/employee), nie wirtualnym.
+  const parentRef = req.body.parentId ? String(req.body.parentId) : 'WH';
+  let parent = null;
+  try { parent = await col.findOne({ _id: new ObjectId(parentRef) }); } catch { /* nie ObjectId */ }
+  if (!parent) parent = await col.findOne({ code: parentRef });
+  if (!parent) parent = await col.findOne({ code: 'WH' });
+  if (parent && !TREE_KINDS.includes(parent.kind)) {
+    return res.status(400).json({ message: 'Nieprawidłowy rodzic lokalizacji' });
+  }
+
+  const ancestors = parent ? [...(parent.ancestors || []), parent.code].filter(Boolean) : [];
+  const base = parent?.code ? `${parent.code}/${slugifyLocationCode(name)}` : slugifyLocationCode(name);
+  let code = base;
+  for (let n = 2; await col.findOne({ code }); n += 1) code = `${base}${n}`;
+
+  const now = new Date();
+  const doc = {
+    code, name, kind,
+    parentId: parent ? String(parent._id) : null,
+    ancestors, isActive: true, createdAt: now, updatedAt: now
+  };
+  const { insertedId } = await col.insertOne(doc);
+  res.status(201).json({ id: String(insertedId), code, name, kind, parentId: doc.parentId });
+});
+
+app.patch('/warehouse/locations/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const col = db.collection(collections.locations);
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+
+  const loc = await col.findOne({ _id: id });
+  if (!loc) return res.status(404).json({ message: 'Lokalizacja nie istnieje' });
+  if (isProtectedLocation(loc)) return res.status(403).json({ message: 'Lokalizacja systemowa — nie można jej edytować' });
+
+  const update = { updatedAt: new Date() };
+  const oldName = loc.name;
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ message: 'Nazwa nie może być pusta' });
+    const dup = await col.findOne({ _id: { $ne: id }, name });
+    if (dup) return res.status(409).json({ message: 'Lokalizacja o tej nazwie już istnieje' });
+    update.name = name;
+  }
+  if (req.body.kind !== undefined) {
+    update.kind = req.body.kind === LOCATION_KINDS.EMPLOYEE ? LOCATION_KINDS.EMPLOYEE : LOCATION_KINDS.INTERNAL;
+  }
+
+  await col.updateOne({ _id: id }, { $set: update });
+
+  // Zmiana nazwy → przenieś ją na sprzęt (items.currentLocation trzyma nazwę tekstowo).
+  if (update.name && update.name !== oldName) {
+    await db.collection(collections.items).updateMany(
+      { currentLocation: oldName },
+      { $set: { currentLocation: update.name, updatedAt: new Date() } }
+    );
+  }
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/warehouse/locations/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const col = db.collection(collections.locations);
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+
+  const loc = await col.findOne({ _id: id });
+  if (!loc) return res.status(404).json({ message: 'Lokalizacja nie istnieje' });
+  if (isProtectedLocation(loc)) return res.status(403).json({ message: 'Lokalizacja systemowa — nie można jej usunąć' });
+
+  // Nie usuwamy lokalizacji ze stanem (osierocone quanty) ani z podlokalizacjami.
+  const onHand = await db.collection(collections.quants).aggregate([
+    { $match: { locationId: String(id) } },
+    { $group: { _id: null, qty: { $sum: '$quantity' } } }
+  ]).toArray();
+  if (onHand[0] && onHand[0].qty !== 0) {
+    return res.status(409).json({ message: 'Nie można usunąć — lokalizacja ma stan. Najpierw przenieś sprzęt.' });
+  }
+  const child = await col.findOne({ parentId: String(id), isActive: { $ne: false } });
+  if (child) return res.status(409).json({ message: 'Nie można usunąć — lokalizacja ma podlokalizacje.' });
+
+  await col.updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
+  res.json({ message: 'Usunięto' });
 });
 
 // Stan magazynowy: pozycje na lokalizacjach fizycznych, z danymi sprzętu.

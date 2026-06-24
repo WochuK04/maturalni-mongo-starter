@@ -265,6 +265,20 @@ const closeDestinationBtn = document.getElementById('closeDestinationBtn');
 const warehouseDestinationsContent = document.getElementById('warehouseDestinationsContent');
 const whAddDestinationBtn = document.getElementById('whAddDestinationBtn');
 
+const locationModal = document.getElementById('locationModal');
+const locationForm = document.getElementById('locationForm');
+const locationModalTitle = document.getElementById('locationModalTitle');
+const locationName = document.getElementById('locationName');
+const locationKind = document.getElementById('locationKind');
+const locationParent = document.getElementById('locationParent');
+const locationParentField = document.getElementById('locationParentField');
+const locationHint = document.getElementById('locationHint');
+const locationSaveBtn = document.getElementById('locationSaveBtn');
+const locationDeleteBtn = document.getElementById('locationDeleteBtn');
+const locationCancelBtn = document.getElementById('locationCancelBtn');
+const closeLocationBtn = document.getElementById('closeLocationBtn');
+const whAddLocationBtn = document.getElementById('whAddLocationBtn');
+
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
   const label = String(item.name || category).trim();
@@ -3826,6 +3840,8 @@ function renderWarehouseMoves(moves) {
 function renderWarehouseLocations(locations) {
   const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
   if (!tree.length) { renderEmpty(warehouseLocationsContent, 'Brak lokalizacji.'); return; }
+  const isAdmin = currentUser?.role === 'admin';
+  const byId = new Map(tree.map(l => [l.id, l]));
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
@@ -3835,20 +3851,113 @@ function renderWarehouseLocations(locations) {
   tbody.innerHTML = tree.map(l => {
     const indent = '&nbsp;'.repeat((l.depth || 0) * 3);
     const isGroup = l.kind === 'view';
+    const canEdit = isAdmin && l.editable;
     const nameCell = isGroup
       ? `${indent}<strong>${escapeHtml(l.name)}</strong>`
       : `${indent}${escapeHtml(l.name)}`;
+    const rowAttrs = canEdit
+      ? ` class="wh-product-row" data-locid="${escapeHtml(l.id)}" title="Kliknij, aby edytować lokalizację"`
+      : '';
     return `
-      <tr>
+      <tr${rowAttrs}>
         <td>${nameCell}</td>
         <td class="muted">${escapeHtml(l.code || '—')}</td>
         <td>${escapeHtml(WAREHOUSE_KIND_LABELS[l.kind] || l.kind || '—')}</td>
         <td>${isGroup ? '<span class="muted">—</span>' : escapeHtml(l.onHand || 0)}</td>
       </tr>`;
   }).join('');
+  if (isAdmin) {
+    tbody.addEventListener('click', (e) => {
+      const tr = e.target.closest('tr[data-locid]');
+      if (tr && byId.has(tr.dataset.locid)) openLocationModal(byId.get(tr.dataset.locid));
+    });
+  }
   table.appendChild(tbody);
   warehouseLocationsContent.innerHTML = '';
   warehouseLocationsContent.appendChild(table);
+  if (isAdmin) {
+    const hint = document.createElement('p');
+    hint.className = 'muted wh-products-hint';
+    hint.textContent = 'Kliknij własną lokalizację, aby edytować. Standardowe i wirtualne są chronione.';
+    warehouseLocationsContent.appendChild(hint);
+  }
+}
+
+// --- Lokalizacje: okno tworzenia/edycji (własne fizyczne; standardowe chronione) ---
+let editingLocationId = null;
+
+// Lista rodziców: węzły grupujące (view) i Magazyn (internal) — „U pracownika" pomijamy.
+function locationParentOptions(selectedId) {
+  const nodes = (warehouseLocationsCache || []).filter(l => l.kind === 'view' || l.kind === 'internal');
+  return nodes.map(l => {
+    const prefix = '— '.repeat(l.depth || 0);
+    const label = `${prefix}${l.name}${l.code ? ` (${l.code})` : ''}`;
+    return `<option value="${escapeHtml(l.id)}"${l.id === selectedId ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+function openLocationModal(location = null) {
+  if (currentUser?.role !== 'admin') { showToast('Zarządzanie lokalizacjami wymaga uprawnień administratora.'); return; }
+  if (location && location.editable === false) { showToast('Ta lokalizacja jest systemowa — nie można jej edytować.'); return; }
+  editingLocationId = location?.id || null;
+  if (locationModalTitle) locationModalTitle.textContent = location ? 'Edytuj lokalizację' : 'Nowa lokalizacja';
+  if (locationName) locationName.value = location?.name || '';
+  if (locationKind) locationKind.value = location?.kind === 'employee' ? 'employee' : 'internal';
+  // Rodzica wybieramy tylko przy tworzeniu; przy edycji zostaje bez zmian (pole ukryte).
+  if (locationParent) locationParent.innerHTML = locationParentOptions(location?.parentId || null);
+  if (locationParentField) locationParentField.hidden = !!location;
+  if (locationDeleteBtn) locationDeleteBtn.hidden = !location;
+  if (locationHint) {
+    locationHint.hidden = !location;
+    locationHint.textContent = location
+      ? 'Zmiana nazwy zaktualizuje też nazwę lokalizacji przy powiązanym sprzęcie.'
+      : '';
+  }
+  if (locationModal && !locationModal.open) locationModal.showModal();
+}
+
+function closeLocationModal() {
+  editingLocationId = null;
+  if (locationModal?.open) locationModal.close();
+}
+
+// Po zapisie/usunięciu: odśwież cache lokalizacji, nagłówek/filtr, dane formularzy
+// operacji i (jeśli otwarta) Konfigurację.
+async function refreshAfterLocationChange() {
+  warehouseFormData = null;
+  await refreshWarehouseHeader();
+  if (whConfigView && !whConfigView.hidden) await renderWarehouseConfig();
+}
+
+async function saveLocation() {
+  const name = (locationName?.value || '').trim();
+  if (!name) { showToast('Podaj nazwę lokalizacji.'); return; }
+  const kind = locationKind?.value === 'employee' ? 'employee' : 'internal';
+  try {
+    if (editingLocationId) {
+      await api(`/warehouse/locations/${encodeURIComponent(editingLocationId)}`, {
+        method: 'PATCH', body: JSON.stringify({ name, kind })
+      });
+    } else {
+      await api('/warehouse/locations', {
+        method: 'POST', body: JSON.stringify({ name, kind, parentId: locationParent?.value || null })
+      });
+    }
+    showToast('Zapisano lokalizację.');
+    closeLocationModal();
+    await refreshAfterLocationChange();
+  } catch (err) { showToast(err.message); }
+}
+
+async function deleteLocation() {
+  if (!editingLocationId) return;
+  if (!confirm('Usunąć lokalizację? Możliwe tylko, gdy nie ma stanu ani podlokalizacji.')) return;
+  try {
+    await api(`/warehouse/locations/${encodeURIComponent(editingLocationId)}`, { method: 'DELETE' });
+    showToast('Usunięto lokalizację.');
+    closeLocationModal();
+    await refreshAfterLocationChange();
+  } catch (err) { showToast(err.message); }
 }
 
 // --- Listenery modułu Magazyn ---
@@ -3993,6 +4102,14 @@ if (destinationDeleteBtn) destinationDeleteBtn.addEventListener('click', deleteD
 if (destinationCancelBtn) destinationCancelBtn.addEventListener('click', closeDestinationModal);
 if (closeDestinationBtn) closeDestinationBtn.addEventListener('click', closeDestinationModal);
 if (destinationForm) destinationForm.addEventListener('submit', (e) => { e.preventDefault(); saveDestination(); });
+
+// Lokalizacje
+if (whAddLocationBtn) whAddLocationBtn.addEventListener('click', () => openLocationModal());
+if (locationSaveBtn) locationSaveBtn.addEventListener('click', saveLocation);
+if (locationDeleteBtn) locationDeleteBtn.addEventListener('click', deleteLocation);
+if (locationCancelBtn) locationCancelBtn.addEventListener('click', closeLocationModal);
+if (closeLocationBtn) closeLocationBtn.addEventListener('click', closeLocationModal);
+if (locationForm) locationForm.addEventListener('submit', (e) => { e.preventDefault(); saveLocation(); });
 
 // Motyw jasny/ciemny — atrybut data-theme na <html> (init bez mignięcia jest w <head>).
 const themeToggleBtn = document.getElementById('themeToggleBtn');

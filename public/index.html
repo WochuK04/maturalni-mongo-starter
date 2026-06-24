@@ -419,7 +419,10 @@
             <div id="warehouseDestinationsContent" class="admin-content"></div>
           </div>
           <div class="wh-config-section">
-            <h4 class="wh-config-title">Lokalizacje</h4>
+            <div class="toolbar">
+              <h4 class="wh-config-title">Lokalizacje</h4>
+              <button id="whAddLocationBtn" type="button" class="btn btn-secondary">＋ Nowa lokalizacja</button>
+            </div>
             <div id="warehouseLocationsContent" class="admin-content"></div>
           </div>
         </div>
@@ -982,6 +985,42 @@
         <button type="button" class="btn btn-primary" id="destinationSaveBtn">Zapisz</button>
         <button type="button" class="btn btn-danger" id="destinationDeleteBtn" hidden>Usuń</button>
         <button type="button" class="btn btn-secondary" id="destinationCancelBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Lokalizacja: tworzenie / edycja własnej lokalizacji fizycznej -->
+  <dialog id="locationModal" class="form-modal">
+    <form id="locationForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3 id="locationModalTitle">Nowa lokalizacja</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeLocationBtn" aria-label="Zamknij okno">×</button>
+      </div>
+      <div class="modal-form-grid">
+        <label class="field field-wide">
+          <span>Nazwa</span>
+          <input id="locationName" required placeholder="np. Regał A / Magazyn podręczny" />
+        </label>
+        <label class="field">
+          <span>Typ</span>
+          <select id="locationKind">
+            <option value="internal">Magazyn</option>
+            <option value="employee">U pracownika</option>
+          </select>
+        </label>
+        <label class="field" id="locationParentField">
+          <span>Nadrzędna</span>
+          <select id="locationParent"></select>
+        </label>
+      </div>
+      <p class="muted" id="locationHint" hidden></p>
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="locationSaveBtn">Zapisz</button>
+        <button type="button" class="btn btn-danger" id="locationDeleteBtn" hidden>Usuń</button>
+        <button type="button" class="btn btn-secondary" id="locationCancelBtn">Anuluj</button>
       </div>
     </form>
   </dialog>

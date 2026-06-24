@@ -61,6 +61,29 @@ export const STANDARD_LOCATIONS = [
   { code: 'VIRT/Customers', name: 'Wydania / odbiorcy', kind: LOCATION_KINDS.CUSTOMER, parentCode: 'VIRT', matchName: null }
 ];
 
+// Zbiór kodów standardowego drzewa — do ochrony przed edycją/usunięciem z UI.
+const STANDARD_LOCATION_CODES = new Set(STANDARD_LOCATIONS.map(l => l.code));
+
+// Lokalizacja „systemowa": standardowe drzewo (po kodzie) albo wirtualna/grupująca.
+// Logika stanu trzyma się ich kodów (WH/Stock, VIRT/*), więc CRUD z UI ich nie tyka —
+// edytować/usuwać można tylko własne fizyczne (internal/employee bez kodu standardowego).
+export function isProtectedLocation(loc) {
+  if (!loc) return true;
+  if (loc.code && STANDARD_LOCATION_CODES.has(loc.code)) return true;
+  if (loc.kind === LOCATION_KINDS.VIEW) return true;
+  return isVirtualKind(loc.kind);
+}
+
+// Kod lokalizacji z nazwy (bez polskich znaków/spacji) — sufiks pod kodem rodzica.
+// NFD rozkłada „ż"→„z"+znak łączący; filtr [^A-Za-z0-9] usuwa łączące i separatory.
+export function slugifyLocationCode(name) {
+  const slug = String(name || '')
+    .normalize('NFD')
+    .replace(/[^A-Za-z0-9]+/g, '')
+    .slice(0, 24);
+  return slug || 'Loc';
+}
+
 function toObjectIdOrNull(value) {
   try {
     return new ObjectId(String(value));
