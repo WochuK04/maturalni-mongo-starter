@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -233,24 +233,8 @@ async function regenerateItemCodeForCategory(db, oldCode, newCategory) {
   return candidate;
 }
 
-// Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
-// obcy (stan, ruchy, wypożyczenia, wnioski, loty, reguły min-max, pozycje operacji).
-// Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
-async function cascadeItemCodeRename(db, oldCode, newCode) {
-  const o = String(oldCode), n = String(newCode);
-  if (!o || !n || o === n) return;
-  await db.collection(collections.quants).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.stockMoves).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.loans).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.loanRequests).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.lots).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.reorderRules).updateMany({ scope: 'item', target: o }, { $set: { target: n } });
-  await db.collection(collections.stockOperations).updateMany(
-    { 'lines.itemCode': o },
-    { $set: { 'lines.$[e].itemCode': n } },
-    { arrayFilters: [{ 'e.itemCode': o }] }
-  );
-}
+// Kaskadowa zmiana itemCode po kolekcjach żyje w stock.js (cascadeItemCodeRename) —
+// czysta operacja na db, jak reszta logiki stanu.
 
 app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);

@@ -273,6 +273,52 @@ export async function refreshItemCache(db, itemCode) {
   return update;
 }
 
+// Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
+// obcy: stan (quants), ruchy, wypożyczenia, wnioski, loty, reguły min-max oraz
+// dokumenty operacji — pozycje (itemCode i targetItemCode konwersji) i snapshoty
+// do cofania (conversionDetail: sourceCode/targetCode, deliveryDetail: itemCode).
+// Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
+// Nie zmienia samego dokumentu `items` — to robi wołający (przed kaskadą).
+export async function cascadeItemCodeRename(db, oldCode, newCode) {
+  const o = String(oldCode), n = String(newCode);
+  if (!o || !n || o === n) return;
+  await db.collection(collections.quants).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.stockMoves).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.loans).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.loanRequests).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.lots).updateMany({ itemCode: o }, { $set: { itemCode: n } });
+  await db.collection(collections.reorderRules).updateMany({ scope: 'item', target: o }, { $set: { target: n } });
+
+  // Pozycje operacji: itemCode (każdy typ) oraz targetItemCode (gadżet-cel konwersji).
+  const ops = db.collection(collections.stockOperations);
+  await ops.updateMany(
+    { 'lines.itemCode': o },
+    { $set: { 'lines.$[e].itemCode': n } },
+    { arrayFilters: [{ 'e.itemCode': o }] }
+  );
+  await ops.updateMany(
+    { 'lines.targetItemCode': o },
+    { $set: { 'lines.$[e].targetItemCode': n } },
+    { arrayFilters: [{ 'e.targetItemCode': o }] }
+  );
+  // Snapshoty do cofania: konwersja (sourceCode/targetCode) i dostawa (itemCode).
+  await ops.updateMany(
+    { 'conversionDetail.sourceCode': o },
+    { $set: { 'conversionDetail.$[e].sourceCode': n } },
+    { arrayFilters: [{ 'e.sourceCode': o }] }
+  );
+  await ops.updateMany(
+    { 'conversionDetail.targetCode': o },
+    { $set: { 'conversionDetail.$[e].targetCode': n } },
+    { arrayFilters: [{ 'e.targetCode': o }] }
+  );
+  await ops.updateMany(
+    { 'deliveryDetail.itemCode': o },
+    { $set: { 'deliveryDetail.$[e].itemCode': n } },
+    { arrayFilters: [{ 'e.itemCode': o }] }
+  );
+}
+
 // Sekwencyjny numer dokumentu operacji (np. mag/IN/00001).
 export async function nextReference(db, prefix) {
   const res = await db.collection(collections.counters).findOneAndUpdate(
