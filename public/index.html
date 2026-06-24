@@ -9,6 +9,19 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./warehouse.css" />
+  <script>
+    // Ustaw motyw zanim CSS się namaluje (bez mignięcia). Wybór z localStorage,
+    // a domyślnie z preferencji systemu.
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (t !== 'dark' && t !== 'light') {
+          t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* prywatny tryb / brak storage — zostaje jasny */ }
+    })();
+  </script>
 </head>
 <body>
   <div class="login-gate" id="loginGate">
@@ -60,6 +73,9 @@
       </nav>
 
       <div class="sidebar-footer">
+        <button id="themeToggleBtn" class="btn btn-secondary theme-toggle" type="button" aria-pressed="false">
+          🌙 Tryb ciemny
+        </button>
         <div id="adminQuickActions" class="admin-quick-actions" hidden>
           <button
             id="toggleWorkspaceBtn"
@@ -859,6 +875,8 @@
         <div id="operationLinesHead" class="op-line op-line-head"></div>
         <div id="operationLines"></div>
       </div>
+
+      <div id="operationStockPanel" class="op-stock-panel" hidden></div>
 
       <p class="modal-form-hint muted" id="operationStateHint" hidden></p>
 

@@ -23,6 +23,44 @@
   --shadow-lg: 0 18px 44px rgba(12, 28, 68, 0.12);
   --radius: 16px;
   --radius-sm: 12px;
+  color-scheme: light;
+}
+
+/* ===== Tryb ciemny ===== */
+/* Motyw przełączany atrybutem data-theme na <html> (patrz skrypt w <head> i
+   przycisk w sidebarze). Aplikacja jest mocno zmiennościowa, więc wystarczy
+   nadpisać paletę; kilka zakodowanych powierzchni domykamy punktowo niżej. */
+[data-theme="dark"] {
+  --bg: #0f1320;
+  --surface: #161c2b;
+  --surface-2: #1d2433;
+  --surface-3: #28303f;
+  --text: #e7ecf3;
+  --muted: #9aa6b6;
+  --muted-soft: #6c7689;
+  --border: #2a3242;
+  --border-strong: #3a4357;
+  --primary: #5b7cf0;
+  --primary-hover: #7e98f6;
+  --navy: #0a1530;
+  --accent: #f9cb0b;
+  --success-bg: #14301f;
+  --success-text: #74e3a6;
+  --warning-bg: #3a2c12;
+  --warning-text: #f3c168;
+  --danger-bg: #3a1822;
+  --danger-text: #f6889a;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Zakodowane (nie-zmiennościowe) powierzchnie — domknięcie w trybie ciemnym. */
+[data-theme="dark"] .item-row { background: var(--surface); }
+[data-theme="dark"] .item-note { background: var(--surface-2); color: var(--text); }
+[data-theme="dark"] .equipment-card-media,
+[data-theme="dark"] .modal-media {
+  background: linear-gradient(135deg, #1d2433 0%, #28303f 100%);
 }
 
 * {
@@ -752,7 +790,7 @@ th {
 }
 
 .form-modal {
-  width: min(720px, calc(100vw - 24px));
+  width: min(900px, calc(100vw - 24px));
   border: 0;
   padding: 0;
   border-radius: 20px;
@@ -979,6 +1017,11 @@ th {
   margin-top: auto;
   display: grid;
   gap: 12px;
+}
+
+.theme-toggle {
+  width: 100%;
+  justify-content: center;
 }
 
 .sidebar .user-switcher {
