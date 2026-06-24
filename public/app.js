@@ -159,6 +159,7 @@ const whProductModel = document.getElementById('whProductModel');
 const whProductNotes = document.getElementById('whProductNotes');
 const whBatchesList = document.getElementById('whBatchesList');
 const whBatchesTotal = document.getElementById('whBatchesTotal');
+const whProductHistoryContent = document.getElementById('whProductHistoryContent');
 const whAddBatchBtn = document.getElementById('whAddBatchBtn');
 const whProductSaveBtn = document.getElementById('whProductSaveBtn');
 const whProductCancelBtn = document.getElementById('whProductCancelBtn');
@@ -2637,7 +2638,7 @@ const WAREHOUSE_KIND_LABELS = {
 };
 const MOVE_KIND_LABELS = {
   opening: 'Stan otwarcia', internal: 'Przesunięcie', receipt: 'Przyjęcie',
-  delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta'
+  delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta', conversion: 'Konwersja'
 };
 const OP_STATE_LABELS = { draft: 'Wersja robocza', ready: 'Gotowe', done: 'Wykonano', cancelled: 'Anulowano' };
 // Typy widoczne w UI (subzakładki + kafelki Przeglądu). „internal" celowo pominięte —
@@ -3663,7 +3664,50 @@ function openWarehouseProductModal(product) {
   if (batches.length) batches.forEach(addBatchRow);
   else addBatchRow();
   recomputeBatchTotals();
+  loadProductHistory(product.itemCode);
   if (!warehouseProductModal.open) warehouseProductModal.showModal();
+}
+
+// Historia ruchów produktu (rejestr stockMoves) — pokazywana w oknie produktu.
+// Korzysta z istniejącego endpointu /warehouse/moves?itemCode=.
+async function loadProductHistory(itemCode) {
+  if (!whProductHistoryContent) return;
+  if (!itemCode) { renderEmpty(whProductHistoryContent, 'Brak kodu — historia niedostępna.'); return; }
+  whProductHistoryContent.innerHTML = '<p class="muted">Wczytywanie historii…</p>';
+  try {
+    const moves = await api(`/warehouse/moves?itemCode=${encodeURIComponent(itemCode)}&limit=200`);
+    renderProductHistory(moves);
+  } catch (err) {
+    whProductHistoryContent.innerHTML = `<p class="muted">Nie udało się wczytać historii: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderProductHistory(moves) {
+  if (!whProductHistoryContent) return;
+  if (!Array.isArray(moves) || !moves.length) {
+    renderEmpty(whProductHistoryContent, 'Brak ruchów dla tego produktu.');
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'wh-history-table';
+  table.innerHTML = `
+    <thead><tr>
+      <th>Data</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Dokument</th><th>Osoba</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = moves.map(m => `
+    <tr>
+      <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
+      <td>${escapeHtml(m.fromName || '—')}</td>
+      <td>${escapeHtml(m.toName || '—')}</td>
+      <td>${escapeHtml(m.quantity)}</td>
+      <td>${escapeHtml(MOVE_KIND_LABELS[m.kind] || m.kind || '—')}</td>
+      <td class="muted">${escapeHtml(m.note || '—')}</td>
+      <td class="muted">${escapeHtml(m.actorEmail || '—')}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  whProductHistoryContent.innerHTML = '';
+  whProductHistoryContent.appendChild(table);
 }
 
 function closeWarehouseProductModal() {
