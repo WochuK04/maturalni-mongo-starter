@@ -660,6 +660,66 @@ app.delete('/warehouse/suppliers/:id', requireAuth, requireAdmin, async (req, re
   res.json({ message: 'Usunięto' });
 });
 
+// ----- Miejsca dostaw (kartoteka odbiorców dla dostaw — analogicznie do dostawców) -----
+function destinationView(d) {
+  return {
+    id: String(d._id),
+    name: d.name || '',
+    contact: d.contact || '',
+    notes: d.notes || '',
+    createdAt: d.createdAt || null
+  };
+}
+
+app.get('/warehouse/delivery-destinations', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const list = await db.collection(collections.deliveryDestinations)
+    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
+  res.json(list.map(destinationView));
+});
+
+app.post('/warehouse/delivery-destinations', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'Podaj nazwę miejsca dostawy' });
+  const now = new Date();
+  const doc = {
+    name,
+    contact: String(req.body.contact || '').trim(),
+    notes: String(req.body.notes || '').trim(),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  const { insertedId } = await db.collection(collections.deliveryDestinations).insertOne(doc);
+  res.status(201).json({ id: String(insertedId), ...destinationView({ ...doc, _id: insertedId }) });
+});
+
+app.patch('/warehouse/delivery-destinations/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const update = { updatedAt: new Date() };
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ message: 'Nazwa nie może być pusta' });
+    update.name = name;
+  }
+  if (req.body.contact !== undefined) update.contact = String(req.body.contact || '').trim();
+  if (req.body.notes !== undefined) update.notes = String(req.body.notes || '').trim();
+  const r = await db.collection(collections.deliveryDestinations).updateOne({ _id: id }, { $set: update });
+  if (!r.matchedCount) return res.status(404).json({ message: 'Miejsce dostawy nie istnieje' });
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/warehouse/delivery-destinations/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  await db.collection(collections.deliveryDestinations).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
+  res.json({ message: 'Usunięto' });
+});
+
 // ----- Operacje magazynowe (dokumenty: Przekazy + Korekty) -----
 
 const OPERATION_LOC_KINDS = [
@@ -705,6 +765,16 @@ async function resolveSupplier(db, supplierId) {
   return doc ? { supplierId: String(doc._id), supplierName: doc.name || '' } : { supplierId: null, supplierName: '' };
 }
 
+// Rozwiązuje miejsce dostawy po id; zwraca { destinationId, destinationName } (snapshot
+// nazwy na dokumencie, by historia była czytelna nawet po usunięciu miejsca).
+async function resolveDeliveryDestination(db, destinationId) {
+  if (!destinationId) return { destinationId: null, destinationName: '' };
+  let doc = null;
+  try { doc = await db.collection(collections.deliveryDestinations).findOne({ _id: new ObjectId(String(destinationId)) }); }
+  catch { return { destinationId: null, destinationName: '' }; }
+  return doc ? { destinationId: String(doc._id), destinationName: doc.name || '' } : { destinationId: null, destinationName: '' };
+}
+
 // Akceptuje id lokalizacji albo jej kod (np. 'WH/Stock'); zwraca string id albo null.
 async function resolveLocationId(db, idOrCode) {
   if (!idOrCode) return null;
@@ -730,10 +800,24 @@ app.get('/warehouse/form-data', requireAuth, requireWarehouseRead, async (_req, 
   const items = allItems.filter(it => isWarehouseCategory(it.category));
   const suppliers = await db.collection(collections.suppliers)
     .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
+  const destinations = await db.collection(collections.deliveryDestinations)
+    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
+
+  // Dostępny stan na Magazynie (WH/Stock) per produkt — do podpowiedzi „dostępne: N"
+  // i blokady nadmiaru przy konwersji.
+  const stockLoc = await db.collection(collections.locations).findOne({ code: 'WH/Stock' });
+  const onHandByCode = new Map();
+  if (stockLoc) {
+    const quants = await db.collection(collections.quants)
+      .find({ locationId: String(stockLoc._id) }, { projection: { itemCode: 1, quantity: 1 } }).toArray();
+    for (const q of quants) onHandByCode.set(q.itemCode, Number(q.quantity) || 0);
+  }
+
   res.json({
     locations: locations.map(l => ({ id: String(l._id), code: l.code, name: l.name, kind: l.kind })),
-    items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '' })),
+    items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '', onHand: onHandByCode.get(it.itemCode) || 0 })),
     suppliers: suppliers.map(s => ({ id: String(s._id), name: s.name || '' })),
+    deliveryDestinations: destinations.map(d => ({ id: String(d._id), name: d.name || '' })),
     types: OPERATION_TYPES
   });
 });
@@ -791,6 +875,8 @@ app.get('/warehouse/operations', requireAuth, requireWarehouseRead, async (req, 
     contact: op.contact || '',
     supplierId: op.supplierId ? String(op.supplierId) : null,
     supplierName: op.supplierName || '',
+    destinationId: op.destinationId ? String(op.destinationId) : null,
+    destinationName: op.destinationName || '',
     scheduledAt: op.scheduledAt || null,
     sourceDocument: op.sourceDocument || '',
     lineCount: Array.isArray(op.lines) ? op.lines.length : 0,
@@ -827,6 +913,8 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
     contact: op.contact || '',
     supplierId: op.supplierId ? String(op.supplierId) : null,
     supplierName: op.supplierName || '',
+    destinationId: op.destinationId ? String(op.destinationId) : null,
+    destinationName: op.destinationName || '',
     scheduledAt: op.scheduledAt || null,
     sourceDocument: op.sourceDocument || '',
     note: op.note || '',
@@ -854,6 +942,7 @@ app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) =>
 
   const now = new Date();
   const supplier = await resolveSupplier(db, req.body.supplierId);
+  const destination = await resolveDeliveryDestination(db, req.body.destinationId);
   const doc = {
     reference: await nextReference(db, cfg.prefix),
     type,
@@ -863,6 +952,8 @@ app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) =>
     contact: String(req.body.contact || '').trim(),
     supplierId: supplier.supplierId,
     supplierName: supplier.supplierName,
+    destinationId: destination.destinationId,
+    destinationName: destination.destinationName,
     scheduledAt: req.body.scheduledAt ? new Date(req.body.scheduledAt) : null,
     sourceDocument: String(req.body.sourceDocument || '').trim(),
     note: String(req.body.note || '').trim(),
@@ -892,6 +983,11 @@ app.patch('/warehouse/operations/:id', requireAuth, requireAdmin, async (req, re
     const supplier = await resolveSupplier(db, req.body.supplierId);
     update.supplierId = supplier.supplierId;
     update.supplierName = supplier.supplierName;
+  }
+  if (req.body.destinationId !== undefined) {
+    const destination = await resolveDeliveryDestination(db, req.body.destinationId);
+    update.destinationId = destination.destinationId;
+    update.destinationName = destination.destinationName;
   }
   if (req.body.scheduledAt !== undefined) update.scheduledAt = req.body.scheduledAt ? new Date(req.body.scheduledAt) : null;
   if (req.body.sourceDocument !== undefined) update.sourceDocument = String(req.body.sourceDocument || '').trim();

@@ -193,6 +193,9 @@ const operationContactField = document.getElementById('operationContactField');
 const operationSupplierField = document.getElementById('operationSupplierField');
 const operationSupplier = document.getElementById('operationSupplier');
 const operationNewSupplierBtn = document.getElementById('operationNewSupplierBtn');
+const operationDestinationField = document.getElementById('operationDestinationField');
+const operationDestination = document.getElementById('operationDestination');
+const operationNewDestinationBtn = document.getElementById('operationNewDestinationBtn');
 const operationScheduled = document.getElementById('operationScheduled');
 const operationSource = document.getElementById('operationSource');
 const operationNote = document.getElementById('operationNote');
@@ -246,6 +249,19 @@ const supplierCancelBtn = document.getElementById('supplierCancelBtn');
 const closeSupplierBtn = document.getElementById('closeSupplierBtn');
 const warehouseSuppliersContent = document.getElementById('warehouseSuppliersContent');
 const whAddSupplierBtn = document.getElementById('whAddSupplierBtn');
+// Modal miejsca dostawy + lista w Konfiguracji.
+const destinationModal = document.getElementById('destinationModal');
+const destinationForm = document.getElementById('destinationForm');
+const destinationModalTitle = document.getElementById('destinationModalTitle');
+const destinationName = document.getElementById('destinationName');
+const destinationContact = document.getElementById('destinationContact');
+const destinationNotes = document.getElementById('destinationNotes');
+const destinationSaveBtn = document.getElementById('destinationSaveBtn');
+const destinationDeleteBtn = document.getElementById('destinationDeleteBtn');
+const destinationCancelBtn = document.getElementById('destinationCancelBtn');
+const closeDestinationBtn = document.getElementById('closeDestinationBtn');
+const warehouseDestinationsContent = document.getElementById('warehouseDestinationsContent');
+const whAddDestinationBtn = document.getElementById('whAddDestinationBtn');
 
 function createPlaceholderImage(item = {}) {
   const category = String(item.category || 'Sprzęt').trim();
@@ -2623,7 +2639,9 @@ const MOVE_KIND_LABELS = {
   delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta'
 };
 const OP_STATE_LABELS = { draft: 'Wersja robocza', ready: 'Gotowe', done: 'Wykonano', cancelled: 'Anulowano' };
-const OP_TYPE_ORDER = ['receipt', 'delivery', 'internal', 'scrap', 'adjustment', 'conversion'];
+// Typy widoczne w UI (subzakładki + kafelki Przeglądu). „internal" celowo pominięte —
+// zostaje w backendzie (OPERATION_TYPES), ale nie pokazujemy go w interfejsie.
+const OP_TYPE_ORDER = ['receipt', 'delivery', 'scrap', 'adjustment', 'conversion'];
 const OP_TYPE_NAV_LABELS = {
   receipt: 'Przyjęcia', delivery: 'Dostawy', internal: 'Wewnętrzne',
   scrap: 'Odpad', adjustment: 'Inwentarz fizyczny', conversion: 'Konwersje'
@@ -2711,7 +2729,11 @@ async function loadWarehouseOverview() {
 
 function renderOverview(types, replenishment) {
   const groups = {};
-  for (const t of types) (groups[t.group] = groups[t.group] || []).push(t);
+  // Pokazujemy tylko typy widoczne w UI (OP_TYPE_ORDER) — np. „internal" pomijamy.
+  for (const t of types) {
+    if (!OP_TYPE_ORDER.includes(t.type)) continue;
+    (groups[t.group] = groups[t.group] || []).push(t);
+  }
   const groupOrder = ['Przekazy', 'Korekty', 'Przetworzenie'];
 
   const card = ({ type, title, icon, accent, num, numLabel, sub, subLabel }) => `
@@ -2968,19 +2990,34 @@ function locationOptions(selectedId, kinds) {
     `<option value="${escapeHtml(l.id)}"${l.id === selectedId ? ' selected' : ''}>${escapeHtml(l.name)} (${escapeHtml(l.code || '')})</option>`).join('');
 }
 
-function itemOptions(selectedCode, allowNew = false, onlyCategory = null) {
+function itemOptions(selectedCode, allowNew = false, onlyCategory = null, showStock = false) {
   const cat = onlyCategory ? String(onlyCategory).toLowerCase() : null;
   const items = (warehouseFormData?.items || [])
     .filter(it => !cat || String(it.category || '').trim().toLowerCase() === cat);
-  const base = '<option value="">— wybierz produkt —</option>' + items.map(it =>
-    `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.name || 'Bez nazwy')}</option>`).join('');
+  const base = '<option value="">— wybierz produkt —</option>' + items.map(it => {
+    // Dla konwersji/wydania pokazujemy dostępny stan na Magazynie w etykiecie.
+    const label = showStock ? `${it.name || 'Bez nazwy'} (dostępne: ${Number(it.onHand) || 0})` : (it.name || 'Bez nazwy');
+    return `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
   return base + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
+}
+
+// Dostępny stan na Magazynie (WH/Stock) dla produktu — z form-data.
+function itemOnHand(itemCode) {
+  const it = (warehouseFormData?.items || []).find(x => x.itemCode === itemCode);
+  return it ? (Number(it.onHand) || 0) : 0;
 }
 
 function supplierOptions(selectedId) {
   const suppliers = warehouseFormData?.suppliers || [];
   return '<option value="">— bez dostawcy —</option>' + suppliers.map(s =>
     `<option value="${escapeHtml(s.id)}"${s.id === selectedId ? ' selected' : ''}>${escapeHtml(s.name || 'Bez nazwy')}</option>`).join('');
+}
+
+function destinationOptions(selectedId) {
+  const destinations = warehouseFormData?.deliveryDestinations || [];
+  return '<option value="">— wybierz miejsce —</option>' + destinations.map(d =>
+    `<option value="${escapeHtml(d.id)}"${d.id === selectedId ? ' selected' : ''}>${escapeHtml(d.name || 'Bez nazwy')}</option>`).join('');
 }
 
 function resolveDefaultLocId(code) {
@@ -3007,11 +3044,13 @@ function addOperationLine(line = {}) {
       <input class="op-line-price" type="number" min="0" step="0.01" value="${line.unitPrice ?? ''}" placeholder="0,00" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else if (isConversion) {
-    // Towar (źródło, tylko kat. „towar") → gadżet (cel, tylko kat. „gadżet" + tworzenie).
+    // Towar (źródło, tylko kat. „towar", z dostępnym stanem) → gadżet (cel, tylko
+    // kat. „gadżet" + tworzenie). Ilość ograniczona dostępnym stanem towaru.
+    const srcMax = line.itemCode ? itemOnHand(line.itemCode) : 0;
     row.innerHTML = `
-      <select class="op-line-item">${itemOptions(line.itemCode, false, 'towar')}</select>
+      <select class="op-line-item">${itemOptions(line.itemCode, false, 'towar', true)}</select>
       <select class="op-line-target" style="flex:1">${itemOptions(line.targetItemCode, true, 'gadżet')}</select>
-      <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
+      <input class="op-line-qty" type="number" min="1"${srcMax ? ` max="${srcMax}"` : ''} value="${line.quantity ?? 1}" title="${srcMax ? `Dostępne na Magazynie: ${srcMax}` : 'Wybierz towar'}" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else {
     row.innerHTML = `
@@ -3023,7 +3062,17 @@ function addOperationLine(line = {}) {
   // „＋ Nowy produkt…" w pickerze (przyjęcie) → otwórz okno tworzenia i wskaż nowy.
   const sel = row.querySelector('.op-line-item');
   if (sel) sel.addEventListener('change', () => {
-    if (sel.value === '__new__') { sel.value = ''; openNewProductModal(sel); }
+    if (sel.value === '__new__') { sel.value = ''; openNewProductModal(sel); return; }
+    // Konwersja: po wyborze towaru ustaw limit ilości = dostępny stan na Magazynie.
+    if (isConversion) {
+      const qty = row.querySelector('.op-line-qty');
+      const max = itemOnHand(sel.value);
+      if (qty) {
+        if (max > 0) { qty.max = max; if (Number(qty.value) > max) qty.value = max; }
+        else qty.removeAttribute('max');
+        qty.title = sel.value ? `Dostępne na Magazynie: ${max}` : 'Wybierz towar';
+      }
+    }
   });
   // Konwersja: „＋ utwórz gadżet z tego towaru" w pickerze celu — prefill nazwą towaru, kat. gadżet.
   const tgtSel = row.querySelector('.op-line-target');
@@ -3055,29 +3104,34 @@ async function openOperationModal(type, id = null) {
   const isAdj = type === 'adjustment';
   const isReceipt = type === 'receipt';
   const isConversion = type === 'conversion';
+  const isDelivery = type === 'delivery';
   operationModalType.textContent = OP_TYPE_NAV_LABELS[type] || cfg.label || 'Operacja';
   renderOperationLinesHead();
   operationLines.innerHTML = '';
 
   // Przyjęcie: bez pól lokalizacji (cel zawsze Magazyn), zamiast „Kontakt" — „Dostawca".
-  // Konwersja: bez lokalizacji/kontaktu/dostawcy (oba końce = Magazyn), pary towar↔gadżet w pozycjach.
-  operationFromField.hidden = isAdj || isReceipt || isConversion;
-  operationToField.hidden = isAdj || isReceipt || isConversion;
-  operationContactField.hidden = isReceipt || isConversion;
+  // Konwersja: bez lokalizacji/kontaktu/dostawcy (oba końce = Magazyn).
+  // Dostawa: bez lokalizacji/kontaktu (źródło zawsze Magazyn, cel = „Miejsce dostawy").
+  operationFromField.hidden = isAdj || isReceipt || isConversion || isDelivery;
+  operationToField.hidden = isAdj || isReceipt || isConversion || isDelivery;
+  operationContactField.hidden = isReceipt || isConversion || isDelivery;
   operationSupplierField.hidden = !isReceipt;
+  operationDestinationField.hidden = !isDelivery;
   operationFrom.innerHTML = locationOptions(null);
   operationTo.innerHTML = locationOptions(null);
   if (isReceipt) operationSupplier.innerHTML = supplierOptions(null);
+  if (isDelivery) operationDestination.innerHTML = destinationOptions(null);
 
   if (id) {
     const op = await api(`/warehouse/operations/${encodeURIComponent(id)}`);
     currentOperation.state = op.state;
     operationModalTitle.textContent = op.reference;
-    if (!isAdj && !isReceipt && !isConversion) {
+    if (!isAdj && !isReceipt && !isConversion && !isDelivery) {
       operationFrom.value = op.fromLocationId || '';
       operationTo.value = op.toLocationId || '';
     }
     if (isReceipt) operationSupplier.value = op.supplierId || '';
+    if (isDelivery) operationDestination.value = op.destinationId || '';
     operationContact.value = op.contact || '';
     operationScheduled.value = op.scheduledAt ? String(op.scheduledAt).slice(0, 10) : '';
     operationSource.value = op.sourceDocument || '';
@@ -3086,11 +3140,12 @@ async function openOperationModal(type, id = null) {
     if (!(op.lines || []).length) addOperationLine();
   } else {
     operationModalTitle.textContent = 'Nowa operacja';
-    if (!isAdj && !isReceipt && !isConversion) {
+    if (!isAdj && !isReceipt && !isConversion && !isDelivery) {
       operationFrom.value = resolveDefaultLocId(cfg.defaultFrom);
       operationTo.value = resolveDefaultLocId(cfg.defaultTo);
     }
     if (isReceipt) operationSupplier.value = '';
+    if (isDelivery) operationDestination.value = '';
     operationContact.value = '';
     operationScheduled.value = '';
     operationSource.value = '';
@@ -3102,9 +3157,10 @@ async function openOperationModal(type, id = null) {
   const locked = currentOperation.state === 'done' || currentOperation.state === 'cancelled';
   const editable = isAdmin && !locked;
 
-  [operationFrom, operationTo, operationContact, operationSupplier, operationScheduled, operationSource, operationNote]
+  [operationFrom, operationTo, operationContact, operationSupplier, operationDestination, operationScheduled, operationSource, operationNote]
     .forEach(el => { el.disabled = !editable; });
   if (operationNewSupplierBtn) operationNewSupplierBtn.hidden = !(editable && isReceipt);
+  if (operationNewDestinationBtn) operationNewDestinationBtn.hidden = !(editable && isDelivery);
   operationAddLineBtn.hidden = !editable;
   operationLines.querySelectorAll('.op-line').forEach(row => {
     row.querySelectorAll('select, input').forEach(el => { el.disabled = !editable; });
@@ -3135,6 +3191,7 @@ function collectOperationPayload() {
   const isAdj = warehouseOpType === 'adjustment';
   const isReceipt = warehouseOpType === 'receipt';
   const isConversion = warehouseOpType === 'conversion';
+  const isDelivery = warehouseOpType === 'delivery';
   const lines = [];
   operationLines.querySelectorAll('.op-line').forEach(row => {
     const itemCode = row.querySelector('.op-line-item')?.value;
@@ -3174,12 +3231,32 @@ function collectOperationPayload() {
     payload.toLocationId = lines[0]?.locationId || resolveDefaultLocId('WH/Stock');
   } else if (isConversion) {
     // Bez pól lokalizacji/kontaktu — backend rozdziela ruchy Magazyn↔VIRT/Conversion.
+  } else if (isDelivery) {
+    // Źródło zawsze Magazyn, cel zawsze wirtualne „Wydania" (backend wymusza);
+    // tu przekazujemy tylko wybrane miejsce dostawy (odbiorcę).
+    payload.destinationId = operationDestination.value || null;
   } else {
     payload.contact = operationContact.value.trim();
     payload.fromLocationId = operationFrom.value || null;
     payload.toLocationId = operationTo.value || null;
   }
   return payload;
+}
+
+// Klient-side blokada nadmiaru przy konwersji: ilość nie może przekroczyć dostępnego
+// stanu towaru na Magazynie. Serwer i tak waliduje — to szybki feedback przed wysyłką.
+function checkConversionStock() {
+  if (warehouseOpType !== 'conversion') return;
+  operationLines.querySelectorAll('.op-line').forEach(row => {
+    const code = row.querySelector('.op-line-item')?.value;
+    if (!code || code === '__new__') return;
+    const qty = Number(row.querySelector('.op-line-qty')?.value) || 0;
+    const avail = itemOnHand(code);
+    if (qty > avail) {
+      const name = (warehouseFormData?.items || []).find(it => it.itemCode === code)?.name || code;
+      throw new Error(`Za mało na stanie: ${name} (dostępne ${avail}, żądane ${qty})`);
+    }
+  });
 }
 
 async function saveOperation() {
@@ -3291,14 +3368,97 @@ async function deleteSupplier() {
   } catch (err) { showToast(err.message); }
 }
 
-// --- Konfiguracja: dostawcy + lokalizacje ---
+// --- Miejsca dostaw: kartoteka + okno edycji (analogicznie do dostawców) ---
+let editingDestinationId = null;
+
+function openDestinationModal(destination = null) {
+  if (currentUser?.role !== 'admin') { showToast('Zarządzanie miejscami dostaw wymaga uprawnień administratora.'); return; }
+  editingDestinationId = destination?.id || null;
+  if (destinationModalTitle) destinationModalTitle.textContent = destination ? 'Edytuj miejsce dostawy' : 'Nowe miejsce dostawy';
+  if (destinationName) destinationName.value = destination?.name || '';
+  if (destinationContact) destinationContact.value = destination?.contact || '';
+  if (destinationNotes) destinationNotes.value = destination?.notes || '';
+  if (destinationDeleteBtn) destinationDeleteBtn.hidden = !destination;
+  if (destinationModal && !destinationModal.open) destinationModal.showModal();
+}
+
+function closeDestinationModal() {
+  editingDestinationId = null;
+  if (destinationModal?.open) destinationModal.close();
+}
+
+async function saveDestination() {
+  const name = (destinationName?.value || '').trim();
+  if (!name) { showToast('Podaj nazwę miejsca dostawy.'); return; }
+  const body = JSON.stringify({
+    name,
+    contact: (destinationContact?.value || '').trim(),
+    notes: (destinationNotes?.value || '').trim()
+  });
+  try {
+    let created = null;
+    if (editingDestinationId) {
+      await api(`/warehouse/delivery-destinations/${encodeURIComponent(editingDestinationId)}`, { method: 'PATCH', body });
+    } else {
+      created = await api('/warehouse/delivery-destinations', { method: 'POST', body });
+    }
+    showToast('Zapisano miejsce dostawy.');
+    closeDestinationModal();
+    warehouseFormData = null;
+    await fetchWarehouseFormData();
+    // Jeśli otwarte okno dostawy i to nowe miejsce — wskaż je od razu.
+    if (created && operationDestination && operationDestinationField && !operationDestinationField.hidden) {
+      operationDestination.innerHTML = destinationOptions(created.id);
+    }
+    if (whConfigView && !whConfigView.hidden) await renderWarehouseConfig();
+  } catch (err) { showToast(err.message); }
+}
+
+async function deleteDestination() {
+  if (!editingDestinationId) return;
+  if (!confirm('Usunąć miejsce dostawy? Historyczne dostawy zachowają jego nazwę.')) return;
+  try {
+    await api(`/warehouse/delivery-destinations/${encodeURIComponent(editingDestinationId)}`, { method: 'DELETE' });
+    showToast('Usunięto miejsce dostawy.');
+    closeDestinationModal();
+    warehouseFormData = null;
+    await fetchWarehouseFormData();
+    if (whConfigView && !whConfigView.hidden) await renderWarehouseConfig();
+  } catch (err) { showToast(err.message); }
+}
+
+// --- Konfiguracja: dostawcy + miejsca dostaw + lokalizacje ---
 async function renderWarehouseConfig() {
-  const [locations, suppliers] = await Promise.all([
+  const [locations, suppliers, destinations] = await Promise.all([
     fetchWarehouseLocations(),
-    api('/warehouse/suppliers')
+    api('/warehouse/suppliers'),
+    api('/warehouse/delivery-destinations')
   ]);
   renderWarehouseSuppliers(suppliers);
+  renderWarehouseDestinations(destinations);
   renderWarehouseLocations(locations);
+}
+
+function renderWarehouseDestinations(destinations) {
+  if (!warehouseDestinationsContent) return;
+  if (!destinations.length) { renderEmpty(warehouseDestinationsContent, 'Brak miejsc dostaw. Dodaj pierwsze przyciskiem powyżej.'); return; }
+  const isAdmin = currentUser?.role === 'admin';
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Nazwa</th><th>Kontakt</th><th>Notatka</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  destinations.forEach(d => {
+    const tr = document.createElement('tr');
+    if (isAdmin) { tr.className = 'wh-product-row'; tr.title = 'Kliknij, aby edytować miejsce dostawy'; }
+    tr.innerHTML =
+      `<td>${escapeHtml(d.name || '—')}</td>` +
+      `<td>${escapeHtml(d.contact || '—')}</td>` +
+      `<td class="muted">${escapeHtml(d.notes || '—')}</td>`;
+    if (isAdmin) tr.addEventListener('click', () => openDestinationModal(d));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  warehouseDestinationsContent.innerHTML = '';
+  warehouseDestinationsContent.appendChild(table);
 }
 
 function renderWarehouseSuppliers(suppliers) {
@@ -3698,6 +3858,7 @@ if (operationSaveBtn) {
 if (operationValidateBtn) {
   operationValidateBtn.addEventListener('click', async () => {
     try {
+      checkConversionStock(); // szybki feedback nadmiaru przy konwersji (serwer i tak waliduje)
       const id = await saveOperation();
       const res = await api(`/warehouse/operations/${encodeURIComponent(id)}/validate`, { method: 'POST' });
       showToast(res.message || 'Wykonano');
@@ -3735,6 +3896,7 @@ if (operationReverseBtn) {
 
 // „Nowy produkt" (z przyjęcia)
 if (operationNewSupplierBtn) operationNewSupplierBtn.addEventListener('click', () => openSupplierModal());
+if (operationNewDestinationBtn) operationNewDestinationBtn.addEventListener('click', () => openDestinationModal());
 if (newProductSaveBtn) newProductSaveBtn.addEventListener('click', saveNewProduct);
 if (newProductCancelBtn) newProductCancelBtn.addEventListener('click', closeNewProductModal);
 if (closeNewProductBtn) closeNewProductBtn.addEventListener('click', closeNewProductModal);
@@ -3747,6 +3909,14 @@ if (supplierDeleteBtn) supplierDeleteBtn.addEventListener('click', deleteSupplie
 if (supplierCancelBtn) supplierCancelBtn.addEventListener('click', closeSupplierModal);
 if (closeSupplierBtn) closeSupplierBtn.addEventListener('click', closeSupplierModal);
 if (supplierForm) supplierForm.addEventListener('submit', (e) => { e.preventDefault(); saveSupplier(); });
+
+// Miejsca dostaw
+if (whAddDestinationBtn) whAddDestinationBtn.addEventListener('click', () => openDestinationModal());
+if (destinationSaveBtn) destinationSaveBtn.addEventListener('click', saveDestination);
+if (destinationDeleteBtn) destinationDeleteBtn.addEventListener('click', deleteDestination);
+if (destinationCancelBtn) destinationCancelBtn.addEventListener('click', closeDestinationModal);
+if (closeDestinationBtn) closeDestinationBtn.addEventListener('click', closeDestinationModal);
+if (destinationForm) destinationForm.addEventListener('submit', (e) => { e.preventDefault(); saveDestination(); });
 
 document.addEventListener('click', async (e) => {
   const target = e.target;

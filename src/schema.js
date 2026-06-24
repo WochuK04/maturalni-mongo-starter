@@ -17,7 +17,8 @@ export const collections = {
   inventoryAdjustments: 'inventoryAdjustments',
   reorderRules: 'reorderRules',
   counters: 'counters',
-  suppliers: 'suppliers'
+  suppliers: 'suppliers',
+  deliveryDestinations: 'deliveryDestinations'
 };
 
 export const itemShape = {

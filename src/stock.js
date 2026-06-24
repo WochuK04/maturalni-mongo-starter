@@ -21,7 +21,8 @@ export const LOCATION_KINDS = {
   SCRAP: 'scrap',         // wirtualna: złom / wybrakowane
   SUPPLIER: 'supplier',   // wirtualna: przyjęcia od dostawców
   TRANSIT: 'transit',     // wirtualna: tranzyt między lokalizacjami
-  CONVERSION: 'conversion' // wirtualna: przetworzenie towar→gadżet (przeklasyfikowanie)
+  CONVERSION: 'conversion', // wirtualna: przetworzenie towar→gadżet (przeklasyfikowanie)
+  CUSTOMER: 'customer'    // wirtualna: wydania na zewnątrz (dostawy do odbiorców)
 };
 
 // Lokalizacje, na których liczymy realny „stan posiadania".
@@ -36,7 +37,8 @@ export function isVirtualKind(kind) {
     kind === LOCATION_KINDS.SCRAP ||
     kind === LOCATION_KINDS.SUPPLIER ||
     kind === LOCATION_KINDS.TRANSIT ||
-    kind === LOCATION_KINDS.CONVERSION
+    kind === LOCATION_KINDS.CONVERSION ||
+    kind === LOCATION_KINDS.CUSTOMER
   );
 }
 
@@ -55,7 +57,8 @@ export const STANDARD_LOCATIONS = [
   { code: 'VIRT/Inventory', name: 'Korekta stanu (wirtualna)', kind: LOCATION_KINDS.INVENTORY, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Scrap', name: 'Złom / wybrakowane', kind: LOCATION_KINDS.SCRAP, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Suppliers', name: 'Dostawcy (przyjęcia)', kind: LOCATION_KINDS.SUPPLIER, parentCode: 'VIRT', matchName: null },
-  { code: 'VIRT/Conversion', name: 'Przetworzenie (towar→gadżet)', kind: LOCATION_KINDS.CONVERSION, parentCode: 'VIRT', matchName: null }
+  { code: 'VIRT/Conversion', name: 'Przetworzenie (towar→gadżet)', kind: LOCATION_KINDS.CONVERSION, parentCode: 'VIRT', matchName: null },
+  { code: 'VIRT/Customers', name: 'Wydania / odbiorcy', kind: LOCATION_KINDS.CUSTOMER, parentCode: 'VIRT', matchName: null }
 ];
 
 function toObjectIdOrNull(value) {
@@ -269,7 +272,7 @@ export async function nextReference(db, prefix) {
 // Korekty (scrap/adjustment). Domyślne lokalizacje to kody z drzewa (STANDARD_LOCATIONS).
 export const OPERATION_TYPES = {
   receipt:    { label: 'Przyjęcie',             group: 'Przekazy', prefix: 'mag/IN',    defaultFrom: 'VIRT/Suppliers', defaultTo: 'WH/Stock' },
-  delivery:   { label: 'Dostawa',               group: 'Przekazy', prefix: 'mag/OUT',   defaultFrom: 'WH/Stock',       defaultTo: 'WH/Employees' },
+  delivery:   { label: 'Dostawa',               group: 'Przekazy', prefix: 'mag/OUT',   defaultFrom: 'WH/Stock',       defaultTo: 'VIRT/Customers' },
   internal:   { label: 'Przesunięcie wewnętrzne', group: 'Przekazy', prefix: 'mag/INT', defaultFrom: 'WH/Stock',       defaultTo: 'WH/Studio' },
   scrap:      { label: 'Odpad',                 group: 'Korekty',  prefix: 'mag/SCRAP', defaultFrom: 'WH/Stock',       defaultTo: 'VIRT/Scrap' },
   adjustment: { label: 'Inwentarz fizyczny',    group: 'Korekty',  prefix: 'mag/ADJ',   defaultFrom: null,             defaultTo: 'WH/Stock' },
@@ -297,33 +300,25 @@ async function locationByCode(db, code) {
   return db.collection(collections.locations).findOne({ code });
 }
 
-// Gwarantuje istnienie wirtualnej lokalizacji konwersji (VIRT/Conversion) — bazy
-// zaseedowane przed wprowadzeniem konwersji jej nie mają, a `seedStandardLocations`
+// Gwarantuje istnienie wirtualnej lokalizacji (np. VIRT/Conversion, VIRT/Customers) —
+// bazy zaseedowane przed jej wprowadzeniem jej nie mają, a `seedStandardLocations`
 // leci tylko ze skryptu. Idempotentny upsert wpięty pod węzeł VIRT.
-async function ensureConversionLocation(db) {
+async function ensureVirtualLocation(db, code, name, kind) {
   const col = db.collection(collections.locations);
-  const existing = await col.findOne({ code: 'VIRT/Conversion' });
+  const existing = await col.findOne({ code });
   if (existing) return existing;
   const parent = await col.findOne({ code: 'VIRT' });
   const ancestors = parent ? [...(parent.ancestors || []), parent.code] : [];
   const now = new Date();
   await col.updateOne(
-    { code: 'VIRT/Conversion' },
+    { code },
     {
-      $set: {
-        code: 'VIRT/Conversion',
-        name: 'Przetworzenie (towar→gadżet)',
-        kind: LOCATION_KINDS.CONVERSION,
-        parentId: parent ? String(parent._id) : null,
-        ancestors,
-        isActive: true,
-        updatedAt: now
-      },
+      $set: { code, name, kind, parentId: parent ? String(parent._id) : null, ancestors, isActive: true, updatedAt: now },
       $setOnInsert: { createdAt: now }
     },
     { upsert: true }
   );
-  return col.findOne({ code: 'VIRT/Conversion' });
+  return col.findOne({ code });
 }
 
 // Zatwierdza operację: generuje ruchy z pozycji dokumentu i ustawia stan „done".
@@ -375,6 +370,22 @@ export async function validateOperation(db, operationId, actorEmail) {
     });
   }
 
+  // Dostawa (wydanie na zewnątrz): zapamiętaj partie/ilość SPRZED ruchów — wydanie
+  // zdejmuje partie cenowe (towar opuszcza stan), patrz applyDeliveryBatches.
+  const preDelivery = new Map();
+  if (op.type === 'delivery') {
+    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const its = codes.length
+      ? await db.collection(collections.items)
+          .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
+          .toArray()
+      : [];
+    for (const it of its) preDelivery.set(it.itemCode, {
+      quantity: Number(it.quantity) || 0,
+      priceBatches: Array.isArray(it.priceBatches) ? it.priceBatches.map(b => ({ ...b })) : []
+    });
+  }
+
   if (op.type === 'adjustment') {
     const inv = await locationByCode(db, 'VIRT/Inventory');
     if (!inv) throw new Error('Brak wirtualnej lokalizacji korekty (VIRT/Inventory)');
@@ -411,7 +422,7 @@ export async function validateOperation(db, operationId, actorEmail) {
     // Magazyn). Dwa spięte ruchy; koszt przeniesie applyConversionBatches.
     const stock = await locationByCode(db, 'WH/Stock');
     if (!stock) throw new Error('Brak lokalizacji magazynu (WH/Stock)');
-    const conv = await ensureConversionLocation(db);
+    const conv = await ensureVirtualLocation(db, 'VIRT/Conversion', 'Przetworzenie (towar→gadżet)', LOCATION_KINDS.CONVERSION);
 
     for (const ln of lines) {
       const sourceCode = String(ln.itemCode || '').trim();
@@ -450,8 +461,17 @@ export async function validateOperation(db, operationId, actorEmail) {
       affected.add(targetCode);
     }
   } else {
-    const from = op.fromLocationId ? String(op.fromLocationId) : null;
-    const to = op.toLocationId ? String(op.toLocationId) : null;
+    let from = op.fromLocationId ? String(op.fromLocationId) : null;
+    let to = op.toLocationId ? String(op.toLocationId) : null;
+
+    // Dostawa: źródło zawsze Magazyn, cel zawsze wirtualne „Wydania" (towar
+    // opuszcza stan). Wymuszamy niezależnie od zapisu na dokumencie.
+    if (op.type === 'delivery') {
+      const stock = await locationByCode(db, 'WH/Stock');
+      const sink = await ensureVirtualLocation(db, 'VIRT/Customers', 'Wydania / odbiorcy', LOCATION_KINDS.CUSTOMER);
+      if (stock) from = String(stock._id);
+      if (sink) to = String(sink._id);
+    }
 
     // Kontrola dostępności, gdy źródłem jest lokalizacja fizyczna (nie dotyczy przyjęć).
     if (from) {
@@ -503,6 +523,13 @@ export async function validateOperation(db, operationId, actorEmail) {
     if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { conversionDetail: detail } });
   }
 
+  // Dostawa → zdejmij partie cenowe (towar opuszcza stan); zapamiętaj zdjęte partie,
+  // by cofnięcie mogło je oddać.
+  if (op.type === 'delivery') {
+    const detail = await applyDeliveryBatches(db, op, lines, preDelivery, now);
+    if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { deliveryDetail: detail } });
+  }
+
   return { reference: op.reference, affected: [...affected] };
 }
 
@@ -545,6 +572,25 @@ async function applyReceiptPriceBatches(db, op, lines, preReceipt, now) {
   }
 }
 
+// Zdejmuje `qty` z tablicy partii FIFO (mutuje qty partii). Zwraca koszt zdjętej
+// ilości i listę zdjętych transz (do odwrócenia operacji).
+function fifoConsume(batches, qty) {
+  let remaining = Math.max(0, qty);
+  let cost = 0;
+  const consumed = [];
+  for (const b of batches) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, Number(b.qty) || 0);
+    if (take <= 0) continue;
+    b.qty = (Number(b.qty) || 0) - take;
+    const up = Number(b.unitPrice) || 0;
+    cost += take * up;
+    consumed.push({ qty: take, unitPrice: up });
+    remaining -= take;
+  }
+  return { consumed, cost };
+}
+
 // Przenosi koszt przy konwersji: zdejmuje `quantity` z partii towaru (FIFO) i
 // dopisuje gadżetowi jedną partię po średniej cenie zdjętego kosztu. Operuje na
 // stanie SPRZED ruchów (`preConv`), więc ilość pozostała = suma partii po zdjęciu.
@@ -574,19 +620,7 @@ async function applyConversionBatches(db, op, lines, preConv, now) {
 
     // Zdejmij qty FIFO; zbierz koszt i zdjęte partie (do cofnięcia).
     const batches = sourceBatches(sourceCode);
-    let remaining = qty;
-    let cost = 0;
-    const consumed = [];
-    for (const b of batches) {
-      if (remaining <= 0) break;
-      const take = Math.min(remaining, Number(b.qty) || 0);
-      if (take <= 0) continue;
-      b.qty = (Number(b.qty) || 0) - take;
-      const up = Number(b.unitPrice) || 0;
-      cost += take * up;
-      consumed.push({ qty: take, unitPrice: up });
-      remaining -= take;
-    }
+    const { consumed, cost } = fifoConsume(batches, qty);
     const kept = batches.filter(b => (Number(b.qty) || 0) > 0);
     work.set(sourceCode, kept);
     const srcTotal = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
@@ -604,6 +638,38 @@ async function applyConversionBatches(db, op, lines, preConv, now) {
     }
 
     detail.push({ sourceCode, targetCode, qty, consumed, producedUnit, note });
+  }
+  return detail;
+}
+
+// Zdejmuje partie cenowe przy wydaniu (dostawa — towar opuszcza stan). FIFO z partii
+// każdego produktu na podstawie snapshotu sprzed ruchów; ustawia ilość = suma partii
+// po zdjęciu. Zwraca detal [{ itemCode, qty, consumed }] do oddania przy cofnięciu.
+async function applyDeliveryBatches(db, op, lines, preDelivery, now) {
+  const items = db.collection(collections.items);
+  const detail = [];
+  const work = new Map();
+  const productBatches = (code) => {
+    if (!work.has(code)) {
+      const pre = preDelivery.get(code) || { quantity: 0, priceBatches: [] };
+      const b = pre.priceBatches.map(x => ({ ...x }));
+      if (b.length === 0 && pre.quantity > 0) b.push({ qty: pre.quantity, unitPrice: 0, note: 'Stan początkowy', addedAt: now });
+      work.set(code, b);
+    }
+    return work.get(code);
+  };
+
+  for (const ln of lines) {
+    const code = String(ln.itemCode || '').trim();
+    const qty = Math.max(0, Math.floor(Number(ln.quantity) || 0));
+    if (!code || qty <= 0) continue;
+    const batches = productBatches(code);
+    const { consumed } = fifoConsume(batches, qty);
+    const kept = batches.filter(b => (Number(b.qty) || 0) > 0);
+    work.set(code, kept);
+    const total = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    await items.updateOne({ itemCode: code }, { $set: { priceBatches: kept, quantity: total, updatedAt: now } });
+    detail.push({ itemCode: code, qty, consumed });
   }
   return detail;
 }
@@ -669,10 +735,23 @@ export async function reverseOperation(db, operationId, actorEmail) {
     }
   }
 
+  // Dostawa: oddaj partie cenowe zdjęte przy wydaniu (z zapamiętanego detalu).
+  if (op.type === 'delivery' && Array.isArray(op.deliveryDetail)) {
+    const items = db.collection(collections.items);
+    for (const d of op.deliveryDetail) {
+      if (!Array.isArray(d.consumed) || !d.consumed.length) continue;
+      const it = await items.findOne({ itemCode: d.itemCode }, { projection: { priceBatches: 1 } });
+      const batches = it && Array.isArray(it.priceBatches) ? it.priceBatches.slice() : [];
+      for (const c of d.consumed) batches.push({ qty: Number(c.qty) || 0, unitPrice: Number(c.unitPrice) || 0, note: `Zwrot z dostawy ${op.reference}`, addedAt: new Date() });
+      const total = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      await items.updateOne({ itemCode: d.itemCode }, { $set: { priceBatches: batches, quantity: total, updatedAt: new Date() } });
+    }
+  }
+
   const now = new Date();
   await ops.updateOne(
     { _id: op._id },
-    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '' } }
+    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '', deliveryDetail: '' } }
   );
   return { reference: op.reference, affected };
 }
