@@ -56,12 +56,24 @@
 }
 
 /* Zakodowane (nie-zmiennościowe) powierzchnie — domknięcie w trybie ciemnym. */
-[data-theme="dark"] .item-row { background: var(--surface); }
 [data-theme="dark"] .item-note { background: var(--surface-2); color: var(--text); }
 [data-theme="dark"] .equipment-card-media,
 [data-theme="dark"] .modal-media {
   background: linear-gradient(135deg, #1d2433 0%, #28303f 100%);
 }
+/* Jasne „chipy" info/tagi i tło logowania → wariant ciemny (czytelny kontrast). */
+[data-theme="dark"] .badge-status[data-status="loaned"],
+[data-theme="dark"] .request-status[data-status="approved"],
+[data-theme="dark"] .request-status[data-status="ordered"] {
+  background: #1d2a4d;
+  color: #9db4f5;
+}
+[data-theme="dark"] .tag { background: var(--surface-3); color: #9db4f5; }
+[data-theme="dark"] .login-gate {
+  background: radial-gradient(circle at 50% -10%, #1b2540 0%, var(--bg) 58%);
+}
+[data-theme="dark"] .btn-danger { border-color: #5a2230; }
+[data-theme="dark"] .btn-danger:hover { background: #4a1c28; }
 
 * {
   box-sizing: border-box;
@@ -261,7 +273,7 @@ select {
   border-radius: 12px;
   border: 1px solid var(--border);
   padding: 11px 13px;
-  background: white;
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -425,7 +437,7 @@ select:focus {
   min-height: 100%;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  background: var(--surface);
   overflow: hidden;
   box-shadow: var(--shadow);
 }
@@ -544,7 +556,7 @@ select:focus {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 14px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .item-title {
@@ -568,13 +580,13 @@ select:focus {
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: white;
+  background: var(--surface);
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  background: white;
+  background: var(--surface);
 }
 
 th,
@@ -729,7 +741,7 @@ th {
   display: grid;
   gap: 18px;
   padding: 28px;
-  background: white;
+  background: var(--surface);
 }
 
 .modal-top {
