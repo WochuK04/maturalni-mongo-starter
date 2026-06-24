@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -233,24 +233,8 @@ async function regenerateItemCodeForCategory(db, oldCode, newCategory) {
   return candidate;
 }
 
-// Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
-// obcy (stan, ruchy, wypożyczenia, wnioski, loty, reguły min-max, pozycje operacji).
-// Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
-async function cascadeItemCodeRename(db, oldCode, newCode) {
-  const o = String(oldCode), n = String(newCode);
-  if (!o || !n || o === n) return;
-  await db.collection(collections.quants).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.stockMoves).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.loans).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.loanRequests).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.lots).updateMany({ itemCode: o }, { $set: { itemCode: n } });
-  await db.collection(collections.reorderRules).updateMany({ scope: 'item', target: o }, { $set: { target: n } });
-  await db.collection(collections.stockOperations).updateMany(
-    { 'lines.itemCode': o },
-    { $set: { 'lines.$[e].itemCode': n } },
-    { arrayFilters: [{ 'e.itemCode': o }] }
-  );
-}
+// Kaskadowa zmiana itemCode po kolekcjach żyje w stock.js (cascadeItemCodeRename) —
+// czysta operacja na db, jak reszta logiki stanu.
 
 app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
@@ -704,6 +688,69 @@ app.post('/warehouse/products', requireAuth, requireAdmin, async (req, res) => {
     entityId: String(insertedId), payload: { itemCode: doc.itemCode, source: 'warehouse-receipt' }, createdAt: now
   });
   res.status(201).json({ id: String(insertedId), itemCode: doc.itemCode, name: doc.name, category: doc.category });
+});
+
+// Kod pasuje do aktualnego schematu kategorii, gdy zaczyna się od „PREFIX-"
+// (np. „OPAK-…" dla opakowania) — tak jak generuje generatePurchaseItemCode.
+function codeConformsToCategory(code, category) {
+  return String(code || '').startsWith(`${itemCodePrefix(category)}-`);
+}
+
+// Hurtowe ujednolicenie kodów produktów Magazynu do aktualnego schematu.
+// Stare/ręczne kody (np. „O001") dostają nowy kod wg kategorii; pasujące zostają.
+// Zmiana kaskaduje (itemCode to klucz obcy w wielu kolekcjach). Auto-generowanie
+// nowych produktów zostaje bez zmian — to jednorazowe porządkowanie zaszłości.
+app.get('/warehouse/products/normalize-preview', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1 } })
+    .toArray();
+  const items = all
+    .filter(it => isWarehouseCategory(it.category))
+    .filter(it => !codeConformsToCategory(it.itemCode, it.category))
+    .map(it => ({
+      id: String(it._id),
+      itemCode: it.itemCode,
+      name: it.name || '',
+      category: it.category || '',
+      newPrefix: itemCodePrefix(it.category)
+    }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), 'pl'));
+  res.json({ count: items.length, items });
+});
+
+app.post('/warehouse/products/normalize-codes', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1 } })
+    .toArray();
+  const targets = all
+    .filter(it => isWarehouseCategory(it.category))
+    .filter(it => !codeConformsToCategory(it.itemCode, it.category));
+
+  const changes = [];
+  for (const it of targets) {
+    const oldCode = it.itemCode;
+    const newCode = await regenerateItemCodeForCategory(db, oldCode, it.category);
+    if (!newCode || newCode === oldCode) continue;
+    const dup = await db.collection(collections.items).findOne({ _id: { $ne: it._id }, itemCode: newCode });
+    if (dup) continue; // nie nadpisuj cudzego kodu (regenerate pilnuje, to dodatkowa asekuracja)
+    await db.collection(collections.items).updateOne({ _id: it._id }, { $set: { itemCode: newCode, updatedAt: new Date() } });
+    await cascadeItemCodeRename(db, oldCode, newCode);
+    changes.push({ id: String(it._id), oldCode, newCode, name: it.name || '' });
+  }
+
+  if (changes.length) {
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email,
+      actionType: 'item_codes_normalized',
+      entityType: 'item',
+      entityId: null,
+      payload: { count: changes.length, changes },
+      createdAt: new Date()
+    });
+  }
+  res.json({ count: changes.length, changes });
 });
 
 // ----- Dostawcy (kartoteka kontrahentów dla przyjęć) -----

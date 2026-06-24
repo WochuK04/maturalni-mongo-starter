@@ -147,6 +147,7 @@ const whProductsView = document.getElementById('whProductsView');
 const whProductsSearch = document.getElementById('whProductsSearch');
 const whProductsContent = document.getElementById('whProductsContent');
 const whProductsExport = document.getElementById('whProductsExport');
+const whNormalizeCodesBtn = document.getElementById('whNormalizeCodesBtn');
 // Okno produktu Magazynu (edycja + partie cenowe).
 const warehouseProductModal = document.getElementById('warehouseProductModal');
 const warehouseProductForm = document.getElementById('warehouseProductForm');
@@ -3539,8 +3540,26 @@ async function refreshWarehouseHeader() {
 
 // --- Produkty (kartoteka: produkt = pozycja z partiami cenowymi) ---
 async function loadWarehouseProducts() {
+  if (whNormalizeCodesBtn) whNormalizeCodesBtn.hidden = currentUser?.role !== 'admin';
   warehouseProductsState = await api('/warehouse/products');
   applyProductsFilter();
+}
+
+// Hurtowe ujednolicenie starych kodów produktów do aktualnego schematu (wg kategorii).
+// Auto-generowanie nowych produktów zostaje bez zmian — to porządkowanie zaszłości.
+async function normalizeProductCodes() {
+  if (currentUser?.role !== 'admin') { showToast('Ujednolicenie kodów wymaga uprawnień administratora.'); return; }
+  try {
+    const preview = await api('/warehouse/products/normalize-preview');
+    if (!preview.count) { showToast('Wszystkie kody są już w aktualnym formacie.'); return; }
+    const sample = preview.items.slice(0, 8)
+      .map(i => `• ${i.itemCode} (${i.name}) → ${i.newPrefix}-…`).join('\n');
+    const more = preview.count > 8 ? `\n…i ${preview.count - 8} więcej` : '';
+    if (!confirm(`Znaleziono ${preview.count} produktów ze starymi kodami. Zostaną przekształcone do aktualnego formatu:\n\n${sample}${more}\n\nUjednolić wszystkie?`)) return;
+    const result = await api('/warehouse/products/normalize-codes', { method: 'POST', body: '{}' });
+    showToast(`Ujednolicono kody: ${result.count}.`);
+    await loadWarehouseProducts();
+  } catch (err) { showToast(err.message); }
 }
 
 function applyProductsFilter() {
@@ -4029,6 +4048,7 @@ if (whProductsSearch) whProductsSearch.addEventListener('input', applyProductsFi
 if (warehouseSearchInput) warehouseSearchInput.addEventListener('input', applyWarehouseStockFilter);
 if (warehouseLocationFilter) warehouseLocationFilter.addEventListener('change', applyWarehouseStockFilter);
 if (whProductsExport) whProductsExport.addEventListener('click', exportWarehouseProductsCsv);
+if (whNormalizeCodesBtn) whNormalizeCodesBtn.addEventListener('click', normalizeProductCodes);
 if (whStockExport) whStockExport.addEventListener('click', exportWarehouseStockCsv);
 if (whMovesExport) whMovesExport.addEventListener('click', exportWarehouseMovesCsv);
 
