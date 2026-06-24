@@ -681,6 +681,12 @@ function normalizeOperationLines(type, rawLines) {
           lot: l.lot ? String(l.lot) : null
         };
       }
+      // Konwersja: itemCode = towar (źródło), targetItemCode = gadżet (cel).
+      if (type === 'conversion') {
+        const targetItemCode = normalizeItemCode(l.targetItemCode || '');
+        if (!targetItemCode) return null;
+        return { itemCode, targetItemCode, quantity: Math.max(1, Number(l.quantity) || 1) };
+      }
       const line = { itemCode, quantity: Math.max(1, Number(l.quantity) || 1), lot: l.lot ? String(l.lot) : null };
       // Przyjęcie: cena zakupu per pozycja (zł). Zatwierdzenie dopisze partię cenową.
       if (type === 'receipt') line.unitPrice = Math.max(0, Math.round((Number(l.unitPrice) || 0) * 100) / 100);
@@ -802,7 +808,7 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
 
   const locations = await db.collection(collections.locations).find({}).toArray();
   const locById = new Map(locations.map(l => [String(l._id), l]));
-  const codes = (op.lines || []).map(l => l.itemCode);
+  const codes = [...new Set((op.lines || []).flatMap(l => [l.itemCode, l.targetItemCode]).filter(Boolean))];
   const items = codes.length
     ? await db.collection(collections.items).find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, name: 1 } }).toArray()
     : [];
@@ -827,6 +833,8 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
     lines: (op.lines || []).map(l => ({
       itemCode: l.itemCode,
       itemName: nameByCode.get(l.itemCode) || '',
+      targetItemCode: l.targetItemCode || null,
+      targetName: l.targetItemCode ? (nameByCode.get(l.targetItemCode) || '') : null,
       quantity: l.quantity ?? null,
       unitPrice: l.unitPrice ?? null,
       countedQty: l.countedQty ?? null,
