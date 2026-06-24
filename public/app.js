@@ -152,6 +152,7 @@ const warehouseProductModal = document.getElementById('warehouseProductModal');
 const warehouseProductForm = document.getElementById('warehouseProductForm');
 const whProductTitle = document.getElementById('whProductTitle');
 const whProductCode = document.getElementById('whProductCode');
+const whProductCodeInput = document.getElementById('whProductCodeInput');
 const whProductName = document.getElementById('whProductName');
 const whProductCategory = document.getElementById('whProductCategory');
 const whProductBrand = document.getElementById('whProductBrand');
@@ -3664,10 +3665,9 @@ function openWarehouseProductModal(product) {
   }
   editingWarehouseProductId = product.id;
   if (whProductTitle) whProductTitle.textContent = product.name || 'Produkt';
-  if (whProductCode) {
-    whProductCode.textContent = product.itemCode ? `Kod: ${product.itemCode}` : '';
-    whProductCode.hidden = !product.itemCode;
-  }
+  // Kod jest teraz edytowalnym polem w formularzu — caption pod tytułem zbędny.
+  if (whProductCode) whProductCode.hidden = true;
+  if (whProductCodeInput) whProductCodeInput.value = product.itemCode || '';
   if (whProductName) whProductName.value = product.name || '';
   setSelectValue(whProductCategory, product.category);
   if (whProductBrand) whProductBrand.value = product.brand || '';
@@ -3731,7 +3731,11 @@ function closeWarehouseProductModal() {
 
 async function saveWarehouseProduct() {
   if (!editingWarehouseProductId) return;
+  // Kod normalizujemy jak backend (wielkie litery, bez spacji wiodących). Zmiana
+  // kaskaduje po wszystkich kolekcjach (cascadeItemCodeRename); duplikat → 409.
+  const itemCode = (whProductCodeInput?.value || '').trim().toUpperCase();
   const payload = {
+    itemCode,
     name: (whProductName?.value || '').trim(),
     category: whProductCategory?.value || '',
     brand: (whProductBrand?.value || '').trim(),
@@ -3740,6 +3744,7 @@ async function saveWarehouseProduct() {
     priceBatches: collectBatches()
   };
   if (!payload.name) { showToast('Podaj nazwę produktu.'); return; }
+  if (!payload.itemCode) { showToast('Podaj kod produktu.'); return; }
   try {
     await api(`/admin/items/${editingWarehouseProductId}`, {
       method: 'PATCH',
