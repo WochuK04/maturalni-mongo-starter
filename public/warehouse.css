@@ -118,6 +118,16 @@
 .op-line-head span:not(:first-child):not(:last-child) { width: 96px; }
 .operation-lines { margin-top: 14px; }
 
+/* Panel stanu: na sztywno pokazuje dostępny stan wybranych produktów (Magazyn),
+   aktualizowany przy zmianie pozycji. */
+.op-stock-panel { margin-top: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.op-stock-panel .op-stock-title { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.op-stock-panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.op-stock-panel li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; font-size: 14px; }
+.op-stock-panel .op-stock-name { color: var(--text); }
+.op-stock-panel .op-stock-qty { font-weight: 700; white-space: nowrap; }
+.op-stock-panel .op-stock-empty { margin: 0; font-size: 13px; color: var(--muted); }
+
 /* Pole „Dostawca" w przyjęciu: select + przycisk „＋ Nowy" w jednej linii. */
 .op-supplier-row { display: flex; gap: 8px; align-items: center; }
 .op-supplier-row select { flex: 1; }

@@ -201,6 +201,7 @@ const operationSource = document.getElementById('operationSource');
 const operationNote = document.getElementById('operationNote');
 const operationLinesHead = document.getElementById('operationLinesHead');
 const operationLines = document.getElementById('operationLines');
+const operationStockPanel = document.getElementById('operationStockPanel');
 const operationAddLineBtn = document.getElementById('operationAddLineBtn');
 const operationStateHint = document.getElementById('operationStateHint');
 const operationSaveBtn = document.getElementById('operationSaveBtn');
@@ -3058,7 +3059,7 @@ function addOperationLine(line = {}) {
       <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   }
-  row.querySelector('.op-line-remove').addEventListener('click', () => row.remove());
+  row.querySelector('.op-line-remove').addEventListener('click', () => { row.remove(); refreshOperationStockPanel(); });
   // „＋ Nowy produkt…" w pickerze (przyjęcie) → otwórz okno tworzenia i wskaż nowy.
   const sel = row.querySelector('.op-line-item');
   if (sel) sel.addEventListener('change', () => {
@@ -3073,6 +3074,7 @@ function addOperationLine(line = {}) {
         qty.title = sel.value ? `Dostępne na Magazynie: ${max}` : 'Wybierz towar';
       }
     }
+    refreshOperationStockPanel();
   });
   // Konwersja: „＋ utwórz gadżet z tego towaru" w pickerze celu — prefill nazwą towaru, kat. gadżet.
   const tgtSel = row.querySelector('.op-line-target');
@@ -3082,9 +3084,12 @@ function addOperationLine(line = {}) {
       const srcCode = row.querySelector('.op-line-item')?.value || '';
       const srcItem = (warehouseFormData?.items || []).find(it => it.itemCode === srcCode);
       openNewProductModal(tgtSel, { name: srcItem?.name || '', category: 'gadżet' });
+      return;
     }
+    refreshOperationStockPanel();
   });
   operationLines.appendChild(row);
+  refreshOperationStockPanel();
 }
 
 function renderOperationLinesHead() {
@@ -3259,6 +3264,32 @@ function checkConversionStock() {
   });
 }
 
+// Panel stanu: zbiera produkty wybrane w pozycjach i na sztywno pokazuje ich
+// dostępny stan na Magazynie. Wołany przy zmianie wyboru / dodaniu / usunięciu pozycji.
+function refreshOperationStockPanel() {
+  if (!operationStockPanel) return;
+  const seen = new Set();
+  const rows = [];
+  operationLines.querySelectorAll('.op-line').forEach(row => {
+    ['.op-line-item', '.op-line-target'].forEach(sel => {
+      const code = row.querySelector(sel)?.value;
+      if (!code || code === '__new__' || seen.has(code)) return;
+      seen.add(code);
+      const it = (warehouseFormData?.items || []).find(x => x.itemCode === code);
+      if (it) rows.push({ name: it.name || code, onHand: Number(it.onHand) || 0 });
+    });
+  });
+  if (!rows.length) {
+    operationStockPanel.innerHTML = '<p class="op-stock-empty">Wybierz produkt, aby zobaczyć dostępny stan na Magazynie.</p>';
+  } else {
+    operationStockPanel.innerHTML =
+      '<p class="op-stock-title">Stan na Magazynie</p><ul>' +
+      rows.map(r => `<li><span class="op-stock-name">${escapeHtml(r.name)}</span><span class="op-stock-qty">${r.onHand} szt.</span></li>`).join('') +
+      '</ul>';
+  }
+  operationStockPanel.hidden = false;
+}
+
 async function saveOperation() {
   const payload = collectOperationPayload();
   if (!payload.lines.length) throw new Error('Dodaj przynajmniej jedną pozycję');
@@ -3306,6 +3337,7 @@ async function saveNewProduct() {
     }
     showToast(`Utworzono produkt: ${res.name}`);
     closeNewProductModal();
+    refreshOperationStockPanel();
   } catch (err) { showToast(err.message); }
 }
 
@@ -3917,6 +3949,24 @@ if (destinationDeleteBtn) destinationDeleteBtn.addEventListener('click', deleteD
 if (destinationCancelBtn) destinationCancelBtn.addEventListener('click', closeDestinationModal);
 if (closeDestinationBtn) closeDestinationBtn.addEventListener('click', closeDestinationModal);
 if (destinationForm) destinationForm.addEventListener('submit', (e) => { e.preventDefault(); saveDestination(); });
+
+// Motyw jasny/ciemny — atrybut data-theme na <html> (init bez mignięcia jest w <head>).
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+function applyTheme(theme) {
+  const dark = theme === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch (e) { /* brak storage */ }
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent = dark ? '☀️ Tryb jasny' : '🌙 Tryb ciemny';
+    themeToggleBtn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+  }
+}
+if (themeToggleBtn) {
+  // Zsynchronizuj etykietę z motywem ustawionym już w <head>.
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+  themeToggleBtn.addEventListener('click', () =>
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+}
 
 document.addEventListener('click', async (e) => {
   const target = e.target;
