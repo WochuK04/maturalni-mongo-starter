@@ -20,7 +20,8 @@ export const LOCATION_KINDS = {
   INVENTORY: 'inventory', // wirtualna: korekty / stan otwarcia (źródło-ujście)
   SCRAP: 'scrap',         // wirtualna: złom / wybrakowane
   SUPPLIER: 'supplier',   // wirtualna: przyjęcia od dostawców
-  TRANSIT: 'transit'      // wirtualna: tranzyt między lokalizacjami
+  TRANSIT: 'transit',     // wirtualna: tranzyt między lokalizacjami
+  CONVERSION: 'conversion' // wirtualna: przetworzenie towar→gadżet (przeklasyfikowanie)
 };
 
 // Lokalizacje, na których liczymy realny „stan posiadania".
@@ -34,7 +35,8 @@ export function isVirtualKind(kind) {
     kind === LOCATION_KINDS.INVENTORY ||
     kind === LOCATION_KINDS.SCRAP ||
     kind === LOCATION_KINDS.SUPPLIER ||
-    kind === LOCATION_KINDS.TRANSIT
+    kind === LOCATION_KINDS.TRANSIT ||
+    kind === LOCATION_KINDS.CONVERSION
   );
 }
 
@@ -52,7 +54,8 @@ export const STANDARD_LOCATIONS = [
   { code: 'VIRT', name: 'Lokalizacje wirtualne', kind: LOCATION_KINDS.VIEW, parentCode: null, matchName: null },
   { code: 'VIRT/Inventory', name: 'Korekta stanu (wirtualna)', kind: LOCATION_KINDS.INVENTORY, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Scrap', name: 'Złom / wybrakowane', kind: LOCATION_KINDS.SCRAP, parentCode: 'VIRT', matchName: null },
-  { code: 'VIRT/Suppliers', name: 'Dostawcy (przyjęcia)', kind: LOCATION_KINDS.SUPPLIER, parentCode: 'VIRT', matchName: null }
+  { code: 'VIRT/Suppliers', name: 'Dostawcy (przyjęcia)', kind: LOCATION_KINDS.SUPPLIER, parentCode: 'VIRT', matchName: null },
+  { code: 'VIRT/Conversion', name: 'Przetworzenie (towar→gadżet)', kind: LOCATION_KINDS.CONVERSION, parentCode: 'VIRT', matchName: null }
 ];
 
 function toObjectIdOrNull(value) {
@@ -269,7 +272,11 @@ export const OPERATION_TYPES = {
   delivery:   { label: 'Dostawa',               group: 'Przekazy', prefix: 'mag/OUT',   defaultFrom: 'WH/Stock',       defaultTo: 'WH/Employees' },
   internal:   { label: 'Przesunięcie wewnętrzne', group: 'Przekazy', prefix: 'mag/INT', defaultFrom: 'WH/Stock',       defaultTo: 'WH/Studio' },
   scrap:      { label: 'Odpad',                 group: 'Korekty',  prefix: 'mag/SCRAP', defaultFrom: 'WH/Stock',       defaultTo: 'VIRT/Scrap' },
-  adjustment: { label: 'Inwentarz fizyczny',    group: 'Korekty',  prefix: 'mag/ADJ',   defaultFrom: null,             defaultTo: 'WH/Stock' }
+  adjustment: { label: 'Inwentarz fizyczny',    group: 'Korekty',  prefix: 'mag/ADJ',   defaultFrom: null,             defaultTo: 'WH/Stock' },
+  // Konwersja (przeklasyfikowanie towar→gadżet): zdejmuje towar z Magazynu i tworzy
+  // tyle samo gadżetu, przenosząc koszt jednostkowy (potrzebny do progu „prezentów
+  // małej wartości" w VAT). Pozycja ma dodatkowe pole `targetItemCode` (gadżet-cel).
+  conversion: { label: 'Konwersja',             group: 'Przetworzenie', prefix: 'mag/CONV', defaultFrom: 'WH/Stock',  defaultTo: 'WH/Stock' }
 };
 
 export function isOperationType(type) {
@@ -288,6 +295,35 @@ export async function onHandAt(db, itemCode, locationId, lot = null) {
 
 async function locationByCode(db, code) {
   return db.collection(collections.locations).findOne({ code });
+}
+
+// Gwarantuje istnienie wirtualnej lokalizacji konwersji (VIRT/Conversion) — bazy
+// zaseedowane przed wprowadzeniem konwersji jej nie mają, a `seedStandardLocations`
+// leci tylko ze skryptu. Idempotentny upsert wpięty pod węzeł VIRT.
+async function ensureConversionLocation(db) {
+  const col = db.collection(collections.locations);
+  const existing = await col.findOne({ code: 'VIRT/Conversion' });
+  if (existing) return existing;
+  const parent = await col.findOne({ code: 'VIRT' });
+  const ancestors = parent ? [...(parent.ancestors || []), parent.code] : [];
+  const now = new Date();
+  await col.updateOne(
+    { code: 'VIRT/Conversion' },
+    {
+      $set: {
+        code: 'VIRT/Conversion',
+        name: 'Przetworzenie (towar→gadżet)',
+        kind: LOCATION_KINDS.CONVERSION,
+        parentId: parent ? String(parent._id) : null,
+        ancestors,
+        isActive: true,
+        updatedAt: now
+      },
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+  return col.findOne({ code: 'VIRT/Conversion' });
 }
 
 // Zatwierdza operację: generuje ruchy z pozycji dokumentu i ustawia stan „done".
@@ -323,6 +359,22 @@ export async function validateOperation(db, operationId, actorEmail) {
     });
   }
 
+  // Konwersja: zapamiętaj partie i ilość źródeł SPRZED ruchów — koszt zdejmujemy
+  // z tego stanu (po ruchach quanty/ilości już są obniżone), patrz applyConversionBatches.
+  const preConv = new Map();
+  if (op.type === 'conversion') {
+    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const its = codes.length
+      ? await db.collection(collections.items)
+          .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
+          .toArray()
+      : [];
+    for (const it of its) preConv.set(it.itemCode, {
+      quantity: Number(it.quantity) || 0,
+      priceBatches: Array.isArray(it.priceBatches) ? it.priceBatches.map(b => ({ ...b })) : []
+    });
+  }
+
   if (op.type === 'adjustment') {
     const inv = await locationByCode(db, 'VIRT/Inventory');
     if (!inv) throw new Error('Brak wirtualnej lokalizacji korekty (VIRT/Inventory)');
@@ -352,6 +404,50 @@ export async function validateOperation(db, operationId, actorEmail) {
         doneAt: now
       });
       affected.add(itemCode);
+    }
+  } else if (op.type === 'conversion') {
+    // Przeklasyfikowanie: dla każdej pozycji zdejmij `quantity` towaru z Magazynu
+    // (Magazyn → VIRT/Conversion) i utwórz tyle samo gadżetu (VIRT/Conversion →
+    // Magazyn). Dwa spięte ruchy; koszt przeniesie applyConversionBatches.
+    const stock = await locationByCode(db, 'WH/Stock');
+    if (!stock) throw new Error('Brak lokalizacji magazynu (WH/Stock)');
+    const conv = await ensureConversionLocation(db);
+
+    for (const ln of lines) {
+      const sourceCode = String(ln.itemCode || '').trim();
+      const targetCode = String(ln.targetItemCode || '').trim();
+      const qty = Number(ln.quantity);
+      if (!sourceCode || !targetCode) throw new Error('Pozycja konwersji wymaga towaru i gadżetu');
+      if (sourceCode === targetCode) throw new Error('Towar i gadżet muszą być różne');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error(`Niepoprawna ilość dla ${sourceCode}`);
+
+      const avail = await onHandAt(db, sourceCode, String(stock._id), null);
+      if (qty > avail) throw new Error(`Za mało na stanie: ${sourceCode} (dostępne ${avail}, żądane ${qty})`);
+
+      await applyMove(db, {
+        itemCode: sourceCode,
+        fromLocationId: String(stock._id),
+        toLocationId: String(conv._id),
+        quantity: qty,
+        kind: 'conversion',
+        operationId: String(op._id),
+        actorEmail,
+        note: op.reference,
+        doneAt: now
+      });
+      await applyMove(db, {
+        itemCode: targetCode,
+        fromLocationId: String(conv._id),
+        toLocationId: String(stock._id),
+        quantity: qty,
+        kind: 'conversion',
+        operationId: String(op._id),
+        actorEmail,
+        note: op.reference,
+        doneAt: now
+      });
+      affected.add(sourceCode);
+      affected.add(targetCode);
     }
   } else {
     const from = op.fromLocationId ? String(op.fromLocationId) : null;
@@ -400,6 +496,13 @@ export async function validateOperation(db, operationId, actorEmail) {
   // ilość sumą partii — partie są źródłem prawdy dla produktów Magazynu, #27).
   if (op.type === 'receipt') await applyReceiptPriceBatches(db, op, lines, preReceipt, now);
 
+  // Konwersja → przenieś koszt z partii towaru na nową partię gadżetu; zapamiętaj
+  // detal na dokumencie, by cofnięcie mogło dokładnie odtworzyć partie obu stron.
+  if (op.type === 'conversion') {
+    const detail = await applyConversionBatches(db, op, lines, preConv, now);
+    if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { conversionDetail: detail } });
+  }
+
   return { reference: op.reference, affected: [...affected] };
 }
 
@@ -442,6 +545,69 @@ async function applyReceiptPriceBatches(db, op, lines, preReceipt, now) {
   }
 }
 
+// Przenosi koszt przy konwersji: zdejmuje `quantity` z partii towaru (FIFO) i
+// dopisuje gadżetowi jedną partię po średniej cenie zdjętego kosztu. Operuje na
+// stanie SPRZED ruchów (`preConv`), więc ilość pozostała = suma partii po zdjęciu.
+// Zwraca detal [{ sourceCode, targetCode, qty, consumed:[{qty,unitPrice}], note }]
+// do dokładnego odwrócenia w reverseOperation.
+async function applyConversionBatches(db, op, lines, preConv, now) {
+  const items = db.collection(collections.items);
+  const detail = [];
+  // Robocza kopia partii towaru — współdzielona między pozycjami tego samego źródła.
+  const work = new Map();
+  const sourceBatches = (code) => {
+    if (!work.has(code)) {
+      const pre = preConv.get(code) || { quantity: 0, priceBatches: [] };
+      const b = pre.priceBatches.map(x => ({ ...x }));
+      // Legacy bez partii, ale z ilością → najpierw partia „Stan początkowy" (0 zł).
+      if (b.length === 0 && pre.quantity > 0) b.push({ qty: pre.quantity, unitPrice: 0, note: 'Stan początkowy', addedAt: now });
+      work.set(code, b);
+    }
+    return work.get(code);
+  };
+
+  for (const ln of lines) {
+    const sourceCode = String(ln.itemCode || '').trim();
+    const targetCode = String(ln.targetItemCode || '').trim();
+    const qty = Math.max(0, Math.floor(Number(ln.quantity) || 0));
+    if (!sourceCode || !targetCode || qty <= 0) continue;
+
+    // Zdejmij qty FIFO; zbierz koszt i zdjęte partie (do cofnięcia).
+    const batches = sourceBatches(sourceCode);
+    let remaining = qty;
+    let cost = 0;
+    const consumed = [];
+    for (const b of batches) {
+      if (remaining <= 0) break;
+      const take = Math.min(remaining, Number(b.qty) || 0);
+      if (take <= 0) continue;
+      b.qty = (Number(b.qty) || 0) - take;
+      const up = Number(b.unitPrice) || 0;
+      cost += take * up;
+      consumed.push({ qty: take, unitPrice: up });
+      remaining -= take;
+    }
+    const kept = batches.filter(b => (Number(b.qty) || 0) > 0);
+    work.set(sourceCode, kept);
+    const srcTotal = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    await items.updateOne({ itemCode: sourceCode }, { $set: { priceBatches: kept, quantity: srcTotal, updatedAt: now } });
+
+    // Cena jednostkowa gadżetu = średnia zdjętego kosztu (gdy brak kosztu → 0 zł).
+    const producedUnit = qty > 0 ? Math.round((cost / qty) * 100) / 100 : 0;
+    const note = `${op.reference} · konwersja z ${sourceCode}`;
+    const tgt = await items.findOne({ itemCode: targetCode }, { projection: { priceBatches: 1 } });
+    if (tgt) {
+      const tBatches = Array.isArray(tgt.priceBatches) ? tgt.priceBatches.slice() : [];
+      tBatches.push({ qty, unitPrice: producedUnit, note, addedAt: now });
+      const tTotal = tBatches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      await items.updateOne({ itemCode: targetCode }, { $set: { priceBatches: tBatches, quantity: tTotal, updatedAt: now } });
+    }
+
+    detail.push({ sourceCode, targetCode, qty, consumed, producedUnit, note });
+  }
+  return detail;
+}
+
 // Cofa wykonaną operację: usuwa jej ruchy z rejestru i przelicza stany (jakby
 // nigdy się nie zaksięgowała), a dla przyjęć usuwa partie cenowe dopisane przez
 // tę operację (rozpoznawane po prefiksie referencji). Operacja wraca do stanu
@@ -476,10 +642,37 @@ export async function reverseOperation(db, operationId, actorEmail) {
     }
   }
 
+  // Konwersja: odtwórz partie z zapamiętanego detalu — gadżetowi zdejmij dopisaną
+  // partię (po nocie + ilości), towarowi oddaj zdjęte partie. Bez detalu (stare
+  // dokumenty) cofamy tylko ruchy — quanty i tak wracają przez recomputeQuants.
+  if (op.type === 'conversion' && Array.isArray(op.conversionDetail)) {
+    const items = db.collection(collections.items);
+    for (const d of op.conversionDetail) {
+      const tgt = await items.findOne({ itemCode: d.targetCode }, { projection: { priceBatches: 1 } });
+      if (tgt && Array.isArray(tgt.priceBatches)) {
+        const kept = [];
+        let removed = false;
+        for (const b of tgt.priceBatches) {
+          if (!removed && b.note === d.note && Number(b.qty) === Number(d.qty)) { removed = true; continue; }
+          kept.push(b);
+        }
+        const tTotal = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+        await items.updateOne({ itemCode: d.targetCode }, { $set: { priceBatches: kept, quantity: tTotal, updatedAt: new Date() } });
+      }
+      if (Array.isArray(d.consumed) && d.consumed.length) {
+        const src = await items.findOne({ itemCode: d.sourceCode }, { projection: { priceBatches: 1 } });
+        const sBatches = src && Array.isArray(src.priceBatches) ? src.priceBatches.slice() : [];
+        for (const c of d.consumed) sBatches.push({ qty: Number(c.qty) || 0, unitPrice: Number(c.unitPrice) || 0, note: `Zwrot z konwersji ${op.reference}`, addedAt: new Date() });
+        const sTotal = sBatches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+        await items.updateOne({ itemCode: d.sourceCode }, { $set: { priceBatches: sBatches, quantity: sTotal, updatedAt: new Date() } });
+      }
+    }
+  }
+
   const now = new Date();
   await ops.updateOne(
     { _id: op._id },
-    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '' } }
+    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '' } }
   );
   return { reference: op.reference, affected };
 }

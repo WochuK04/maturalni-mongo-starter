@@ -2623,10 +2623,10 @@ const MOVE_KIND_LABELS = {
   delivery: 'Wydanie', scrap: 'Złom', adjustment: 'Korekta'
 };
 const OP_STATE_LABELS = { draft: 'Wersja robocza', ready: 'Gotowe', done: 'Wykonano', cancelled: 'Anulowano' };
-const OP_TYPE_ORDER = ['receipt', 'delivery', 'internal', 'scrap', 'adjustment'];
+const OP_TYPE_ORDER = ['receipt', 'delivery', 'internal', 'scrap', 'adjustment', 'conversion'];
 const OP_TYPE_NAV_LABELS = {
   receipt: 'Przyjęcia', delivery: 'Dostawy', internal: 'Wewnętrzne',
-  scrap: 'Odpad', adjustment: 'Inwentarz fizyczny'
+  scrap: 'Odpad', adjustment: 'Inwentarz fizyczny', conversion: 'Konwersje'
 };
 // Ikona + kolor akcentu kafelka Przeglądu (per typ operacji).
 const OP_TYPE_META = {
@@ -2635,6 +2635,7 @@ const OP_TYPE_META = {
   internal: { icon: '🔄', accent: '#0891b2' },
   scrap: { icon: '🗑️', accent: '#dc2626' },
   adjustment: { icon: '📋', accent: '#059669' },
+  conversion: { icon: '♻️', accent: '#0d9488' },
   replenishment: { icon: '🛒', accent: '#d97706' }
 };
 
@@ -2711,7 +2712,7 @@ async function loadWarehouseOverview() {
 function renderOverview(types, replenishment) {
   const groups = {};
   for (const t of types) (groups[t.group] = groups[t.group] || []).push(t);
-  const groupOrder = ['Przekazy', 'Korekty'];
+  const groupOrder = ['Przekazy', 'Korekty', 'Przetworzenie'];
 
   const card = ({ type, title, icon, accent, num, numLabel, sub, subLabel }) => `
     <button class="wh-card" type="button" data-whgo="${escapeHtml(type)}" style="--accent:${accent}">
@@ -2967,8 +2968,10 @@ function locationOptions(selectedId, kinds) {
     `<option value="${escapeHtml(l.id)}"${l.id === selectedId ? ' selected' : ''}>${escapeHtml(l.name)} (${escapeHtml(l.code || '')})</option>`).join('');
 }
 
-function itemOptions(selectedCode, allowNew = false) {
-  const items = warehouseFormData?.items || [];
+function itemOptions(selectedCode, allowNew = false, onlyCategory = null) {
+  const cat = onlyCategory ? String(onlyCategory).toLowerCase() : null;
+  const items = (warehouseFormData?.items || [])
+    .filter(it => !cat || String(it.category || '').trim().toLowerCase() === cat);
   const base = '<option value="">— wybierz produkt —</option>' + items.map(it =>
     `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(it.name || 'Bez nazwy')}</option>`).join('');
   return base + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
@@ -2988,6 +2991,7 @@ function resolveDefaultLocId(code) {
 function addOperationLine(line = {}) {
   const isAdj = warehouseOpType === 'adjustment';
   const isReceipt = warehouseOpType === 'receipt';
+  const isConversion = warehouseOpType === 'conversion';
   const row = document.createElement('div');
   row.className = 'op-line';
   if (isAdj) {
@@ -3002,6 +3006,13 @@ function addOperationLine(line = {}) {
       <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
       <input class="op-line-price" type="number" min="0" step="0.01" value="${line.unitPrice ?? ''}" placeholder="0,00" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
+  } else if (isConversion) {
+    // Towar (źródło, tylko kat. „towar") → gadżet (cel, tylko kat. „gadżet" + tworzenie).
+    row.innerHTML = `
+      <select class="op-line-item">${itemOptions(line.itemCode, false, 'towar')}</select>
+      <select class="op-line-target" style="flex:1">${itemOptions(line.targetItemCode, true, 'gadżet')}</select>
+      <input class="op-line-qty" type="number" min="1" value="${line.quantity ?? 1}" />
+      <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else {
     row.innerHTML = `
       <select class="op-line-item">${itemOptions(line.itemCode)}</select>
@@ -3014,6 +3025,16 @@ function addOperationLine(line = {}) {
   if (sel) sel.addEventListener('change', () => {
     if (sel.value === '__new__') { sel.value = ''; openNewProductModal(sel); }
   });
+  // Konwersja: „＋ utwórz gadżet z tego towaru" w pickerze celu — prefill nazwą towaru, kat. gadżet.
+  const tgtSel = row.querySelector('.op-line-target');
+  if (tgtSel) tgtSel.addEventListener('change', () => {
+    if (tgtSel.value === '__new__') {
+      tgtSel.value = '';
+      const srcCode = row.querySelector('.op-line-item')?.value || '';
+      const srcItem = (warehouseFormData?.items || []).find(it => it.itemCode === srcCode);
+      openNewProductModal(tgtSel, { name: srcItem?.name || '', category: 'gadżet' });
+    }
+  });
   operationLines.appendChild(row);
 }
 
@@ -3021,6 +3042,7 @@ function renderOperationLinesHead() {
   operationLinesHead.innerHTML =
     warehouseOpType === 'adjustment' ? '<span>Sprzęt</span><span>Lokalizacja</span><span>Policzono</span><span></span>'
     : warehouseOpType === 'receipt' ? '<span>Produkt</span><span>Ilość</span><span>Cena (zł)</span><span></span>'
+    : warehouseOpType === 'conversion' ? '<span>Towar (źródło)</span><span style="flex:1">Gadżet (cel)</span><span>Ilość</span><span></span>'
     : '<span>Sprzęt</span><span>Ilość</span><span></span>';
 }
 
@@ -3032,14 +3054,16 @@ async function openOperationModal(type, id = null) {
   const cfg = warehouseFormData?.types?.[type] || {};
   const isAdj = type === 'adjustment';
   const isReceipt = type === 'receipt';
+  const isConversion = type === 'conversion';
   operationModalType.textContent = OP_TYPE_NAV_LABELS[type] || cfg.label || 'Operacja';
   renderOperationLinesHead();
   operationLines.innerHTML = '';
 
   // Przyjęcie: bez pól lokalizacji (cel zawsze Magazyn), zamiast „Kontakt" — „Dostawca".
-  operationFromField.hidden = isAdj || isReceipt;
-  operationToField.hidden = isAdj || isReceipt;
-  operationContactField.hidden = isReceipt;
+  // Konwersja: bez lokalizacji/kontaktu/dostawcy (oba końce = Magazyn), pary towar↔gadżet w pozycjach.
+  operationFromField.hidden = isAdj || isReceipt || isConversion;
+  operationToField.hidden = isAdj || isReceipt || isConversion;
+  operationContactField.hidden = isReceipt || isConversion;
   operationSupplierField.hidden = !isReceipt;
   operationFrom.innerHTML = locationOptions(null);
   operationTo.innerHTML = locationOptions(null);
@@ -3049,7 +3073,7 @@ async function openOperationModal(type, id = null) {
     const op = await api(`/warehouse/operations/${encodeURIComponent(id)}`);
     currentOperation.state = op.state;
     operationModalTitle.textContent = op.reference;
-    if (!isAdj && !isReceipt) {
+    if (!isAdj && !isReceipt && !isConversion) {
       operationFrom.value = op.fromLocationId || '';
       operationTo.value = op.toLocationId || '';
     }
@@ -3062,7 +3086,7 @@ async function openOperationModal(type, id = null) {
     if (!(op.lines || []).length) addOperationLine();
   } else {
     operationModalTitle.textContent = 'Nowa operacja';
-    if (!isAdj && !isReceipt) {
+    if (!isAdj && !isReceipt && !isConversion) {
       operationFrom.value = resolveDefaultLocId(cfg.defaultFrom);
       operationTo.value = resolveDefaultLocId(cfg.defaultTo);
     }
@@ -3110,6 +3134,7 @@ function closeOperationModal() {
 function collectOperationPayload() {
   const isAdj = warehouseOpType === 'adjustment';
   const isReceipt = warehouseOpType === 'receipt';
+  const isConversion = warehouseOpType === 'conversion';
   const lines = [];
   operationLines.querySelectorAll('.op-line').forEach(row => {
     const itemCode = row.querySelector('.op-line-item')?.value;
@@ -3126,6 +3151,10 @@ function collectOperationPayload() {
         quantity: Number(row.querySelector('.op-line-qty')?.value) || 1,
         unitPrice: Number(row.querySelector('.op-line-price')?.value) || 0
       });
+    } else if (isConversion) {
+      const targetItemCode = row.querySelector('.op-line-target')?.value;
+      if (!targetItemCode || targetItemCode === '__new__') return; // pomiń niepełną pozycję
+      lines.push({ itemCode, targetItemCode, quantity: Number(row.querySelector('.op-line-qty')?.value) || 1 });
     } else {
       lines.push({ itemCode, quantity: Number(row.querySelector('.op-line-qty')?.value) || 1 });
     }
@@ -3143,6 +3172,8 @@ function collectOperationPayload() {
   } else if (isAdj) {
     payload.contact = operationContact.value.trim();
     payload.toLocationId = lines[0]?.locationId || resolveDefaultLocId('WH/Stock');
+  } else if (isConversion) {
+    // Bez pól lokalizacji/kontaktu — backend rozdziela ruchy Magazyn↔VIRT/Conversion.
   } else {
     payload.contact = operationContact.value.trim();
     payload.fromLocationId = operationFrom.value || null;
@@ -3167,11 +3198,11 @@ async function saveOperation() {
 // --- „Nowy produkt" wprost z przyjęcia ---
 let newProductTargetSelect = null;
 
-function openNewProductModal(targetSelect) {
+function openNewProductModal(targetSelect, opts = {}) {
   if (currentUser?.role !== 'admin') { showToast('Tworzenie produktu wymaga uprawnień administratora.'); return; }
   newProductTargetSelect = targetSelect || null;
-  if (newProductName) newProductName.value = '';
-  if (newProductCategory) newProductCategory.value = 'Towar';
+  if (newProductName) newProductName.value = opts.name || '';
+  if (newProductCategory) newProductCategory.value = opts.category || 'Towar';
   if (newProductModal && !newProductModal.open) newProductModal.showModal();
 }
 
