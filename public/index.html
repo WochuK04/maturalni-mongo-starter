@@ -396,6 +396,13 @@
             <div id="warehouseSuppliersContent" class="admin-content"></div>
           </div>
           <div class="wh-config-section">
+            <div class="toolbar">
+              <h4 class="wh-config-title">Miejsca dostaw</h4>
+              <button id="whAddDestinationBtn" type="button" class="btn btn-secondary">＋ Nowe miejsce</button>
+            </div>
+            <div id="warehouseDestinationsContent" class="admin-content"></div>
+          </div>
+          <div class="wh-config-section">
             <h4 class="wh-config-title">Lokalizacje</h4>
             <div id="warehouseLocationsContent" class="admin-content"></div>
           </div>
@@ -823,6 +830,13 @@
             <button type="button" class="btn btn-secondary" id="operationNewSupplierBtn">＋ Nowy</button>
           </div>
         </div>
+        <div class="field" id="operationDestinationField" hidden>
+          <span>Miejsce dostawy</span>
+          <div class="op-supplier-row">
+            <select id="operationDestination"></select>
+            <button type="button" class="btn btn-secondary" id="operationNewDestinationBtn">＋ Nowe</button>
+          </div>
+        </div>
         <label class="field">
           <span>Zaplanowana data</span>
           <input id="operationScheduled" type="date" />
@@ -918,6 +932,38 @@
         <button type="button" class="btn btn-primary" id="supplierSaveBtn">Zapisz</button>
         <button type="button" class="btn btn-danger" id="supplierDeleteBtn" hidden>Usuń</button>
         <button type="button" class="btn btn-secondary" id="supplierCancelBtn">Anuluj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Miejsce dostawy: tworzenie / edycja kartoteki odbiorcy -->
+  <dialog id="destinationModal" class="form-modal">
+    <form id="destinationForm" class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3 id="destinationModalTitle">Nowe miejsce dostawy</h3>
+        </div>
+        <button type="button" class="modal-close" id="closeDestinationBtn" aria-label="Zamknij okno">×</button>
+      </div>
+      <div class="modal-form-grid">
+        <label class="field field-wide">
+          <span>Nazwa</span>
+          <input id="destinationName" required placeholder="np. Szkoła XYZ / Biuro Warszawa" />
+        </label>
+        <label class="field field-wide">
+          <span>Kontakt</span>
+          <input id="destinationContact" placeholder="osoba / adres / telefon" />
+        </label>
+        <label class="field field-wide">
+          <span>Notatka</span>
+          <input id="destinationNotes" placeholder="Opcjonalnie" />
+        </label>
+      </div>
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="destinationSaveBtn">Zapisz</button>
+        <button type="button" class="btn btn-danger" id="destinationDeleteBtn" hidden>Usuń</button>
+        <button type="button" class="btn btn-secondary" id="destinationCancelBtn">Anuluj</button>
       </div>
     </form>
   </dialog>
