@@ -25,6 +25,10 @@ const appLayout = document.getElementById('appLayout');
 
 const usersViewTab = document.getElementById('usersViewTab');
 const usersContent = document.getElementById('usersContent');
+const addUserBtn = document.getElementById('addUserBtn');
+const addUserForm = document.getElementById('addUserForm');
+const newUserManager = document.getElementById('newUserManager');
+const cancelAddUserBtn = document.getElementById('cancelAddUserBtn');
 
 const teamViewTab = document.getElementById('teamViewTab');
 const teamContent = document.getElementById('teamContent');
@@ -2232,6 +2236,14 @@ async function loadUsers() {
 
   const managers = users.filter(u => u.role === 'manager' || u.role === 'admin');
 
+  // Lista kierowników do formularza „Dodaj użytkownika".
+  if (newUserManager) {
+    newUserManager.innerHTML = ['<option value="">— bez kierownika —</option>']
+      .concat(managers.map(m =>
+        `<option value="${escapeHtml(m.email)}">${escapeHtml(m.fullName || m.email)} (${escapeHtml(getRoleLabel(m.role))})</option>`))
+      .join('');
+  }
+
   const table = document.createElement('table');
   table.innerHTML = `
     <thead>
@@ -2251,7 +2263,12 @@ async function loadUsers() {
     const tr = document.createElement('tr');
 
     const nameTd = document.createElement('td');
-    nameTd.textContent = user.fullName || '—';
+    if (user.pendingFirstLogin) {
+      // Konto utworzone z góry — sprzęt już można przypisać, czeka na pierwsze logowanie.
+      nameTd.innerHTML = `${escapeHtml(user.fullName || '—')} <span class="badge badge-muted">oczekuje na logowanie</span>`;
+    } else {
+      nameTd.textContent = user.fullName || '—';
+    }
 
     const emailTd = document.createElement('td');
     emailTd.textContent = user.email;
@@ -2532,6 +2549,7 @@ const AUDIT_ACTION_LABELS = {
   item_discarded: 'Wyrzucił sprzęt z magazynu',
   item_transferred: 'Przeniósł sprzęt na inną osobę',
   issue_reported: 'Zgłosił problem ze sprzętem',
+  user_created: 'Dodał użytkownika',
   user_updated: 'Zmienił ustawienia użytkownika',
   user_deleted: 'Usunął użytkownika',
   warehouse_operation_done: 'Zatwierdził operację magazynową',
@@ -5227,6 +5245,35 @@ if (auditFilterForm) {
 
     try {
       await loadAuditLogs(filters);
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+}
+
+// --- Dodawanie użytkownika „z góry" (panel Użytkownicy) ---
+if (addUserBtn && addUserForm) {
+  addUserBtn.addEventListener('click', () => {
+    addUserForm.hidden = !addUserForm.hidden;
+    if (!addUserForm.hidden) document.getElementById('newUserName')?.focus();
+  });
+}
+if (cancelAddUserBtn && addUserForm) {
+  cancelAddUserBtn.addEventListener('click', () => {
+    addUserForm.hidden = true;
+    addUserForm.reset();
+  });
+}
+if (addUserForm) {
+  addUserForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = Object.fromEntries(new FormData(addUserForm).entries());
+    try {
+      const res = await api('/admin/users', { method: 'POST', body: JSON.stringify(payload) });
+      showToast(res.message || 'Dodano użytkownika');
+      addUserForm.reset();
+      addUserForm.hidden = true;
+      await loadUsers();
     } catch (err) {
       showToast(err.message);
     }

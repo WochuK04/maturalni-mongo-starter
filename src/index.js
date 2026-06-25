@@ -2422,11 +2422,82 @@ app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
   const db = await getDb();
 
   const users = await db.collection(collections.users)
-    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1 } })
+    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1, googleId: 1 } })
     .sort({ fullName: 1 })
     .toArray();
 
-  res.json(users);
+  // Brak googleId → konto utworzone z góry, jeszcze bez pierwszego logowania.
+  res.json(users.map(({ googleId, ...u }) => ({ ...u, pendingFirstLogin: !googleId })));
+});
+
+// Utworzenie użytkownika „z góry" (przed pierwszym logowaniem) — np. by przypisać
+// mu sprzęt. Logowanie Google zrobi upsert po mailu, zachowując rolę/kierownika
+// (auth.js) i uzupełniając googleId; „Mój sprzęt" pokaże mu rzeczy po assignedToEmail.
+app.post('/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const fullName = String(req.body.fullName || '').trim();
+  const role = req.body.role === undefined || req.body.role === '' ? 'user' : String(req.body.role);
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: 'Podaj poprawny adres e-mail' });
+  }
+  const allowedDomain = process.env.ALLOWED_EMAIL_DOMAIN;
+  if (allowedDomain && !email.endsWith(`@${allowedDomain}`)) {
+    return res.status(400).json({ message: `E-mail musi należeć do domeny @${allowedDomain}` });
+  }
+  if (!['user', 'manager', 'admin', 'viewer'].includes(role)) {
+    return res.status(400).json({ message: 'Nieprawidłowa rola' });
+  }
+
+  const existing = await db.collection(collections.users).findOne({ email });
+  if (existing) {
+    return res.status(409).json({ message: 'Użytkownik o tym adresie już istnieje' });
+  }
+
+  // Kierownik (opcjonalnie) — jak w PATCH: musi istnieć i mieć rolę manager/admin.
+  let managerEmail = null;
+  const mgrRaw = String(req.body.managerEmail || '').trim().toLowerCase();
+  if (mgrRaw) {
+    if (mgrRaw === email) {
+      return res.status(400).json({ message: 'Użytkownik nie może być swoim własnym kierownikiem' });
+    }
+    const manager = await db.collection(collections.users).findOne({ email: mgrRaw });
+    if (!manager) {
+      return res.status(400).json({ message: 'Wskazany kierownik nie istnieje' });
+    }
+    if (!['manager', 'admin'].includes(manager.role)) {
+      return res.status(400).json({ message: 'Wskazana osoba nie ma roli kierownika' });
+    }
+    managerEmail = mgrRaw;
+  }
+
+  const now = new Date();
+  const doc = {
+    email,
+    fullName: fullName || email,
+    role,
+    managerEmail,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  await db.collection(collections.users).insertOne(doc);
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'user_created',
+    entityType: 'user',
+    entityId: email,
+    payload: { role, managerEmail, source: 'admin-panel' },
+    createdAt: now
+  });
+
+  res.status(201).json({
+    message: 'Dodano użytkownika',
+    user: { email, fullName: doc.fullName, role, managerEmail, isActive: true, pendingFirstLogin: true }
+  });
 });
 
 app.patch('/admin/users/:email', requireAuth, requireAdmin, async (req, res) => {
