@@ -3012,8 +3012,12 @@ function renderReplenishment(rows) {
     if (!r.isActive) status = '<span class="badge badge-muted">Wyłączona</span>';
     else if (r.below) status = '<span class="badge badge-warn">Do uzupełnienia</span>';
     else status = '<span class="badge badge-ok">OK</span>';
+    // „Uzupełnij" tylko dla reguł itemowych poniżej minimum (kategoria nie wskazuje
+    // jednego produktu) — tworzy draft przyjęcia na ilość „do zamówienia".
+    const canReplenish = r.scope === 'item' && r.below && (Number(r.toOrder) || 0) > 0;
     const actions = isAdmin
       ? `<td class="wh-repl-actions">
+          ${canReplenish ? `<button type="button" class="btn btn-primary wh-mini" data-repl-fill="${escapeHtml(r.id)}">Uzupełnij</button>` : ''}
           <button type="button" class="btn btn-secondary wh-mini" data-repl-edit="${escapeHtml(r.id)}">Edytuj</button>
           <button type="button" class="btn btn-danger wh-mini" data-repl-del="${escapeHtml(r.id)}">Usuń</button>
         </td>`
@@ -3113,6 +3117,18 @@ async function deleteReorderRule(id) {
   showToast('Usunięto regułę');
   await loadReplenishment();
   return true;
+}
+
+// „Uzupełnij": tworzy draft przyjęcia na ilość „do zamówienia" i otwiera go do
+// edycji/zatwierdzenia (cena, dostawca). Stan wróci powyżej minimum dopiero po
+// zatwierdzeniu przyjęcia — dlatego od razu lądujemy w dokumencie.
+async function replenishRule(id) {
+  const row = replenishmentRows.find(r => r.id === id);
+  if (!row) return;
+  if (!confirm(`Utworzyć draft przyjęcia na ${row.toOrder} szt. „${row.label}"?`)) return;
+  const res = await api(`/warehouse/reorder-rules/${encodeURIComponent(id)}/replenish`, { method: 'POST' });
+  showToast(`Utworzono draft przyjęcia ${res.reference}`);
+  await openOperationModal('receipt', res.id);
 }
 
 // --- Modal operacji ---
@@ -4391,6 +4407,11 @@ if (whNewOperationBtn) {
 // Edycja/usuwanie reguł min-max w tabeli Zapotrzebowania (delegacja).
 if (whOperationsContent) {
   whOperationsContent.addEventListener('click', (e) => {
+    const fillBtn = e.target.closest('[data-repl-fill]');
+    if (fillBtn) {
+      replenishRule(fillBtn.dataset.replFill).catch(err => showToast(err.message));
+      return;
+    }
     const editBtn = e.target.closest('[data-repl-edit]');
     if (editBtn) {
       const row = replenishmentRows.find(r => r.id === editBtn.dataset.replEdit);

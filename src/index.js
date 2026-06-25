@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -1472,6 +1472,70 @@ app.delete('/warehouse/reorder-rules/:id', requireAuth, requireAdmin, async (req
   const result = await db.collection(collections.reorderRules).deleteOne({ _id: id });
   if (!result.deletedCount) return res.status(404).json({ message: 'Reguła nie istnieje' });
   res.json({ message: 'Usunięto regułę' });
+});
+
+// „Uzupełnij": z reguły min-max poniżej minimum tworzy DRAFT przyjęcia wypełniony
+// ilością `toOrder` dla produktu reguły. Domyka pętlę zapotrzebowania — z raportu robi
+// gotowy do edycji/zatwierdzenia dokument. Stan liczymy świeżo (computeReplenishment),
+// więc gdy w międzyczasie wrócił powyżej minimum, nie tworzymy pustego dokumentu.
+// Tylko reguły itemowe (kategoria nie wskazuje jednego produktu). requireAdmin (tworzy operację).
+app.post('/warehouse/reorder-rules/:id/replenish', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let ruleId;
+  try { ruleId = new ObjectId(req.params.id); }
+  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const exists = await db.collection(collections.reorderRules).findOne({ _id: ruleId }, { projection: { _id: 1 } });
+  if (!exists) return res.status(404).json({ message: 'Reguła nie istnieje' });
+
+  const row = (await computeReplenishment(db)).find(r => r.id === String(ruleId));
+  const draft = replenishmentDraft(row);
+  if (!draft.eligible) {
+    const msg = draft.reason === 'category'
+      ? 'Uzupełnić można tylko regułę dla konkretnego sprzętu (nie kategorii)'
+      : 'Reguła nie wymaga uzupełnienia (stan powyżej minimum)';
+    return res.status(400).json({ message: msg });
+  }
+
+  const cfg = OPERATION_TYPES.receipt;
+  const now = new Date();
+  const doc = {
+    reference: await nextReference(db, cfg.prefix),
+    type: 'receipt',
+    state: 'draft',
+    fromLocationId: await resolveLocationId(db, cfg.defaultFrom),
+    toLocationId: await resolveLocationId(db, cfg.defaultTo),
+    contact: '',
+    supplierId: null,
+    supplierName: '',
+    destinationId: null,
+    destinationName: '',
+    scheduledAt: null,
+    sourceDocument: `Zapotrzebowanie · ${row.label}`,
+    note: `Auto-uzupełnienie do max (${row.maxQty} szt.) z reguły min-max`,
+    lines: normalizeOperationLines('receipt', [draft.line]),
+    createdByEmail: req.user.email,
+    createdAt: now,
+    updatedAt: now,
+    originReorderRuleId: String(ruleId)
+  };
+  const { insertedId } = await db.collection(collections.stockOperations).insertOne(doc);
+
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email,
+    actionType: 'reorder_replenish_draft',
+    entityType: 'stockOperation',
+    entityId: String(insertedId),
+    payload: { reference: doc.reference, ruleId: String(ruleId), itemCode: draft.line.itemCode, quantity: draft.line.quantity },
+    createdAt: now
+  });
+
+  res.status(201).json({
+    id: String(insertedId),
+    reference: doc.reference,
+    type: 'receipt',
+    itemCode: draft.line.itemCode,
+    quantity: draft.line.quantity
+  });
 });
 
 // Lista aktywnych użytkowników (tylko imię/e-mail) — do wyboru osoby przy
