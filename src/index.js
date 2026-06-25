@@ -3644,6 +3644,8 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
     entityId,
     actionType,
     itemCode,
+    from,
+    to,
     limit = '100'
   } = req.query;
 
@@ -3669,6 +3671,21 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
     query['payload.itemCode'] = {
       $regex: new RegExp(itemCode.trim(), 'i')
     };
+  }
+
+  // Zakres dat na createdAt (YYYY-MM-DD). `to` włączające — do końca dnia.
+  const parseDay = (s, endOfDay) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const fromDate = parseDay(from, false);
+  const toDate = parseDay(to, true);
+  if (fromDate || toDate) {
+    query.createdAt = {};
+    if (fromDate) query.createdAt.$gte = fromDate;
+    if (toDate) query.createdAt.$lte = toDate;
   }
 
   const safeLimit = Math.min(Number(limit) || 100, 500);

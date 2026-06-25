@@ -324,6 +324,14 @@
         <form id="auditFilterForm" class="admin-form audit-form" hidden>
           <input name="actorEmail" placeholder="E-mail użytkownika" />
           <input name="itemCode" placeholder="Kod sprzętu" />
+          <select id="auditEntityType" name="entityType" aria-label="Typ encji">
+            <option value="">Wszystkie encje</option>
+          </select>
+          <select id="auditActionType" name="actionType" aria-label="Typ akcji">
+            <option value="">Wszystkie akcje</option>
+          </select>
+          <label class="audit-date">Od <input name="from" type="date" /></label>
+          <label class="audit-date">Do <input name="to" type="date" /></label>
           <input name="limit" placeholder="Ile pozycji (domyślnie 100)" value="100" />
           <button type="submit" class="btn btn-primary">Filtruj historię</button>
         </form>

@@ -633,6 +633,20 @@ th {
   margin-bottom: 16px;
 }
 
+/* Etykiety dat „Od/Do" w filtrze historii — tekst obok pola w jednej komórce. */
+.audit-date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.audit-date input {
+  flex: 1;
+  min-width: 0;
+}
+
 .admin-content table td,
 .admin-content table th {
   font-size: 13px;
