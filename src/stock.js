@@ -276,7 +276,8 @@ export async function refreshItemCache(db, itemCode) {
 // Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
 // obcy: stan (quants), ruchy, wypożyczenia, wnioski, loty, reguły min-max oraz
 // dokumenty operacji — pozycje (itemCode i targetItemCode konwersji) i snapshoty do
-// cofania (conversionDetail: sourceCode/targetCode, deliveryDetail/scrapDetail: itemCode).
+// cofania (conversionDetail: sourceCode/targetCode, deliveryDetail/scrapDetail/
+// adjustmentDetail: itemCode).
 // Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
 // Nie zmienia samego dokumentu `items` — to robi wołający (przed kaskadą).
 export async function cascadeItemCodeRename(db, oldCode, newCode) {
@@ -320,6 +321,11 @@ export async function cascadeItemCodeRename(db, oldCode, newCode) {
   await ops.updateMany(
     { 'scrapDetail.itemCode': o },
     { $set: { 'scrapDetail.$[e].itemCode': n } },
+    { arrayFilters: [{ 'e.itemCode': o }] }
+  );
+  await ops.updateMany(
+    { 'adjustmentDetail.itemCode': o },
+    { $set: { 'adjustmentDetail.$[e].itemCode': n } },
     { arrayFilters: [{ 'e.itemCode': o }] }
   );
 }
@@ -396,9 +402,10 @@ async function ensureVirtualLocation(db, code, name, kind) {
 }
 
 // Zatwierdza operację: generuje ruchy z pozycji dokumentu i ustawia stan „done".
-// Dla inwentaryzacji liczy różnicę (policzone − stan systemowy) i koryguje przez
-// wirtualną lokalizację „Korekta stanu". Dla przekazów/odpadu sprawdza dostępność
-// na lokalizacji fizycznej, by nie zejść poniżej zera.
+// Dla inwentaryzacji liczy różnicę (policzone − stan systemowy), koryguje przez
+// wirtualną lokalizację „Korekta stanu" i uzgadnia partie cenowe (ubytek FIFO,
+// nadwyżka po ostatnim koszcie). Dla przekazów/odpadu sprawdza dostępność na
+// lokalizacji fizycznej, by nie zejść poniżej zera.
 export async function validateOperation(db, operationId, actorEmail) {
   const ops = db.collection(collections.stockOperations);
   const op = await ops.findOne({ _id: new ObjectId(String(operationId)) });
@@ -476,6 +483,25 @@ export async function validateOperation(db, operationId, actorEmail) {
     });
   }
 
+  // Inwentaryzacja: jak przy rozchodzie/przyjęciu, korekta stanu musi też uzgodnić partie
+  // cenowe (inaczej wycena dryfuje). Snapshot partii SPRZED ruchów + zliczony NETTO diff
+  // per produkt (sumujemy linie tego samego kodu z różnych lokalizacji/lotów), bo partie
+  // są per-produkt, nie per-lokalizacja. Uzgodnienie partii liczymy po refreshItemCache.
+  const preAdjust = new Map();
+  const adjustmentNetDiff = new Map();
+  if (op.type === 'adjustment') {
+    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const its = codes.length
+      ? await db.collection(collections.items)
+          .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
+          .toArray()
+      : [];
+    for (const it of its) preAdjust.set(it.itemCode, {
+      quantity: Number(it.quantity) || 0,
+      priceBatches: Array.isArray(it.priceBatches) ? it.priceBatches.map(b => ({ ...b })) : []
+    });
+  }
+
   if (op.type === 'adjustment') {
     const inv = await locationByCode(db, 'VIRT/Inventory');
     if (!inv) throw new Error('Brak wirtualnej lokalizacji korekty (VIRT/Inventory)');
@@ -505,6 +531,7 @@ export async function validateOperation(db, operationId, actorEmail) {
         doneAt: now
       });
       affected.add(itemCode);
+      adjustmentNetDiff.set(itemCode, (adjustmentNetDiff.get(itemCode) || 0) + diff);
     }
   } else if (op.type === 'conversion') {
     // Przeklasyfikowanie: dla każdej pozycji zdejmij `quantity` towaru z Magazynu
@@ -624,6 +651,13 @@ export async function validateOperation(db, operationId, actorEmail) {
   if (op.type === 'scrap') {
     const detail = await consumeStockBatches(db, op, lines, preScrap, now);
     if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { scrapDetail: detail } });
+  }
+
+  // Inwentaryzacja → uzgodnij partie z policzonym stanem: ubytek zdejmuje FIFO, nadwyżka
+  // dopisuje warstwę po ostatnim znanym koszcie. Zapamiętaj detal do cofnięcia.
+  if (op.type === 'adjustment') {
+    const detail = await applyAdjustmentBatches(db, adjustmentNetDiff, preAdjust, op, now);
+    if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { adjustmentDetail: detail } });
   }
 
   return { reference: op.reference, affected: [...affected] };
@@ -771,6 +805,42 @@ async function consumeStockBatches(db, op, lines, preStock, now) {
   return detail;
 }
 
+// Uzgadnia partie cenowe z policzonym stanem inwentaryzacji. Dla każdego produktu liczy
+// NETTO różnicę (Σ po liniach): ubytek (< 0) zdejmuje partie FIFO; nadwyżka (> 0) dopisuje
+// jedną warstwę po OSTATNIM znanym koszcie jednostkowym (cena najnowszej partii; brak →
+// 0 zł). Operuje na partiach SPRZED ruchów (`preAdjust`) — ruchy korekty nie tykają partii,
+// więc to wciąż żywy stan. Pomija produkty bez partii (nie syntetyzujemy ich — wycena bez
+// partii i tak liczy ilość, nie koszt). Zwraca detal [{ itemCode, diff, consumed?, added? }]
+// do dokładnego odwrócenia w reverseOperation.
+async function applyAdjustmentBatches(db, netDiffByItem, preAdjust, op, now) {
+  const items = db.collection(collections.items);
+  const detail = [];
+
+  for (const [code, netDiff] of netDiffByItem) {
+    if (!netDiff) continue;
+    const pre = preAdjust.get(code);
+    const batches = pre && Array.isArray(pre.priceBatches) ? pre.priceBatches.map(b => ({ ...b })) : [];
+    if (!batches.length) continue; // brak partii → nie syntetyzujemy kosztu
+
+    if (netDiff < 0) {
+      const { consumed } = fifoConsume(batches, -netDiff);
+      const kept = batches.filter(b => (Number(b.qty) || 0) > 0);
+      const total = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      await items.updateOne({ itemCode: code }, { $set: { priceBatches: kept, quantity: total, updatedAt: now } });
+      detail.push({ itemCode: code, diff: netDiff, consumed });
+    } else {
+      // Nadwyżka: ostatni znany koszt = cena najnowszej (ostatniej) partii; brak → 0 zł.
+      const lastUnit = batches.length ? (Number(batches[batches.length - 1].unitPrice) || 0) : 0;
+      const added = { qty: netDiff, unitPrice: lastUnit, note: `${op.reference} · nadwyżka inwentaryzacji`, addedAt: now };
+      const updated = [...batches, added];
+      const total = updated.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      await items.updateOne({ itemCode: code }, { $set: { priceBatches: updated, quantity: total, updatedAt: now } });
+      detail.push({ itemCode: code, diff: netDiff, added: { qty: netDiff, unitPrice: lastUnit } });
+    }
+  }
+  return detail;
+}
+
 // Cofa wykonaną operację: usuwa jej ruchy z rejestru i przelicza stany (jakby
 // nigdy się nie zaksięgowała), a dla przyjęć usuwa partie cenowe dopisane przez
 // tę operację (rozpoznawane po prefiksie referencji). Operacja wraca do stanu
@@ -851,10 +921,33 @@ export async function reverseOperation(db, operationId, actorEmail) {
     }
   }
 
+  // Inwentaryzacja: odwróć uzgodnienie partii — ubytkowi oddaj zdjęte warstwy (jak rozchód),
+  // nadwyżce zdejmij dopisaną warstwę (po nocie + ilości, jak konwersja). Bez detalu (stare
+  // dokumenty) cofamy tylko ruchy — quanty i tak wracają przez recomputeQuants.
+  if (op.type === 'adjustment' && Array.isArray(op.adjustmentDetail)) {
+    const items = db.collection(collections.items);
+    for (const d of op.adjustmentDetail) {
+      const it = await items.findOne({ itemCode: d.itemCode }, { projection: { priceBatches: 1 } });
+      let batches = it && Array.isArray(it.priceBatches) ? it.priceBatches.slice() : [];
+      if (Array.isArray(d.consumed) && d.consumed.length) {
+        for (const c of d.consumed) batches.push({ qty: Number(c.qty) || 0, unitPrice: Number(c.unitPrice) || 0, note: `Zwrot z inwentaryzacji ${op.reference}`, addedAt: new Date() });
+      } else if (d.added) {
+        const note = `${op.reference} · nadwyżka inwentaryzacji`;
+        let removed = false;
+        batches = batches.filter(b => {
+          if (!removed && b.note === note && Number(b.qty) === Number(d.added.qty)) { removed = true; return false; }
+          return true;
+        });
+      }
+      const total = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+      await items.updateOne({ itemCode: d.itemCode }, { $set: { priceBatches: batches, quantity: total, updatedAt: new Date() } });
+    }
+  }
+
   const now = new Date();
   await ops.updateOne(
     { _id: op._id },
-    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '', deliveryDetail: '', scrapDetail: '' } }
+    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '', deliveryDetail: '', scrapDetail: '', adjustmentDetail: '' } }
   );
   return { reference: op.reference, affected };
 }
