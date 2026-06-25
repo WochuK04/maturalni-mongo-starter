@@ -1011,3 +1011,78 @@ export function summarizeMovesByKind(moves) {
 
   return { byKind: rows, totalMoves, totalQty };
 }
+
+// ===== Raport progu „prezent ≤20 zł" (VAT) =====
+//
+// „Prezenty małej wartości" (ustawa o VAT, art. 7 ust. 4) wolno wydawać bez
+// naliczania VAT należnego, gdy jednostkowy koszt nabycia ≤ 20 zł netto. Gadżety
+// powstają u nas z KONWERSJI (towar→gadżet): koszt jednostkowy gadżetu to
+// `producedUnit` zapisany jako `unitPrice` partii cenowej z notą „… · konwersja z
+// {kod}" (patrz applyConversionBatches). Raport wyławia gadżety z konwersji, których
+// koszt jednostkowy przekracza próg — to pozycje, których wydanie rodzi ryzyko VAT.
+//
+// Patrzymy tylko na partie z qty > 0 (realnie na stanie). Partie zużyte FIFO to już
+// wydany towar, nie bieżące ryzyko. Próg domyślny 20 zł; porównanie ostre (> próg),
+// bo dokładnie 20 zł jeszcze mieści się w limicie. Czysta agregacja nad listą pozycji
+// (wołający zawęża do kategorii Magazynu).
+export const GIFT_VAT_THRESHOLD = 20;
+
+// Partia pochodzi z konwersji towar→gadżet (nota nadana w applyConversionBatches).
+// Uwaga: „Zwrot z konwersji …" (cofnięcie) trafia na towar, nie gadżet, i nie zawiera
+// frazy „konwersja z ”, więc nie jest tu mylnie łapany.
+export function isConversionBatch(note) {
+  return String(note || '').includes('konwersja z ');
+}
+
+export function computeGiftThresholdReport(items, threshold = GIFT_VAT_THRESHOLD) {
+  const raw = Number(threshold);
+  const limit = Number.isFinite(raw) && raw >= 0 ? raw : GIFT_VAT_THRESHOLD;
+  const rows = [];
+  let conversionItemCount = 0; // gadżety z dowolną partią konwersyjną na stanie (kontekst)
+
+  for (const it of Array.isArray(items) ? items : []) {
+    const batches = (Array.isArray(it.priceBatches) ? it.priceBatches : [])
+      .filter(b => isConversionBatch(b.note) && (Number(b.qty) || 0) > 0);
+    if (!batches.length) continue;
+    conversionItemCount += 1;
+
+    const over = batches.filter(b => (Number(b.unitPrice) || 0) > limit);
+    if (!over.length) continue;
+
+    const overQty = over.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    const overValue = over.reduce((s, b) => s + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+    const maxUnitPrice = over.reduce((m, b) => Math.max(m, Number(b.unitPrice) || 0), 0);
+
+    rows.push({
+      itemCode: it.itemCode,
+      name: it.name || '',
+      category: it.category || '',
+      maxUnitPrice: round2(maxUnitPrice),
+      overQty,
+      overValue: round2(overValue),
+      batches: over
+        .map(b => ({
+          qty: Number(b.qty) || 0,
+          unitPrice: round2(Number(b.unitPrice) || 0),
+          note: b.note || '',
+          addedAt: b.addedAt || null
+        }))
+        .sort((a, b) => b.unitPrice - a.unitPrice)
+    });
+  }
+
+  rows.sort((a, b) => b.maxUnitPrice - a.maxUnitPrice
+    || String(a.name).localeCompare(String(b.name), 'pl'));
+
+  return {
+    threshold: limit,
+    items: rows,
+    summary: {
+      threshold: limit,
+      riskItemCount: rows.length,
+      riskQty: rows.reduce((s, r) => s + r.overQty, 0),
+      riskValue: round2(rows.reduce((s, r) => s + r.overValue, 0)),
+      conversionItemCount
+    }
+  };
+}

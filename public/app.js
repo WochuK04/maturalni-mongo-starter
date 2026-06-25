@@ -209,6 +209,11 @@ const whPeriodKind = document.getElementById('whPeriodKind');
 const whPeriodExport = document.getElementById('whPeriodExport');
 const whPeriodSummary = document.getElementById('whPeriodSummary');
 const whPeriodContent = document.getElementById('whPeriodContent');
+const whReportGift = document.getElementById('whReportGift');
+const whGiftThreshold = document.getElementById('whGiftThreshold');
+const whGiftExport = document.getElementById('whGiftExport');
+const whGiftSummary = document.getElementById('whGiftSummary');
+const whGiftContent = document.getElementById('whGiftContent');
 // Modal operacji.
 const operationModal = document.getElementById('operationModal');
 const operationModalType = document.getElementById('operationModalType');
@@ -387,6 +392,8 @@ let warehouseValuationState = null;
 let warehouseValuationFiltered = [];
 // Raport ruchów w okresie: pełna odpowiedź (podsumowanie + wiersze) do renderu/eksportu.
 let warehouseMovesReportState = null;
+// Raport progu „prezent ≤20 zł" (VAT): pełna odpowiedź (próg + pozycje + podsumowanie).
+let warehouseGiftState = null;
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3878,10 +3885,12 @@ async function switchReportView(view) {
   if (whReportValuation) whReportValuation.hidden = view !== 'valuation';
   if (whReportMoves) whReportMoves.hidden = view !== 'moves';
   if (whReportPeriod) whReportPeriod.hidden = view !== 'period';
+  if (whReportGift) whReportGift.hidden = view !== 'gift';
   if (view === 'stock') await loadWarehouseStock();
   else if (view === 'valuation') await loadWarehouseValuation();
   else if (view === 'moves') await loadWarehouseMoves();
   else if (view === 'period') await loadWarehouseMovesReport();
+  else if (view === 'gift') await loadWarehouseGiftReport();
 }
 
 async function loadWarehouseStock() {
@@ -4165,6 +4174,69 @@ function exportWarehouseMovesReportCsv() {
   downloadCsv(`magazyn-ruchy-okres-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
+// --- Raport progu „prezent ≤20 zł" (VAT) ---
+// Gadżety z konwersji, których koszt jednostkowy przekracza próg „prezentów małej
+// wartości". Próg wpisuje użytkownik (domyślnie 20 zł), backend zwraca pozycje
+// z ryzykiem + podsumowanie.
+async function loadWarehouseGiftReport() {
+  const raw = whGiftThreshold?.value;
+  const params = new URLSearchParams();
+  if (raw != null && raw !== '') params.set('threshold', raw);
+  const qs = params.toString();
+  warehouseGiftState = await api(`/warehouse/gift-threshold${qs ? `?${qs}` : ''}`);
+  if (whGiftExport) whGiftExport.disabled = !(warehouseGiftState?.items || []).length;
+  renderWarehouseGiftReport(warehouseGiftState);
+}
+
+function renderWarehouseGiftReport(data) {
+  const items = data?.items || [];
+  const s = data?.summary || {};
+  const threshold = Number(data?.threshold ?? 20);
+
+  if (whGiftSummary) {
+    if (!items.length) {
+      whGiftSummary.innerHTML = `<div class="muted">Brak gadżetów z konwersji powyżej progu ${escapeHtml(formatPln(threshold))} — wszystkie mieszczą się w limicie „prezentów małej wartości".</div>`;
+    } else {
+      whGiftSummary.innerHTML = `
+        <div class="wh-valuation-total">${escapeHtml(s.riskItemCount)} ${s.riskItemCount === 1 ? 'pozycja' : 'pozycji'} z ryzykiem VAT</div>
+        <div class="muted">${escapeHtml(s.riskQty || 0)} szt. · wartość ${escapeHtml(formatPln(s.riskValue || 0))} · próg ${escapeHtml(formatPln(threshold))}</div>`;
+    }
+  }
+
+  if (!items.length) { renderEmpty(whGiftContent, 'Brak pozycji powyżej progu.'); return; }
+
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Kod</th><th>Nazwa</th><th>Kategoria</th>
+      <th class="num">Maks. koszt jedn.</th><th class="num">Ilość</th><th class="num">Wartość</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = items.map(r => `
+    <tr>
+      <td>${escapeHtml(r.itemCode || '—')}</td>
+      <td>${escapeHtml(r.name || '—')}</td>
+      <td class="muted">${escapeHtml(r.category || '—')}</td>
+      <td class="num">${escapeHtml(formatPln(r.maxUnitPrice))}</td>
+      <td class="num">${escapeHtml(r.overQty)}</td>
+      <td class="num">${escapeHtml(formatPln(r.overValue))}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  whGiftContent.innerHTML = '';
+  whGiftContent.appendChild(table);
+}
+
+function exportWarehouseGiftCsv() {
+  const items = warehouseGiftState?.items || [];
+  if (!items.length) { showToast('Brak pozycji do eksportu.'); return; }
+  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Maks koszt jedn (zl)', 'Ilosc', 'Wartosc (zl)'];
+  const data = items.map(r => [
+    r.itemCode || '', r.name || '', r.category || '',
+    (Number(r.maxUnitPrice) || 0).toFixed(2), r.overQty ?? 0, (Number(r.overValue) || 0).toFixed(2)
+  ]);
+  downloadCsv(`magazyn-prezenty-vat-${csvDateStamp()}.csv`, buildCsv(headers, data));
+}
+
 // --- Konfiguracja (lokalizacje) ---
 function renderWarehouseLocations(locations) {
   const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
@@ -4366,6 +4438,8 @@ if (whPeriodFrom) whPeriodFrom.addEventListener('change', () => loadWarehouseMov
 if (whPeriodTo) whPeriodTo.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
 if (whPeriodKind) whPeriodKind.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
 if (whPeriodExport) whPeriodExport.addEventListener('click', exportWarehouseMovesReportCsv);
+if (whGiftThreshold) whGiftThreshold.addEventListener('change', () => loadWarehouseGiftReport().catch(err => showToast(err.message)));
+if (whGiftExport) whGiftExport.addEventListener('click', exportWarehouseGiftCsv);
 
 if (operationAddLineBtn) operationAddLineBtn.addEventListener('click', () => addOperationLine());
 [operationCloseBtn2, closeOperationBtn].forEach(b => b && b.addEventListener('click', closeOperationModal));
