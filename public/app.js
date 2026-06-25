@@ -172,6 +172,7 @@ closeWhProductBtn?.addEventListener('click', closeWarehouseProductModal);
 warehouseProductForm?.addEventListener('submit', (e) => { e.preventDefault(); saveWarehouseProduct(); });
 const whReportingView = document.getElementById('whReportingView');
 const whReportStock = document.getElementById('whReportStock');
+const whReportValuation = document.getElementById('whReportValuation');
 const whReportMoves = document.getElementById('whReportMoves');
 const whConfigView = document.getElementById('whConfigView');
 // Raportowanie / Konfiguracja — kontenery reużyte z Fazy 1.
@@ -182,6 +183,10 @@ const warehouseSearchInput = document.getElementById('warehouseSearchInput');
 const warehouseLocationFilter = document.getElementById('warehouseLocationFilter');
 const whStockExport = document.getElementById('whStockExport');
 const whMovesExport = document.getElementById('whMovesExport');
+const whValuationSearch = document.getElementById('whValuationSearch');
+const whValuationExport = document.getElementById('whValuationExport');
+const whValuationSummary = document.getElementById('whValuationSummary');
+const whValuationContent = document.getElementById('whValuationContent');
 // Modal operacji.
 const operationModal = document.getElementById('operationModal');
 const operationModalType = document.getElementById('operationModalType');
@@ -353,6 +358,10 @@ let warehouseProductsState = [];
 let warehouseProductsFiltered = [];
 let warehouseStockFiltered = [];
 let warehouseMovesState = [];
+// Wycena stanu: pełna odpowiedź z /warehouse/valuation + płaska lista produktów
+// (po filtrze) używana do renderu i eksportu CSV.
+let warehouseValuationState = null;
+let warehouseValuationFiltered = [];
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3764,8 +3773,10 @@ async function switchReportView(view) {
   document.querySelectorAll('#whReportNav .subtab').forEach(b =>
     b.classList.toggle('active', b.dataset.whreport === view));
   if (whReportStock) whReportStock.hidden = view !== 'stock';
+  if (whReportValuation) whReportValuation.hidden = view !== 'valuation';
   if (whReportMoves) whReportMoves.hidden = view !== 'moves';
   if (view === 'stock') await loadWarehouseStock();
+  else if (view === 'valuation') await loadWarehouseValuation();
   else if (view === 'moves') await loadWarehouseMoves();
 }
 
@@ -3808,6 +3819,109 @@ function renderWarehouseStock(rows) {
   table.appendChild(tbody);
   warehouseStockContent.innerHTML = '';
   warehouseStockContent.appendChild(table);
+}
+
+// --- Wycena stanu (Σ ilość × cena zakupu wg partii) ---
+async function loadWarehouseValuation() {
+  warehouseValuationState = await api('/warehouse/valuation');
+  applyWarehouseValuationFilter();
+}
+
+// Filtr po stronie klienta (jak Stan) — zawęża widoczne produkty; sumy nagłówka
+// przeliczamy z przefiltrowanych wierszy, żeby „co widać, to się sumuje".
+function applyWarehouseValuationFilter() {
+  const data = warehouseValuationState;
+  if (!data) { warehouseValuationFiltered = []; return; }
+  const q = normalizeText(whValuationSearch?.value || '');
+  const rows = [];
+  for (const cat of data.categories || []) {
+    for (const p of cat.products || []) {
+      if (q && !(
+        normalizeText(p.itemCode).includes(q) ||
+        normalizeText(p.name).includes(q) ||
+        normalizeText(cat.category).includes(q)
+      )) continue;
+      rows.push({ ...p, category: cat.category });
+    }
+  }
+  warehouseValuationFiltered = rows;
+  if (whValuationExport) whValuationExport.disabled = !rows.length;
+  renderWarehouseValuation(rows);
+}
+
+function renderWarehouseValuation(rows) {
+  // Nagłówek z sumami liczonymi z aktualnie widocznych wierszy.
+  const totalValue = rows.reduce((s, r) => s + (Number(r.value) || 0), 0);
+  const totalQty = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const unpriced = rows.reduce((s, r) => s + (r.batchCount ? 0 : (Number(r.qty) || 0)), 0);
+  if (whValuationSummary) {
+    whValuationSummary.innerHTML = `
+      <div class="wh-valuation-total">${escapeHtml(formatPln(totalValue))}</div>
+      <div class="muted">${escapeHtml(rows.length)} pozycji · ${escapeHtml(totalQty)} szt.${
+        unpriced > 0 ? ` · ${escapeHtml(unpriced)} szt. bez ceny (0 zł)` : ''
+      }</div>`;
+  }
+
+  if (!rows.length) { renderEmpty(whValuationContent, 'Brak produktów do wyceny.'); return; }
+
+  // Grupowanie po kategorii z wierszem-podsumowaniem; kolejność kategorii wg wartości.
+  const byCat = new Map();
+  for (const r of rows) {
+    if (!byCat.has(r.category)) byCat.set(r.category, []);
+    byCat.get(r.category).push(r);
+  }
+  const cats = [...byCat.entries()]
+    .map(([category, products]) => ({
+      category,
+      products,
+      value: products.reduce((s, p) => s + (Number(p.value) || 0), 0),
+      qty: products.reduce((s, p) => s + (Number(p.qty) || 0), 0)
+    }))
+    .sort((a, b) => b.value - a.value || a.category.localeCompare(b.category, 'pl'));
+
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Kategoria</th><th>Kod</th><th>Nazwa</th>
+      <th class="num">Ilość</th><th class="num">Śr. cena</th><th class="num">Wartość</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  let html = '';
+  for (const c of cats) {
+    for (const p of c.products) {
+      html += `
+        <tr>
+          <td class="muted">${escapeHtml(c.category)}</td>
+          <td>${escapeHtml(p.itemCode || '—')}</td>
+          <td>${escapeHtml(p.name || '—')}</td>
+          <td class="num">${escapeHtml(p.qty)}</td>
+          <td class="num">${escapeHtml(formatPln(p.avgUnitPrice))}</td>
+          <td class="num">${escapeHtml(formatPln(p.value))}</td>
+        </tr>`;
+    }
+    html += `
+      <tr class="wh-valuation-subtotal">
+        <td colspan="3"><strong>Razem: ${escapeHtml(c.category)}</strong></td>
+        <td class="num"><strong>${escapeHtml(c.qty)}</strong></td>
+        <td></td>
+        <td class="num"><strong>${escapeHtml(formatPln(c.value))}</strong></td>
+      </tr>`;
+  }
+  tbody.innerHTML = html;
+  table.appendChild(tbody);
+  whValuationContent.innerHTML = '';
+  whValuationContent.appendChild(table);
+}
+
+function exportWarehouseValuationCsv() {
+  const rows = warehouseValuationFiltered;
+  if (!rows.length) { showToast('Brak produktów do eksportu.'); return; }
+  const headers = ['Kategoria', 'Kod', 'Nazwa', 'Ilosc', 'Srednia cena (zl)', 'Wartosc (zl)'];
+  const data = rows.map(r => [
+    r.category || '', r.itemCode || '', r.name || '',
+    r.qty ?? 0, (Number(r.avgUnitPrice) || 0).toFixed(2), (Number(r.value) || 0).toFixed(2)
+  ]);
+  downloadCsv(`magazyn-wycena-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
 async function loadWarehouseMoves() {
@@ -4036,6 +4150,8 @@ if (warehouseLocationFilter) warehouseLocationFilter.addEventListener('change', 
 if (whProductsExport) whProductsExport.addEventListener('click', exportWarehouseProductsCsv);
 if (whStockExport) whStockExport.addEventListener('click', exportWarehouseStockCsv);
 if (whMovesExport) whMovesExport.addEventListener('click', exportWarehouseMovesCsv);
+if (whValuationSearch) whValuationSearch.addEventListener('input', applyWarehouseValuationFilter);
+if (whValuationExport) whValuationExport.addEventListener('click', exportWarehouseValuationCsv);
 
 if (operationAddLineBtn) operationAddLineBtn.addEventListener('click', () => addOperationLine());
 [operationCloseBtn2, closeOperationBtn].forEach(b => b && b.addEventListener('click', closeOperationModal));

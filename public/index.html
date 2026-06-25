@@ -379,6 +379,7 @@
         <div id="whReportingView" hidden>
           <div class="subtabs" id="whReportNav" role="tablist">
             <button class="subtab active" data-whreport="stock" type="button">Stan</button>
+            <button class="subtab" data-whreport="valuation" type="button">Wycena stanu</button>
             <button class="subtab" data-whreport="moves" type="button">Historia ruchów</button>
           </div>
           <div id="whReportStock">
@@ -393,6 +394,19 @@
               <button id="whStockExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
             </div>
             <div id="warehouseStockContent" class="admin-content"></div>
+          </div>
+          <div id="whReportValuation" hidden>
+            <div class="toolbar">
+              <input
+                id="whValuationSearch"
+                class="search-input"
+                type="search"
+                placeholder="Szukaj po nazwie, kodzie, kategorii…"
+              />
+              <button id="whValuationExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
+            </div>
+            <div id="whValuationSummary" class="wh-valuation-summary"></div>
+            <div id="whValuationContent" class="admin-content"></div>
           </div>
           <div id="whReportMoves" hidden>
             <div class="toolbar">
