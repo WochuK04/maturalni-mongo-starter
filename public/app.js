@@ -239,6 +239,7 @@ const operationStockPanel = document.getElementById('operationStockPanel');
 const operationAddLineBtn = document.getElementById('operationAddLineBtn');
 const operationStateHint = document.getElementById('operationStateHint');
 const operationSaveBtn = document.getElementById('operationSaveBtn');
+const operationReadyBtn = document.getElementById('operationReadyBtn');
 const operationValidateBtn = document.getElementById('operationValidateBtn');
 const operationReverseBtn = document.getElementById('operationReverseBtn');
 const operationPdfBtn = document.getElementById('operationPdfBtn');
@@ -3145,8 +3146,9 @@ function itemOptions(selectedCode, allowNew = false, onlyCategory = null, showSt
   const items = (warehouseFormData?.items || [])
     .filter(it => !cat || String(it.category || '').trim().toLowerCase() === cat);
   const base = '<option value="">— wybierz produkt —</option>' + items.map(it => {
-    // Dla konwersji/wydania pokazujemy dostępny stan na Magazynie w etykiecie.
-    const label = showStock ? `${it.name || 'Bez nazwy'} (dostępne: ${Number(it.onHand) || 0})` : (it.name || 'Bez nazwy');
+    // Dla konwersji/wydania pokazujemy dostępny stan (on-hand − rezerwacje) w etykiecie.
+    const avail = it.available != null ? Number(it.available) : (Number(it.onHand) || 0);
+    const label = showStock ? `${it.name || 'Bez nazwy'} (dostępne: ${avail})` : (it.name || 'Bez nazwy');
     return `<option value="${escapeHtml(it.itemCode)}"${it.itemCode === selectedCode ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
   return base + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
@@ -3324,6 +3326,14 @@ async function openOperationModal(type, id = null) {
   operationSaveBtn.hidden = !editable;
   operationValidateBtn.hidden = !editable;
   operationCancelOpBtn.hidden = !(editable && id);
+  // „Oznacz jako gotowe (rezerwuj)": tylko operacje wydające towar (rezerwują stan).
+  // Toggluje draft↔ready; przejście w ready może zablokować rezerwacja (serwer).
+  if (operationReadyBtn) {
+    const isReserving = ['delivery', 'scrap', 'conversion'].includes(currentOperation.type || warehouseOpType);
+    operationReadyBtn.hidden = !(editable && isReserving);
+    operationReadyBtn.textContent = currentOperation.state === 'ready'
+      ? 'Wróć do roboczej (zwolnij rezerwację)' : 'Oznacz jako gotowe (rezerwuj)';
+  }
   // „Cofnij wykonanie": tylko dla wykonanej operacji (admin) — odwraca i wraca do roboczej.
   if (operationReverseBtn) operationReverseBtn.hidden = !(isAdmin && currentOperation.state === 'done');
   // „Pobierz PDF": dla każdej zapisanej operacji (ma id) — także roboczej.
@@ -3427,15 +3437,19 @@ function refreshOperationStockPanel() {
       if (!code || code === '__new__' || seen.has(code)) return;
       seen.add(code);
       const it = (warehouseFormData?.items || []).find(x => x.itemCode === code);
-      if (it) rows.push({ name: it.name || code, onHand: Number(it.onHand) || 0 });
+      if (it) rows.push({
+        name: it.name || code,
+        available: it.available != null ? Number(it.available) : (Number(it.onHand) || 0),
+        reserved: Number(it.reserved) || 0
+      });
     });
   });
   if (!rows.length) {
     operationStockPanel.innerHTML = '<p class="op-stock-empty">Wybierz produkt, aby zobaczyć dostępny stan na Magazynie.</p>';
   } else {
     operationStockPanel.innerHTML =
-      '<p class="op-stock-title">Stan na Magazynie</p><ul>' +
-      rows.map(r => `<li><span class="op-stock-name">${escapeHtml(r.name)}</span><span class="op-stock-qty">${r.onHand} szt.</span></li>`).join('') +
+      '<p class="op-stock-title">Dostępne na Magazynie</p><ul>' +
+      rows.map(r => `<li><span class="op-stock-name">${escapeHtml(r.name)}</span><span class="op-stock-qty">${r.available} szt.${r.reserved ? ` <span class="muted">(${r.reserved} zarezerw.)</span>` : ''}</span></li>`).join('') +
       '</ul>';
   }
   operationStockPanel.hidden = false;
@@ -4478,6 +4492,19 @@ if (operationSaveBtn) {
   operationSaveBtn.addEventListener('click', async () => {
     try { await saveOperation(); showToast('Zapisano wersję roboczą'); closeOperationModal(); await loadOperationsList(warehouseOpType); }
     catch (err) { showToast(err.message); }
+  });
+}
+if (operationReadyBtn) {
+  operationReadyBtn.addEventListener('click', async () => {
+    try {
+      const targetState = currentOperation?.state === 'ready' ? 'draft' : 'ready';
+      const id = await saveOperation(); // utrwal pozycje/pola, potem zmień stan
+      await api(`/warehouse/operations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ state: targetState }) });
+      showToast(targetState === 'ready' ? 'Oznaczono jako gotowe — stan zarezerwowany' : 'Wrócono do wersji roboczej');
+      closeOperationModal();
+      await loadOperationsList(warehouseOpType);
+      await refreshWarehouseHeader();
+    } catch (err) { showToast(err.message); }
   });
 }
 if (operationValidateBtn) {
