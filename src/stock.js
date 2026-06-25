@@ -838,7 +838,52 @@ export function isReorderScope(scope) {
   return REORDER_SCOPES.includes(scope);
 }
 
-// Dostępny stan na lokalizacjach `internal`, zgrupowany per itemCode i per kategoria.
+// ===== Rezerwacje stanu (pochodna otwartych operacji wydających towar) =====
+//
+// `reservedQty` na `quants` jest zerowane przez recomputeQuants (źródło prawdy z
+// ruchów), więc rezerwacji NIE trzymamy jako niezależny zapis — liczymy ją z otwartych
+// operacji (draft/ready), jak w Odoo. Rezerwują operacje zdejmujące towar z magazynu:
+// dostawa (wydanie), odpad i źródło konwersji (towar→gadżet). Po zatwierdzeniu operacja
+// znika ze stanu draft/ready, więc rezerwacja sama gaśnie (ruch realnie obniża stan).
+export const RESERVING_OP_TYPES = ['delivery', 'scrap', 'conversion'];
+export const RESERVING_OP_STATES = ['draft', 'ready'];
+
+// Czysta agregacja nad listą operacji: zwraca rezerwacje per itemCode oraz per
+// (itemCode, lokalizacja źródłowa). Konwersja rezerwuje `itemCode` (towar-źródło).
+export function reservedFromOperations(operations) {
+  const byItem = new Map();
+  const byItemLoc = new Map();
+  for (const op of Array.isArray(operations) ? operations : []) {
+    if (!RESERVING_OP_TYPES.includes(op?.type)) continue;
+    if (!RESERVING_OP_STATES.includes(op?.state)) continue;
+    const loc = op.fromLocationId ? String(op.fromLocationId) : null;
+    for (const ln of Array.isArray(op.lines) ? op.lines : []) {
+      const code = String(ln?.itemCode || '').trim();
+      const qty = Math.max(0, Math.floor(Number(ln?.quantity) || 0));
+      if (!code || qty <= 0) continue;
+      byItem.set(code, (byItem.get(code) || 0) + qty);
+      if (loc) {
+        const k = `${code}::${loc}`;
+        byItemLoc.set(k, (byItemLoc.get(k) || 0) + qty);
+      }
+    }
+  }
+  return { byItem, byItemLoc };
+}
+
+// Rezerwacje policzone z bazy (otwarte operacje wydające towar).
+export async function reservedQuantities(db) {
+  const ops = await db.collection(collections.stockOperations)
+    .find(
+      { type: { $in: RESERVING_OP_TYPES }, state: { $in: RESERVING_OP_STATES } },
+      { projection: { type: 1, state: 1, fromLocationId: 1, lines: 1 } }
+    )
+    .toArray();
+  return reservedFromOperations(ops);
+}
+
+// Stan na lokalizacjach `internal` z rezerwacjami: per itemCode i per kategoria zwraca
+// on-hand, zarezerwowane i dostępne (= max(0, onHand − reserved)).
 async function availableOnHand(db) {
   const internal = await db.collection(collections.locations)
     .find({ kind: LOCATION_KINDS.INTERNAL, isActive: { $ne: false } })
@@ -849,13 +894,16 @@ async function availableOnHand(db) {
     .find({ quantity: { $gt: 0 } })
     .toArray();
 
-  const byItem = new Map();
+  const onHandByItem = new Map();
   for (const q of quants) {
     if (!internalIds.has(q.locationId)) continue;
-    byItem.set(q.itemCode, (byItem.get(q.itemCode) || 0) + q.quantity);
+    onHandByItem.set(q.itemCode, (onHandByItem.get(q.itemCode) || 0) + q.quantity);
   }
 
-  const codes = [...byItem.keys()];
+  const { byItem: reservedByItem } = await reservedQuantities(db);
+
+  // Kategorie dla sumy unii kodów (na stanie + zarezerwowane bez stanu).
+  const codes = [...new Set([...onHandByItem.keys(), ...reservedByItem.keys()])];
   const items = codes.length
     ? await db.collection(collections.items)
         .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, category: 1 } })
@@ -863,13 +911,30 @@ async function availableOnHand(db) {
     : [];
   const catByCode = new Map(items.map(it => [it.itemCode, it.category || '']));
 
-  const byCategory = new Map();
-  for (const [code, qty] of byItem) {
+  const onHandByCategory = new Map();
+  const reservedByCategory = new Map();
+  for (const [code, qty] of onHandByItem) {
     const cat = catByCode.get(code) || '';
-    byCategory.set(cat, (byCategory.get(cat) || 0) + qty);
+    onHandByCategory.set(cat, (onHandByCategory.get(cat) || 0) + qty);
+  }
+  for (const [code, qty] of reservedByItem) {
+    const cat = catByCode.get(code) || '';
+    reservedByCategory.set(cat, (reservedByCategory.get(cat) || 0) + qty);
   }
 
-  return { byItem, byCategory };
+  const availByItem = new Map();
+  for (const code of new Set([...onHandByItem.keys(), ...reservedByItem.keys()])) {
+    availByItem.set(code, Math.max(0, (onHandByItem.get(code) || 0) - (reservedByItem.get(code) || 0)));
+  }
+  const availByCategory = new Map();
+  for (const cat of new Set([...onHandByCategory.keys(), ...reservedByCategory.keys()])) {
+    availByCategory.set(cat, Math.max(0, (onHandByCategory.get(cat) || 0) - (reservedByCategory.get(cat) || 0)));
+  }
+
+  return {
+    onHandByItem, reservedByItem, availByItem,
+    onHandByCategory, reservedByCategory, availByCategory
+  };
 }
 
 // Zwraca wszystkie reguły wzbogacone o bieżący stan i sugestię zamówienia.
@@ -878,7 +943,10 @@ export async function computeReplenishment(db) {
     .find({}).sort({ scope: 1, target: 1 }).toArray();
   if (!rules.length) return [];
 
-  const { byItem, byCategory } = await availableOnHand(db);
+  const {
+    onHandByItem, reservedByItem, availByItem,
+    onHandByCategory, reservedByCategory, availByCategory
+  } = await availableOnHand(db);
 
   // Nazwy dla reguł itemowych (czytelna etykieta „K004 · Sony A7").
   const itemCodes = rules.filter(r => r.scope === 'item').map(r => r.target);
@@ -890,24 +958,29 @@ export async function computeReplenishment(db) {
   const nameByCode = new Map(items.map(it => [it.itemCode, it.name || '']));
 
   return rules.map(r => {
-    const onHand = r.scope === 'item'
-      ? (byItem.get(r.target) || 0)
-      : (byCategory.get(r.target) || 0);
+    const isItem = r.scope === 'item';
+    const onHand = isItem ? (onHandByItem.get(r.target) || 0) : (onHandByCategory.get(r.target) || 0);
+    const reserved = isItem ? (reservedByItem.get(r.target) || 0) : (reservedByCategory.get(r.target) || 0);
+    const available = isItem ? (availByItem.get(r.target) || 0) : (availByCategory.get(r.target) || 0);
     const minQty = Number(r.minQty) || 0;
     const maxQty = Number(r.maxQty) || 0;
     const isActive = r.isActive !== false;
-    const below = isActive && onHand < minQty;
-    const toOrder = below ? Math.max(0, maxQty - onHand) : 0;
-    const itemName = r.scope === 'item' ? (nameByCode.get(r.target) || '') : '';
+    // Decyzja o uzupełnieniu liczona od DOSTĘPNEGO (stan po rezerwacjach) — nie zamawiamy
+    // ponownie pod towar już zaklepany otwartymi wydaniami.
+    const below = isActive && available < minQty;
+    const toOrder = below ? Math.max(0, maxQty - available) : 0;
+    const itemName = isItem ? (nameByCode.get(r.target) || '') : '';
     return {
       id: String(r._id),
       scope: r.scope,
       target: r.target,
       itemName,
-      label: r.scope === 'item' ? (itemName || r.target) : r.target,
+      label: isItem ? (itemName || r.target) : r.target,
       minQty,
       maxQty,
       onHand,
+      reserved,
+      available,
       toOrder,
       below,
       isActive,

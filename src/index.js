@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -538,10 +538,14 @@ app.get('/warehouse/stock', requireAuth, requireWarehouseRead, async (req, res) 
     : [];
   const itemByCode = new Map(items.map(it => [it.itemCode, it]));
 
+  // Rezerwacje per (produkt, lokalizacja źródłowa) z otwartych operacji wydających towar.
+  const { byItemLoc: reservedByItemLoc } = await reservedQuantities(db);
+
   const q = String(req.query.q || '').trim().toLowerCase();
   let rows = quants.map(quant => {
     const it = itemByCode.get(quant.itemCode) || {};
     const loc = locById.get(quant.locationId) || {};
+    const reserved = reservedByItemLoc.get(`${quant.itemCode}::${quant.locationId}`) || 0;
     return {
       itemCode: quant.itemCode,
       name: it.name || '',
@@ -551,7 +555,9 @@ app.get('/warehouse/stock', requireAuth, requireWarehouseRead, async (req, res) 
       locationName: loc.name || '',
       locationCode: loc.code || '',
       lot: quant.lot || null,
-      quantity: quant.quantity
+      quantity: quant.quantity,
+      reserved,
+      available: Math.max(0, quant.quantity - reserved)
     };
   });
 
@@ -1156,7 +1162,7 @@ app.get('/warehouse/overview', requireAuth, requireWarehouseRead, async (_req, r
   const belowRows = replRows
     .filter(r => r.below)
     .sort((a, b) => b.toOrder - a.toOrder || String(a.label).localeCompare(String(b.label), 'pl'))
-    .map(r => ({ label: r.label, scope: r.scope, onHand: r.onHand, minQty: r.minQty, toOrder: r.toOrder }));
+    .map(r => ({ label: r.label, scope: r.scope, onHand: r.onHand, reserved: r.reserved, available: r.available, minQty: r.minQty, toOrder: r.toOrder }));
   const replenishment = {
     rules: replRows.length,
     below: belowRows.length,
