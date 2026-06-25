@@ -2887,7 +2887,7 @@ function renderOverview(types, replenishment) {
       const rows = shortages.map(it => `
         <tr class="wh-shortage-row" data-whgo="replenishment">
           <td>${escapeHtml(it.label)}</td>
-          <td class="num">${escapeHtml(it.onHand)}</td>
+          <td class="num">${escapeHtml(it.available != null ? it.available : it.onHand)}</td>
           <td class="num">${escapeHtml(it.minQty)}</td>
           <td class="num"><strong>${escapeHtml(it.toOrder)}</strong></td>
         </tr>`).join('');
@@ -2898,7 +2898,7 @@ function renderOverview(types, replenishment) {
             <table class="wh-shortage-table">
               <thead><tr>
                 <th>Pozycja / kategoria</th>
-                <th class="num">Na stanie</th><th class="num">Minimum</th><th class="num">Do zamówienia</th>
+                <th class="num">Dostępne</th><th class="num">Minimum</th><th class="num">Do zamówienia</th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>
@@ -3003,7 +3003,7 @@ function renderReplenishment(rows) {
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Poziom</th><th>Pozycja</th><th>Na stanie</th><th>Min</th><th>Max</th><th>Do zamówienia</th><th>Status</th>${isAdmin ? '<th></th>' : ''}
+      <th>Poziom</th><th>Pozycja</th><th>Na stanie</th><th>Zarezerw.</th><th>Dostępne</th><th>Min</th><th>Max</th><th>Do zamówienia</th><th>Status</th>${isAdmin ? '<th></th>' : ''}
     </tr></thead>`;
   const tbody = document.createElement('tbody');
   tbody.innerHTML = sorted.map(r => {
@@ -3027,6 +3027,8 @@ function renderReplenishment(rows) {
         <td><span class="badge badge-scope">${escapeHtml(scopeLabel)}</span></td>
         <td>${escapeHtml(r.label)}${r.note ? `<br><span class="muted">${escapeHtml(r.note)}</span>` : ''}</td>
         <td>${escapeHtml(r.onHand)}</td>
+        <td>${(Number(r.reserved) || 0) ? escapeHtml(r.reserved) : '—'}</td>
+        <td>${escapeHtml(r.available != null ? r.available : r.onHand)}</td>
         <td>${escapeHtml(r.minQty)}</td>
         <td>${escapeHtml(r.maxQty)}</td>
         <td>${r.toOrder ? `<strong>${escapeHtml(r.toOrder)}</strong>` : '—'}</td>
@@ -3740,9 +3742,10 @@ function exportWarehouseProductsCsv() {
 function exportWarehouseStockCsv() {
   const rows = warehouseStockFiltered;
   if (!rows.length) { showToast('Brak pozycji do eksportu.'); return; }
-  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Lokalizacja', 'Ilosc'];
+  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Lokalizacja', 'Ilosc', 'Zarezerwowane', 'Dostepne'];
   const data = rows.map(r => [
-    r.itemCode || '', r.name || '', r.category || '', r.locationName || '', r.quantity ?? 0
+    r.itemCode || '', r.name || '', r.category || '', r.locationName || '',
+    r.quantity ?? 0, r.reserved ?? 0, r.available ?? (r.quantity ?? 0)
   ]);
   downloadCsv(`magazyn-stan-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
@@ -3934,17 +3937,24 @@ function renderWarehouseStock(rows) {
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th><th>Ilość</th>
+      <th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Lokalizacja</th>
+      <th class="num">Ilość</th><th class="num">Zarezerw.</th><th class="num">Dostępne</th>
     </tr></thead>`;
   const tbody = document.createElement('tbody');
-  tbody.innerHTML = rows.map(r => `
+  tbody.innerHTML = rows.map(r => {
+    const reserved = Number(r.reserved) || 0;
+    const available = r.available != null ? Number(r.available) : (Number(r.quantity) || 0);
+    return `
     <tr>
       <td>${escapeHtml(r.itemCode || '—')}</td>
       <td>${escapeHtml(r.name || '—')}</td>
       <td>${escapeHtml(r.category || '—')}</td>
       <td>${escapeHtml(r.locationName || '—')}</td>
-      <td>${escapeHtml(r.quantity)}</td>
-    </tr>`).join('');
+      <td class="num">${escapeHtml(r.quantity)}</td>
+      <td class="num">${reserved ? escapeHtml(reserved) : '—'}</td>
+      <td class="num">${escapeHtml(available)}</td>
+    </tr>`;
+  }).join('');
   table.appendChild(tbody);
   warehouseStockContent.innerHTML = '';
   warehouseStockContent.appendChild(table);
