@@ -846,8 +846,24 @@ function renderStats(data) {
   `).join('');
 }
 
+// Wypełnia selecty filtra (typ encji / typ akcji) raz — opcje z map etykiet,
+// posortowane po polskiej nazwie. Pierwsza opcja „Wszystkie…" zostaje.
+function populateAuditFilterOptions() {
+  const fill = (id, labels) => {
+    const sel = document.getElementById(id);
+    if (!sel || sel.options.length > 1) return;
+    const opts = Object.entries(labels)
+      .sort((a, b) => a[1].localeCompare(b[1], 'pl'))
+      .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`);
+    sel.insertAdjacentHTML('beforeend', opts.join(''));
+  };
+  fill('auditEntityType', AUDIT_ENTITY_LABELS);
+  fill('auditActionType', AUDIT_ACTION_LABELS);
+}
+
 function showAuditFilters() {
   if (auditFilterForm) auditFilterForm.hidden = false;
+  populateAuditFilterOptions();
 }
 
 function hideAuditFilters() {
@@ -2517,7 +2533,19 @@ const AUDIT_ACTION_LABELS = {
   item_transferred: 'Przeniósł sprzęt na inną osobę',
   issue_reported: 'Zgłosił problem ze sprzętem',
   user_updated: 'Zmienił ustawienia użytkownika',
-  user_deleted: 'Usunął użytkownika'
+  user_deleted: 'Usunął użytkownika',
+  warehouse_operation_done: 'Zatwierdził operację magazynową',
+  warehouse_operation_reversed: 'Cofnął operację magazynową',
+  reorder_rule_created: 'Dodał regułę zapotrzebowania (min-max)'
+};
+
+// Typy encji (do filtra historii). Trzymamy też etykiety dla czytelności.
+const AUDIT_ENTITY_LABELS = {
+  item: 'Sprzęt',
+  loan: 'Wypożyczenie',
+  loan_request: 'Wniosek o wypożyczenie',
+  purchase_request: 'Wniosek o zakup',
+  user: 'Użytkownik'
 };
 
 // Czego dotyczyła akcja — sprzęt, zakup lub inny użytkownik.
