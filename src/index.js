@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -615,6 +615,77 @@ app.get('/warehouse/moves', requireAuth, requireWarehouseRead, async (req, res) 
       doneAt: m.doneAt || m.createdAt || null
     };
   }));
+});
+
+// Raport ruchów w okresie (Raportowanie): podsumowanie wg rodzaju ruchu w zadanym
+// przedziale dat + lista szczegółowa. Filtry: ?from=YYYY-MM-DD&to=YYYY-MM-DD&kind=.
+// Domyślnie ostatnie 30 dni. `to` jest włączające (do końca dnia). Tylko ruchy
+// kategorii magazynowych. Podsumowanie liczone ze wszystkich ruchów okresu;
+// lista szczegółowa przycięta do 1000 najnowszych (flaga `truncated`).
+app.get('/warehouse/moves-report', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const parseDay = (s, endOfDay) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const to = parseDay(req.query.to, true) || new Date();
+  const from = parseDay(req.query.from, false) || new Date(to.getTime() - 30 * DAY);
+
+  const filter = { doneAt: { $gte: from, $lte: to } };
+  const kind = String(req.query.kind || '').trim();
+  if (kind) filter.kind = kind;
+
+  const moves = await db.collection(collections.stockMoves)
+    .find(filter)
+    .sort({ doneAt: -1, _id: -1 })
+    .toArray();
+
+  const locations = await db.collection(collections.locations).find({}).toArray();
+  const locById = new Map(locations.map(l => [String(l._id), l]));
+
+  const itemCodes = [...new Set(moves.map(m => m.itemCode))];
+  const items = itemCodes.length
+    ? await db.collection(collections.items)
+        .find({ itemCode: { $in: itemCodes } }, { projection: { itemCode: 1, name: 1, category: 1 } })
+        .toArray()
+    : [];
+  const itemByCode = new Map(items.map(it => [it.itemCode, it]));
+
+  // Tylko ruchy towarów magazynowych (jak w historii ruchów).
+  const warehouseMoves = moves.filter(m => isWarehouseCategory(itemByCode.get(m.itemCode)?.category));
+
+  const summary = summarizeMovesByKind(warehouseMoves);
+
+  const LIMIT = 1000;
+  const rows = warehouseMoves.slice(0, LIMIT).map(m => {
+    const fromLoc = m.fromLocationId ? locById.get(m.fromLocationId) : null;
+    const toLoc = m.toLocationId ? locById.get(m.toLocationId) : null;
+    return {
+      id: String(m._id),
+      itemCode: m.itemCode,
+      itemName: itemByCode.get(m.itemCode)?.name || '',
+      fromName: fromLoc?.name || null,
+      toName: toLoc?.name || null,
+      quantity: m.quantity,
+      lot: m.lot || null,
+      kind: m.kind || 'internal',
+      actorEmail: m.actorEmail || null,
+      note: m.note || '',
+      doneAt: m.doneAt || m.createdAt || null
+    };
+  });
+
+  res.json({
+    from: from.toISOString(),
+    to: to.toISOString(),
+    ...summary,
+    rows,
+    truncated: warehouseMoves.length > LIMIT
+  });
 });
 
 // Kartoteka produktów Magazynu (tylko kategorie magazynowe) z partiami cenowymi.

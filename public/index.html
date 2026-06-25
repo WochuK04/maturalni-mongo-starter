@@ -381,6 +381,7 @@
             <button class="subtab active" data-whreport="stock" type="button">Stan</button>
             <button class="subtab" data-whreport="valuation" type="button">Wycena stanu</button>
             <button class="subtab" data-whreport="moves" type="button">Historia ruchów</button>
+            <button class="subtab" data-whreport="period" type="button">Ruchy w okresie</button>
           </div>
           <div id="whReportStock">
             <div class="toolbar">
@@ -413,6 +414,16 @@
               <button id="whMovesExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
             </div>
             <div id="warehouseMovesContent" class="admin-content"></div>
+          </div>
+          <div id="whReportPeriod" hidden>
+            <div class="toolbar wh-period-toolbar">
+              <label class="wh-period-field">Od <input id="whPeriodFrom" class="search-input" type="date" /></label>
+              <label class="wh-period-field">Do <input id="whPeriodTo" class="search-input" type="date" /></label>
+              <select id="whPeriodKind" class="search-input" aria-label="Filtruj po rodzaju ruchu"></select>
+              <button id="whPeriodExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
+            </div>
+            <div id="whPeriodSummary" class="wh-period-summary"></div>
+            <div id="whPeriodContent" class="admin-content"></div>
           </div>
         </div>
 

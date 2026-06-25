@@ -174,6 +174,7 @@ const whReportingView = document.getElementById('whReportingView');
 const whReportStock = document.getElementById('whReportStock');
 const whReportValuation = document.getElementById('whReportValuation');
 const whReportMoves = document.getElementById('whReportMoves');
+const whReportPeriod = document.getElementById('whReportPeriod');
 const whConfigView = document.getElementById('whConfigView');
 // Raportowanie / Konfiguracja — kontenery reużyte z Fazy 1.
 const warehouseStockContent = document.getElementById('warehouseStockContent');
@@ -187,6 +188,12 @@ const whValuationSearch = document.getElementById('whValuationSearch');
 const whValuationExport = document.getElementById('whValuationExport');
 const whValuationSummary = document.getElementById('whValuationSummary');
 const whValuationContent = document.getElementById('whValuationContent');
+const whPeriodFrom = document.getElementById('whPeriodFrom');
+const whPeriodTo = document.getElementById('whPeriodTo');
+const whPeriodKind = document.getElementById('whPeriodKind');
+const whPeriodExport = document.getElementById('whPeriodExport');
+const whPeriodSummary = document.getElementById('whPeriodSummary');
+const whPeriodContent = document.getElementById('whPeriodContent');
 // Modal operacji.
 const operationModal = document.getElementById('operationModal');
 const operationModalType = document.getElementById('operationModalType');
@@ -362,6 +369,8 @@ let warehouseMovesState = [];
 // (po filtrze) używana do renderu i eksportu CSV.
 let warehouseValuationState = null;
 let warehouseValuationFiltered = [];
+// Raport ruchów w okresie: pełna odpowiedź (podsumowanie + wiersze) do renderu/eksportu.
+let warehouseMovesReportState = null;
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3807,9 +3816,11 @@ async function switchReportView(view) {
   if (whReportStock) whReportStock.hidden = view !== 'stock';
   if (whReportValuation) whReportValuation.hidden = view !== 'valuation';
   if (whReportMoves) whReportMoves.hidden = view !== 'moves';
+  if (whReportPeriod) whReportPeriod.hidden = view !== 'period';
   if (view === 'stock') await loadWarehouseStock();
   else if (view === 'valuation') await loadWarehouseValuation();
   else if (view === 'moves') await loadWarehouseMoves();
+  else if (view === 'period') await loadWarehouseMovesReport();
 }
 
 async function loadWarehouseStock() {
@@ -3985,6 +3996,112 @@ function renderWarehouseMoves(moves) {
   table.appendChild(tbody);
   warehouseMovesContent.innerHTML = '';
   warehouseMovesContent.appendChild(table);
+}
+
+// --- Raport ruchów w okresie (filtr dat + rodzaj, podsumowanie wg rodzaju) ---
+function toDateInputValue(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Ustawia kontrolki raz: domyślny zakres (ostatnie 30 dni) i listę rodzajów ruchu.
+function ensureMovesReportControls() {
+  if (whPeriodTo && !whPeriodTo.value) whPeriodTo.value = toDateInputValue(new Date());
+  if (whPeriodFrom && !whPeriodFrom.value) {
+    const d = new Date(); d.setDate(d.getDate() - 30);
+    whPeriodFrom.value = toDateInputValue(d);
+  }
+  if (whPeriodKind && !whPeriodKind.options.length) {
+    whPeriodKind.innerHTML = ['<option value="">Wszystkie rodzaje</option>']
+      .concat(Object.entries(MOVE_KIND_LABELS).map(([k, label]) =>
+        `<option value="${escapeHtml(k)}">${escapeHtml(label)}</option>`)).join('');
+  }
+}
+
+async function loadWarehouseMovesReport() {
+  ensureMovesReportControls();
+  const params = new URLSearchParams();
+  if (whPeriodFrom?.value) params.set('from', whPeriodFrom.value);
+  if (whPeriodTo?.value) params.set('to', whPeriodTo.value);
+  if (whPeriodKind?.value) params.set('kind', whPeriodKind.value);
+  warehouseMovesReportState = await api(`/warehouse/moves-report?${params.toString()}`);
+  if (whPeriodExport) whPeriodExport.disabled = !(warehouseMovesReportState?.rows || []).length;
+  renderWarehouseMovesReport(warehouseMovesReportState);
+}
+
+function renderWarehouseMovesReport(data) {
+  const byKind = data?.byKind || [];
+  const rows = data?.rows || [];
+
+  // Nagłówek: podsumowanie wg rodzaju ruchu + wiersz „Razem".
+  if (whPeriodSummary) {
+    if (!byKind.length) {
+      whPeriodSummary.innerHTML = '';
+    } else {
+      const kindRows = byKind.map(k => `
+        <tr>
+          <td>${escapeHtml(MOVE_KIND_LABELS[k.kind] || k.kind)}</td>
+          <td class="num">${escapeHtml(k.moves)}</td>
+          <td class="num">${escapeHtml(k.totalQty)}</td>
+          <td class="num">${escapeHtml(k.items)}</td>
+        </tr>`).join('');
+      whPeriodSummary.innerHTML = `
+        <table class="wh-period-kinds">
+          <thead><tr>
+            <th>Rodzaj</th><th class="num">Ruchów</th><th class="num">Σ ilość</th><th class="num">Towarów</th>
+          </tr></thead>
+          <tbody>
+            ${kindRows}
+            <tr class="wh-valuation-subtotal">
+              <td><strong>Razem</strong></td>
+              <td class="num"><strong>${escapeHtml(data.totalMoves || 0)}</strong></td>
+              <td class="num"><strong>${escapeHtml(data.totalQty || 0)}</strong></td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>`;
+    }
+  }
+
+  // Lista szczegółowa (te same kolumny co Historia ruchów).
+  if (!rows.length) { renderEmpty(whPeriodContent, 'Brak ruchów w wybranym okresie.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Data</th><th>Sprzęt</th><th>Kod</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Osoba</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = rows.map(m => `
+    <tr>
+      <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
+      <td>${escapeHtml(m.itemName || '—')}</td>
+      <td>${escapeHtml(m.itemCode || '—')}</td>
+      <td>${escapeHtml(m.fromName || '—')}</td>
+      <td>${escapeHtml(m.toName || '—')}</td>
+      <td>${escapeHtml(m.quantity)}</td>
+      <td>${escapeHtml(MOVE_KIND_LABELS[m.kind] || m.kind || '—')}</td>
+      <td class="muted">${escapeHtml(m.actorEmail || '—')}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  whPeriodContent.innerHTML = '';
+  if (data.truncated) {
+    const hint = document.createElement('p');
+    hint.className = 'muted wh-products-hint';
+    hint.textContent = 'Pokazano 1000 najnowszych ruchów z okresu — podsumowanie obejmuje wszystkie.';
+    whPeriodContent.appendChild(hint);
+  }
+  whPeriodContent.appendChild(table);
+}
+
+function exportWarehouseMovesReportCsv() {
+  const rows = warehouseMovesReportState?.rows || [];
+  if (!rows.length) { showToast('Brak ruchów do eksportu.'); return; }
+  const headers = ['Data', 'Sprzet', 'Kod', 'Z', 'Do', 'Ilosc', 'Rodzaj', 'Osoba'];
+  const data = rows.map(m => [
+    formatDateTime(m.doneAt), m.itemName || '', m.itemCode || '', m.fromName || '', m.toName || '',
+    m.quantity ?? 0, MOVE_KIND_LABELS[m.kind] || m.kind || '', m.actorEmail || ''
+  ]);
+  downloadCsv(`magazyn-ruchy-okres-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
 // --- Konfiguracja (lokalizacje) ---
@@ -4184,6 +4301,10 @@ if (whStockExport) whStockExport.addEventListener('click', exportWarehouseStockC
 if (whMovesExport) whMovesExport.addEventListener('click', exportWarehouseMovesCsv);
 if (whValuationSearch) whValuationSearch.addEventListener('input', applyWarehouseValuationFilter);
 if (whValuationExport) whValuationExport.addEventListener('click', exportWarehouseValuationCsv);
+if (whPeriodFrom) whPeriodFrom.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
+if (whPeriodTo) whPeriodTo.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
+if (whPeriodKind) whPeriodKind.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
+if (whPeriodExport) whPeriodExport.addEventListener('click', exportWarehouseMovesReportCsv);
 
 if (operationAddLineBtn) operationAddLineBtn.addEventListener('click', () => addOperationLine());
 [operationCloseBtn2, closeOperationBtn].forEach(b => b && b.addEventListener('click', closeOperationModal));

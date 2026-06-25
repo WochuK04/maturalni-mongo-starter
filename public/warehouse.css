@@ -89,6 +89,14 @@
 .wh-valuation-subtotal td { background: var(--surface-2, var(--surface)); }
 .wh-valuation-subtotal td strong { color: var(--text); }
 
+/* ===== Raport „Ruchy w okresie" ===== */
+.wh-period-toolbar { flex-wrap: wrap; align-items: center; }
+.wh-period-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.wh-period-field input { width: auto; }
+.wh-period-summary { margin-bottom: 16px; }
+/* Tabela podsumowania (wg rodzaju) — nie na pełną szerokość, w przeciwieństwie do list. */
+#warehousePanel .wh-period-summary table { width: auto; min-width: 380px; }
+
 /* ===== Przegląd: lista braków (poniżej minimum) ===== */
 /* Wiersze klikalne — prowadzą do widoku reguł min-max (data-whgo). */
 .wh-shortage-table tbody tr { cursor: pointer; transition: background 0.12s ease; }

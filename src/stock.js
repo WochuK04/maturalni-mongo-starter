@@ -978,3 +978,36 @@ export function computeValuation(items) {
     unpricedQty: totalQty - pricedQty
   };
 }
+
+// ===== Podsumowanie ruchów wg rodzaju (raport okresowy) =====
+//
+// Czysta agregacja nad listą ruchów (już zawężoną przez wołającego do okresu i
+// kategorii Magazynu): zlicza ruchy, sumuje ilości i liczy unikalne towary per
+// rodzaj (receipt/delivery/internal/scrap/adjustment/conversion/opening).
+export function summarizeMovesByKind(moves) {
+  const byKind = new Map();
+  const seenItems = new Map(); // kind -> Set(itemCode)
+  let totalMoves = 0;
+  let totalQty = 0;
+
+  for (const m of Array.isArray(moves) ? moves : []) {
+    const kind = m.kind || 'internal';
+    const qty = Number(m.quantity) || 0;
+    if (!byKind.has(kind)) {
+      byKind.set(kind, { kind, moves: 0, totalQty: 0, items: 0 });
+      seenItems.set(kind, new Set());
+    }
+    const g = byKind.get(kind);
+    g.moves += 1;
+    g.totalQty += qty;
+    if (m.itemCode != null && m.itemCode !== '') seenItems.get(kind).add(String(m.itemCode));
+    totalMoves += 1;
+    totalQty += qty;
+  }
+  for (const [kind, set] of seenItems) byKind.get(kind).items = set.size;
+
+  const rows = [...byKind.values()]
+    .sort((a, b) => b.moves - a.moves || a.kind.localeCompare(b.kind));
+
+  return { byKind: rows, totalMoves, totalQty };
+}
