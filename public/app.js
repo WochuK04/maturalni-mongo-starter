@@ -236,6 +236,7 @@ const operationStateHint = document.getElementById('operationStateHint');
 const operationSaveBtn = document.getElementById('operationSaveBtn');
 const operationValidateBtn = document.getElementById('operationValidateBtn');
 const operationReverseBtn = document.getElementById('operationReverseBtn');
+const operationPdfBtn = document.getElementById('operationPdfBtn');
 const operationCancelOpBtn = document.getElementById('operationCancelOpBtn');
 const operationCloseBtn2 = document.getElementById('operationCloseBtn2');
 const closeOperationBtn = document.getElementById('closeOperationBtn');
@@ -3300,6 +3301,8 @@ async function openOperationModal(type, id = null) {
   operationCancelOpBtn.hidden = !(editable && id);
   // „Cofnij wykonanie": tylko dla wykonanej operacji (admin) — odwraca i wraca do roboczej.
   if (operationReverseBtn) operationReverseBtn.hidden = !(isAdmin && currentOperation.state === 'done');
+  // „Pobierz PDF": dla każdej zapisanej operacji (ma id) — także roboczej.
+  if (operationPdfBtn) operationPdfBtn.hidden = !currentOperation.id;
 
   operationStateHint.hidden = !locked;
   if (currentOperation.state === 'done') operationStateHint.textContent = isAdmin
@@ -4383,6 +4386,13 @@ if (operationValidateBtn) {
       await loadOperationsList(warehouseOpType);
       await refreshWarehouseHeader();
     } catch (err) { showToast(err.message); }
+  });
+}
+if (operationPdfBtn) {
+  operationPdfBtn.addEventListener('click', () => {
+    if (!currentOperation?.id) return;
+    // Otwiera PDF w nowej karcie (inline) — użytkownik może go zapisać/wydrukować.
+    window.open(`/warehouse/operations/${encodeURIComponent(currentOperation.id)}/pdf`, '_blank');
   });
 }
 if (operationCancelOpBtn) {

@@ -11,6 +11,7 @@ import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
 import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind } from './stock.js';
+import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -1183,12 +1184,13 @@ app.get('/warehouse/operations', requireAuth, requireWarehouseRead, async (req, 
 });
 
 // Szczegół operacji z pozycjami.
-app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (req, res) => {
-  const db = await getDb();
+// Buduje obiekt szczegółu operacji (nazwy lokalizacji/pozycji rozwiązane). Współdzielony
+// przez widok JSON i generowanie PDF. Zwraca { status, detail }: 200 → detail, 400/404 → bez.
+async function loadOperationDetail(db, id) {
   let op;
-  try { op = await db.collection(collections.stockOperations).findOne({ _id: new ObjectId(req.params.id) }); }
-  catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  if (!op) return res.status(404).json({ message: 'Operacja nie istnieje' });
+  try { op = await db.collection(collections.stockOperations).findOne({ _id: new ObjectId(String(id)) }); }
+  catch { return { status: 400 }; }
+  if (!op) return { status: 404 };
 
   const locations = await db.collection(collections.locations).find({}).toArray();
   const locById = new Map(locations.map(l => [String(l._id), l]));
@@ -1198,7 +1200,7 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
     : [];
   const nameByCode = new Map(items.map(i => [i.itemCode, i.name]));
 
-  res.json({
+  const detail = {
     id: String(op._id),
     reference: op.reference,
     type: op.type,
@@ -1225,11 +1227,38 @@ app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (r
       unitPrice: l.unitPrice ?? null,
       countedQty: l.countedQty ?? null,
       locationId: l.locationId ? String(l.locationId) : null,
+      locationName: l.locationId ? (locById.get(String(l.locationId))?.name || null) : null,
       lot: l.lot || null
     })),
     doneAt: op.doneAt || null,
     createdAt: op.createdAt || null
-  });
+  };
+  return { status: 200, detail };
+}
+
+app.get('/warehouse/operations/:id', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+  const { status, detail } = await loadOperationDetail(db, req.params.id);
+  if (status === 400) return res.status(400).json({ message: 'Niepoprawny identyfikator' });
+  if (status === 404) return res.status(404).json({ message: 'Operacja nie istnieje' });
+  res.json(detail);
+});
+
+// Dokument PDF operacji (do druku/archiwum). Strumieniowany inline; font DejaVu
+// osadzony (polskie znaki). Tylko odczyt — jak widok operacji.
+app.get('/warehouse/operations/:id/pdf', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+  const { status, detail } = await loadOperationDetail(db, req.params.id);
+  if (status === 400) return res.status(400).json({ message: 'Niepoprawny identyfikator' });
+  if (status === 404) return res.status(404).json({ message: 'Operacja nie istnieje' });
+
+  const safeRef = String(detail.reference || 'operacja').replace(/[^\w.-]+/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${safeRef}.pdf"`);
+
+  const doc = createOperationPdfDoc(detail);
+  doc.pipe(res);
+  doc.end();
 });
 
 app.post('/warehouse/operations', requireAuth, requireAdmin, async (req, res) => {
