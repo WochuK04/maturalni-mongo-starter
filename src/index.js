@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -1119,18 +1119,26 @@ app.get('/warehouse/form-data', requireAuth, requireWarehouseRead, async (_req, 
     .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
 
   // Dostępny stan na Magazynie (WH/Stock) per produkt — do podpowiedzi „dostępne: N"
-  // i blokady nadmiaru przy konwersji.
+  // i blokady nadmiaru przy konwersji. `available` = on-hand − rezerwacje (otwarte
+  // wydania), żeby planista widział wolny stan, nie surowy on-hand.
   const stockLoc = await db.collection(collections.locations).findOne({ code: 'WH/Stock' });
   const onHandByCode = new Map();
+  const { byItemLoc: reservedByItemLoc } = await reservedQuantities(db);
+  const stockId = stockLoc ? String(stockLoc._id) : null;
   if (stockLoc) {
     const quants = await db.collection(collections.quants)
-      .find({ locationId: String(stockLoc._id) }, { projection: { itemCode: 1, quantity: 1 } }).toArray();
+      .find({ locationId: stockId }, { projection: { itemCode: 1, quantity: 1 } }).toArray();
     for (const q of quants) onHandByCode.set(q.itemCode, Number(q.quantity) || 0);
   }
+  const reservedAt = (code) => (stockId ? (reservedByItemLoc.get(`${code}::${stockId}`) || 0) : 0);
 
   res.json({
     locations: locations.map(l => ({ id: String(l._id), code: l.code, name: l.name, kind: l.kind })),
-    items: items.map(it => ({ itemCode: it.itemCode, name: it.name || '', category: it.category || '', onHand: onHandByCode.get(it.itemCode) || 0 })),
+    items: items.map(it => {
+      const onHand = onHandByCode.get(it.itemCode) || 0;
+      const reserved = reservedAt(it.itemCode);
+      return { itemCode: it.itemCode, name: it.name || '', category: it.category || '', onHand, reserved, available: Math.max(0, onHand - reserved) };
+    }),
     suppliers: suppliers.map(s => ({ id: String(s._id), name: s.name || '' })),
     deliveryDestinations: destinations.map(d => ({ id: String(d._id), name: d.name || '' })),
     types: OPERATION_TYPES
@@ -1343,6 +1351,33 @@ app.patch('/warehouse/operations/:id', requireAuth, requireAdmin, async (req, re
   if (req.body.note !== undefined) update.note = String(req.body.note || '').trim();
   if (req.body.lines !== undefined) update.lines = normalizeOperationLines(op.type, req.body.lines);
   if (req.body.state === 'ready' || req.body.state === 'draft') update.state = req.body.state;
+
+  // Rezerwacja przy commit: nie pozwól przejść w „ready", gdy zapotrzebowanie operacji
+  // wydającej towar przekracza dostępne (on-hand na Magazynie − rezerwacje INNYCH
+  // otwartych operacji). Bierzemy linie z tego żądania, jeśli przyszły, inaczej z bazy.
+  if (req.body.state === 'ready' && RESERVING_OP_TYPES.includes(op.type)) {
+    const lines = update.lines !== undefined ? update.lines : (op.lines || []);
+    const codes = [...new Set(lines.map(l => String(l.itemCode || '').trim()).filter(Boolean))];
+    const stockLoc = await db.collection(collections.locations).findOne({ code: 'WH/Stock' });
+    const onHandByItem = new Map();
+    if (stockLoc && codes.length) {
+      const quants = await db.collection(collections.quants)
+        .find({ locationId: String(stockLoc._id), itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1 } })
+        .toArray();
+      for (const q of quants) onHandByItem.set(q.itemCode, (onHandByItem.get(q.itemCode) || 0) + (Number(q.quantity) || 0));
+    }
+    // Blokada liczy tylko INNE zacommitowane operacje (ready) — wersje robocze (draft)
+    // nie blokują commitu (pierwszy „gotowe" wygrywa wolny stan).
+    const { byItem: reservedByOthers } = await reservedQuantities(db, { excludeOpId: String(op._id), states: ['ready'] });
+    const { ok, violations } = checkReservation(lines, onHandByItem, reservedByOthers);
+    if (!ok) {
+      const v = violations[0];
+      return res.status(400).json({
+        message: `Za mało dostępnego do rezerwacji: ${v.itemCode} (dostępne ${v.available}, żądane ${v.demand})`,
+        violations
+      });
+    }
+  }
 
   await db.collection(collections.stockOperations).updateOne({ _id: op._id }, { $set: update });
   res.json({ message: 'Zapisano' });

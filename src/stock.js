@@ -871,15 +871,43 @@ export function reservedFromOperations(operations) {
   return { byItem, byItemLoc };
 }
 
-// Rezerwacje policzone z bazy (otwarte operacje wydające towar).
-export async function reservedQuantities(db) {
+// Rezerwacje policzone z bazy (otwarte operacje wydające towar). `excludeOpId` pomija
+// jedną operację (liczymy „rezerwacje INNYCH operacji"). `states` zawęża stany — do
+// widoczności bierzemy draft+ready, ale blokada przy commit liczy tylko zacommitowane
+// (ready), żeby pierwszy commit nie był blokowany cudzymi wersjami roboczymi.
+export async function reservedQuantities(db, { excludeOpId = null, states = RESERVING_OP_STATES } = {}) {
+  const filter = { type: { $in: RESERVING_OP_TYPES }, state: { $in: states } };
+  if (excludeOpId) {
+    try { filter._id = { $ne: new ObjectId(String(excludeOpId)) }; } catch { /* zły id → bez wykluczenia */ }
+  }
   const ops = await db.collection(collections.stockOperations)
-    .find(
-      { type: { $in: RESERVING_OP_TYPES }, state: { $in: RESERVING_OP_STATES } },
-      { projection: { type: 1, state: 1, fromLocationId: 1, lines: 1 } }
-    )
+    .find(filter, { projection: { type: 1, state: 1, fromLocationId: 1, lines: 1 } })
     .toArray();
   return reservedFromOperations(ops);
+}
+
+// Czy operację wydającą towar można zarezerwować (przejść w „ready"): łączne
+// zapotrzebowanie per produkt nie może przekroczyć dostępnego = on-hand − rezerwacje
+// INNYCH otwartych operacji. Czysta logika (mapy podaje wołający). Konwersja podaje
+// w `itemCode` towar-źródło, więc działa tak samo jak dostawa/odpad.
+export function checkReservation(lines, onHandByItem, reservedByOthers) {
+  const oh = onHandByItem instanceof Map ? onHandByItem : new Map(Object.entries(onHandByItem || {}));
+  const ro = reservedByOthers instanceof Map ? reservedByOthers : new Map(Object.entries(reservedByOthers || {}));
+  const demand = new Map();
+  for (const ln of Array.isArray(lines) ? lines : []) {
+    const code = String(ln?.itemCode || '').trim();
+    const qty = Math.max(0, Math.floor(Number(ln?.quantity) || 0));
+    if (!code || qty <= 0) continue;
+    demand.set(code, (demand.get(code) || 0) + qty);
+  }
+  const violations = [];
+  for (const [code, need] of demand) {
+    const onHand = Number(oh.get(code)) || 0;
+    const otherReserved = Number(ro.get(code)) || 0;
+    const available = Math.max(0, onHand - otherReserved);
+    if (need > available) violations.push({ itemCode: code, demand: need, onHand, otherReserved, available });
+  }
+  return { ok: violations.length === 0, violations };
 }
 
 // Stan na lokalizacjach `internal` z rezerwacjami: per itemCode i per kategoria zwraca
