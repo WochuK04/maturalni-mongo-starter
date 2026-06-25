@@ -1,0 +1,211 @@
+// Generowanie dokumentu PDF operacji magazynowej (przyjęcie/dostawa/konwersja/…).
+//
+// Osobny moduł, by logika układu była testowalna wprost (buduje strumień PDF z
+// obiektu szczegółu operacji — tego samego, który zwraca GET /warehouse/operations/:id).
+// Polskie znaki wymagają osadzonego fontu Unicode — używamy DejaVu Sans (assets/fonts).
+
+import path from 'path';
+import { fileURLToPath } from 'url';
+import PDFDocument from 'pdfkit';
+
+const FONT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../assets/fonts');
+const FONT_REGULAR = path.join(FONT_DIR, 'DejaVuSans.ttf');
+const FONT_BOLD = path.join(FONT_DIR, 'DejaVuSans-Bold.ttf');
+
+const STATE_LABELS = {
+  draft: 'Wersja robocza', ready: 'Gotowe', done: 'Wykonano', cancelled: 'Anulowano'
+};
+
+function fmtDate(value) {
+  if (!value) return '—';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function fmtZl(n) {
+  return `${(Number(n) || 0).toFixed(2).replace('.', ',')} zł`;
+}
+
+// Konfiguracja kolumn tabeli pozycji zależnie od typu operacji. Szerokości sumują się
+// do ~495 pkt (A4, margines 50). Zwraca { columns:[{label,width,align}], rows:[[...]], totalValue }.
+function buildLinesTable(op) {
+  const lines = Array.isArray(op.lines) ? op.lines : [];
+
+  if (op.type === 'receipt') {
+    let totalValue = 0;
+    const rows = lines.map(l => {
+      const qty = Number(l.quantity) || 0;
+      const price = Number(l.unitPrice) || 0;
+      const value = qty * price;
+      totalValue += value;
+      return [l.itemCode || '', l.itemName || '', String(qty), fmtZl(price), fmtZl(value)];
+    });
+    return {
+      columns: [
+        { label: 'Kod', width: 90 }, { label: 'Nazwa', width: 205 },
+        { label: 'Ilość', width: 50, align: 'right' },
+        { label: 'Cena', width: 70, align: 'right' },
+        { label: 'Wartość', width: 80, align: 'right' }
+      ],
+      rows, totalValue
+    };
+  }
+
+  if (op.type === 'conversion') {
+    return {
+      columns: [
+        { label: 'Towar (kod)', width: 90 }, { label: 'Nazwa', width: 150 },
+        { label: 'Ilość', width: 45, align: 'right' },
+        { label: 'Cel — gadżet', width: 90 }, { label: 'Nazwa celu', width: 120 }
+      ],
+      rows: lines.map(l => [
+        l.itemCode || '', l.itemName || '', String(Number(l.quantity) || 0),
+        l.targetItemCode || '', l.targetName || ''
+      ])
+    };
+  }
+
+  if (op.type === 'adjustment') {
+    return {
+      columns: [
+        { label: 'Kod', width: 90 }, { label: 'Nazwa', width: 195 },
+        { label: 'Lokalizacja', width: 120 },
+        { label: 'Policzono', width: 90, align: 'right' }
+      ],
+      rows: lines.map(l => [
+        l.itemCode || '', l.itemName || '', l.locationName || op.toName || '—',
+        l.countedQty != null ? String(l.countedQty) : '—'
+      ])
+    };
+  }
+
+  // delivery / internal / scrap — kod, nazwa, ilość, partia.
+  return {
+    columns: [
+      { label: 'Kod', width: 110 }, { label: 'Nazwa', width: 245 },
+      { label: 'Ilość', width: 60, align: 'right' },
+      { label: 'Partia', width: 80 }
+    ],
+    rows: lines.map(l => [
+      l.itemCode || '', l.itemName || '', String(Number(l.quantity) || 0), l.lot || '—'
+    ])
+  };
+}
+
+function drawTable(doc, columns, rows, startY) {
+  const left = doc.page.margins.left;
+  const totalWidth = columns.reduce((s, c) => s + c.width, 0);
+  let y = startY;
+
+  doc.font('Bold').fontSize(9).fillColor('#000');
+  let x = left;
+  columns.forEach(c => { doc.text(c.label, x, y, { width: c.width, align: c.align || 'left' }); x += c.width; });
+  y += 15;
+  doc.moveTo(left, y).lineTo(left + totalWidth, y).strokeColor('#999999').lineWidth(0.5).stroke();
+  y += 5;
+
+  doc.font('Sans').fontSize(9).fillColor('#111111');
+  rows.forEach(cells => {
+    // Łamanie strony, gdy zabraknie miejsca (zostawiamy zapas na stopkę/podpisy).
+    if (y > doc.page.height - doc.page.margins.bottom - 90) {
+      doc.addPage();
+      y = doc.page.margins.top;
+    }
+    let cx = left;
+    let maxH = 0;
+    columns.forEach(c => {
+      const text = String(cells[columns.indexOf(c)] ?? '');
+      const h = doc.heightOfString(text, { width: c.width });
+      if (h > maxH) maxH = h;
+      doc.text(text, cx, y, { width: c.width, align: c.align || 'left' });
+      cx += c.width;
+    });
+    y += Math.max(16, maxH + 4);
+  });
+
+  return { endY: y, totalWidth, left };
+}
+
+// Rysuje cały dokument do podanego PDFDocument.
+export function renderOperationPdf(doc, op) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+
+  // Nagłówek firmowy + tytuł dokumentu.
+  doc.font('Sans').fontSize(10).fillColor('#666666')
+    .text('Maturalni — Obieg sprzętu · Magazyn', left, doc.page.margins.top);
+  doc.font('Bold').fontSize(20).fillColor('#000000')
+    .text(op.typeLabel || op.type || 'Operacja', { continued: false });
+  doc.font('Sans').fontSize(12).fillColor('#333333')
+    .text(`Dokument: ${op.reference || '—'}`);
+  doc.moveDown(0.5);
+
+  // Meta — para etykieta/wartość.
+  const meta = [
+    ['Status', STATE_LABELS[op.state] || op.state || '—'],
+    ['Z lokalizacji', op.fromName || '—'],
+    ['Do lokalizacji', op.toName || '—']
+  ];
+  if (op.supplierName) meta.push(['Dostawca', op.supplierName]);
+  if (op.destinationName) meta.push(['Miejsce dostawy', op.destinationName]);
+  if (op.contact) meta.push(['Kontakt', op.contact]);
+  if (op.sourceDocument) meta.push(['Dokument źródłowy', op.sourceDocument]);
+  meta.push(['Zaplanowano', fmtDate(op.scheduledAt)]);
+  meta.push(['Wykonano', fmtDate(op.doneAt)]);
+  meta.push(['Utworzono', fmtDate(op.createdAt)]);
+
+  doc.fontSize(10);
+  meta.forEach(([k, v]) => {
+    doc.font('Bold').fillColor('#000000').text(`${k}: `, { continued: true });
+    doc.font('Sans').fillColor('#333333').text(String(v));
+  });
+
+  if (op.note) {
+    doc.moveDown(0.4);
+    doc.font('Bold').fillColor('#000000').text('Uwagi: ', { continued: true });
+    doc.font('Sans').fillColor('#333333').text(String(op.note));
+  }
+
+  doc.moveDown(1);
+  doc.font('Bold').fontSize(12).fillColor('#000000').text('Pozycje');
+  doc.moveDown(0.3);
+
+  const { columns, rows, totalValue } = buildLinesTable(op);
+  const startY = doc.y;
+  let endY = startY;
+  if (rows.length) {
+    const res = drawTable(doc, columns, rows, startY);
+    endY = res.endY;
+  } else {
+    doc.font('Sans').fontSize(10).fillColor('#666666').text('Brak pozycji.', left, startY);
+    endY = doc.y;
+  }
+
+  // Suma wartości dla przyjęcia.
+  if (op.type === 'receipt') {
+    const y = endY + 6;
+    doc.font('Bold').fontSize(11).fillColor('#000000')
+      .text(`Razem (wartość zakupu): ${fmtZl(totalValue)}`, left, y, { width: right - left, align: 'right' });
+  }
+
+  // Podpisy na dole strony.
+  const sigY = doc.page.height - doc.page.margins.bottom - 50;
+  const colW = (right - left - 40) / 2;
+  doc.font('Sans').fontSize(9).fillColor('#000000');
+  doc.moveTo(left, sigY).lineTo(left + colW, sigY).strokeColor('#999999').lineWidth(0.5).stroke();
+  doc.moveTo(left + colW + 40, sigY).lineTo(right, sigY).stroke();
+  doc.text('Wystawił', left, sigY + 4, { width: colW, align: 'center' });
+  doc.text('Odebrał / Zatwierdził', left + colW + 40, sigY + 4, { width: colW, align: 'center' });
+}
+
+// Tworzy PDFDocument z osadzonym fontem i narysowanym dokumentem. Wołający pipe'uje.
+export function createOperationPdfDoc(op) {
+  const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: `Operacja ${op.reference || ''}` } });
+  doc.registerFont('Sans', FONT_REGULAR);
+  doc.registerFont('Bold', FONT_BOLD);
+  doc.font('Sans');
+  renderOperationPdf(doc, op);
+  return doc;
+}
