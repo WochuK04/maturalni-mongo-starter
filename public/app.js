@@ -98,6 +98,17 @@ const importResult = document.getElementById('importResult');
 const importSubmitBtn = document.getElementById('importSubmitBtn');
 const closeImportBtn = document.getElementById('closeImportBtn');
 const cancelImportBtn = document.getElementById('cancelImportBtn');
+
+// Import produktów Magazynu (osobny od importu sprzętu — z ceną/partią cenową).
+const whImportBtn = document.getElementById('whImportBtn');
+const whImportModal = document.getElementById('whImportModal');
+const whImportFile = document.getElementById('whImportFile');
+const whImportPreview = document.getElementById('whImportPreview');
+const whImportResult = document.getElementById('whImportResult');
+const whImportSubmit = document.getElementById('whImportSubmit');
+const whImportClose = document.getElementById('whImportClose');
+const whImportCancel = document.getElementById('whImportCancel');
+const whImportTemplate = document.getElementById('whImportTemplate');
 const downloadCsvTemplateBtn = document.getElementById('downloadCsvTemplate');
 
 const requestFormCard = document.getElementById('requestFormCard');
@@ -3636,6 +3647,7 @@ async function refreshWarehouseHeader() {
 
 // --- Produkty (kartoteka: produkt = pozycja z partiami cenowymi) ---
 async function loadWarehouseProducts() {
+  if (whImportBtn) whImportBtn.hidden = currentUser?.role !== 'admin';
   warehouseProductsState = await api('/warehouse/products');
   applyProductsFilter();
 }
@@ -4935,6 +4947,187 @@ if (downloadCsvTemplateBtn) {
     e.preventDefault();
     downloadImportTemplate();
   });
+}
+
+// --- Import produktów Magazynu z CSV (kod opcjonalny, ilość, cena → partia cenowa) ---
+const WAREHOUSE_CATEGORIES = ['gadżet', 'opakowanie', 'sponsor', 'towar'];
+// Nagłówki (po polsku/angielsku) → pola produktu. Klucze bez diakrytyków (normalizeHeader).
+const WH_CSV_HEADER_ALIASES = {
+  'kod': 'itemCode', 'kod produktu': 'itemCode', 'itemcode': 'itemCode',
+  'nazwa': 'name', 'name': 'name',
+  'kategoria': 'category', 'category': 'category',
+  'ilosc': 'quantity', 'liczba': 'quantity', 'quantity': 'quantity',
+  'cena': 'unitPrice', 'cena jednostkowa': 'unitPrice', 'cena zakupu': 'unitPrice', 'unitprice': 'unitPrice', 'price': 'unitPrice',
+  'marka': 'brand', 'brand': 'brand',
+  'model': 'model',
+  'uwagi': 'notes', 'notes': 'notes', 'opis': 'notes'
+};
+
+function csvToWarehouseProducts(rows) {
+  if (!rows.length) return { items: [], unknownHeaders: [] };
+  const headerCells = rows[0];
+  const fields = headerCells.map(cell => WH_CSV_HEADER_ALIASES[normalizeHeader(cell)] || null);
+  const unknownHeaders = headerCells.filter((_, i) => !fields[i]).map(h => String(h).trim()).filter(Boolean);
+  const items = rows.slice(1).map(cells => {
+    const obj = {};
+    fields.forEach((field, i) => { if (field) obj[field] = String(cells[i] ?? '').trim(); });
+    return obj;
+  });
+  return { items, unknownHeaders };
+}
+
+let whImportParsed = [];
+
+function resetWhImportModal() {
+  whImportParsed = [];
+  if (whImportFile) whImportFile.value = '';
+  if (whImportPreview) { whImportPreview.hidden = true; whImportPreview.innerHTML = ''; }
+  if (whImportResult) { whImportResult.hidden = true; whImportResult.innerHTML = ''; }
+  if (whImportSubmit) whImportSubmit.disabled = true;
+}
+
+function openWhImportModal() {
+  if (!whImportModal) return;
+  resetWhImportModal();
+  if (!whImportModal.open) whImportModal.showModal();
+}
+
+function closeWhImportModal() {
+  if (whImportModal?.open) whImportModal.close();
+}
+
+function handleWhImportFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const rows = parseCsv(reader.result);
+      const { items, unknownHeaders } = csvToWarehouseProducts(rows);
+      buildWhImportPreview(items, unknownHeaders);
+    } catch {
+      showToast('Nie udało się odczytać pliku CSV');
+    }
+  };
+  reader.onerror = () => showToast('Nie udało się odczytać pliku');
+  reader.readAsText(file, 'utf-8');
+}
+
+// Walidacja po stronie frontu (te same reguły co backend): nazwa+kategoria magazynowa,
+// duplikat kodu w pliku. Duplikaty względem bazy i braki kodów rozstrzyga backend.
+function buildWhImportPreview(items, unknownHeaders) {
+  if (whImportResult) { whImportResult.hidden = true; whImportResult.innerHTML = ''; }
+  if (!whImportPreview) return;
+
+  if (!items.length) {
+    whImportPreview.hidden = false;
+    whImportPreview.innerHTML = '<div class="empty">Plik nie zawiera danych do importu.</div>';
+    whImportParsed = [];
+    if (whImportSubmit) whImportSubmit.disabled = true;
+    return;
+  }
+
+  const seen = new Set();
+  const validated = items.map((item, index) => {
+    const itemCode = String(item.itemCode || '').trim().toUpperCase();
+    const name = String(item.name || '').trim();
+    const category = String(item.category || '').trim();
+
+    let issue = '';
+    if (!name || !category) issue = 'Brak: nazwa / kategoria';
+    else if (!WAREHOUSE_CATEGORIES.includes(category.toLowerCase())) issue = 'Kategoria spoza Magazynu';
+    else if (itemCode && seen.has(itemCode)) issue = 'Duplikat kodu w pliku';
+    if (itemCode) seen.add(itemCode);
+
+    return { fileRow: index + 2, item, itemCode, name, category, quantity: item.quantity || '', unitPrice: item.unitPrice || '', issue };
+  });
+
+  const okItems = validated.filter(v => !v.issue).map(v => v.item);
+  const badCount = validated.length - okItems.length;
+  whImportParsed = okItems;
+
+  const previewRows = validated.slice(0, 30);
+  const tableRows = previewRows.map(v => `
+    <tr class="${v.issue ? 'import-row-bad' : ''}">
+      <td>${v.fileRow}</td>
+      <td>${escapeHtml(v.itemCode || '— auto —')}</td>
+      <td>${escapeHtml(v.name || '—')}</td>
+      <td>${escapeHtml(v.category || '—')}</td>
+      <td>${escapeHtml(v.quantity || '0')}</td>
+      <td>${escapeHtml(v.unitPrice || '—')}</td>
+      <td>${v.issue
+        ? `<span class="import-issue">${escapeHtml(v.issue)}</span>`
+        : '<span class="import-ok">OK</span>'}</td>
+    </tr>`).join('');
+
+  const unknownNote = unknownHeaders.length
+    ? `<p class="muted">Pominięte kolumny (nierozpoznane): ${escapeHtml(unknownHeaders.join(', '))}</p>`
+    : '';
+  const moreNote = validated.length > previewRows.length
+    ? `<span class="muted">(podgląd ${previewRows.length} z ${validated.length})</span>`
+    : '';
+
+  whImportPreview.hidden = false;
+  whImportPreview.innerHTML = `
+    <div class="import-summary">
+      <span class="import-ok">Poprawne: ${okItems.length}</span>
+      <span class="import-issue">Z błędami: ${badCount}</span>
+      ${moreNote}
+    </div>
+    ${unknownNote}
+    <div class="admin-content import-preview-table">
+      <table>
+        <thead><tr><th>Wiersz</th><th>Kod</th><th>Nazwa</th><th>Kategoria</th><th>Ilość</th><th>Cena</th><th>Status</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
+
+  if (whImportSubmit) whImportSubmit.disabled = okItems.length === 0;
+}
+
+async function submitWhImport() {
+  if (!whImportParsed.length) return;
+  const result = await api('/warehouse/products/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ items: whImportParsed })
+  });
+
+  const errorList = (result.errors || []).slice(0, 50).map(err =>
+    `<li>Wiersz ${err.row}${err.itemCode ? ` (${escapeHtml(err.itemCode)})` : ''}: ${escapeHtml(err.message)}</li>`
+  ).join('');
+
+  if (whImportResult) {
+    whImportResult.hidden = false;
+    whImportResult.innerHTML = `
+      <div class="import-summary">
+        <span class="import-ok">Dodano: ${result.added}</span>
+        <span class="import-issue">Pominięto: ${result.skipped}</span>
+      </div>
+      ${errorList ? `<ul class="import-errors">${errorList}</ul>` : ''}`;
+  }
+
+  whImportParsed = [];
+  if (whImportSubmit) whImportSubmit.disabled = true;
+  showToast(result.message);
+  loadWarehouseProducts().catch(() => {});
+}
+
+function downloadWhImportTemplate() {
+  const headers = ['kod', 'nazwa', 'kategoria', 'ilosc', 'cena', 'marka', 'model', 'uwagi'];
+  const example = ['', 'Smycz z logo', 'gadżet', '100', '2.50', 'Maturalni', '', 'Kod pusty = wygenerowany automatycznie'];
+  downloadCsv('szablon-import-produktow.csv', buildCsv(headers, [example]));
+}
+
+if (whImportBtn) whImportBtn.addEventListener('click', openWhImportModal);
+if (whImportClose) whImportClose.addEventListener('click', closeWhImportModal);
+if (whImportCancel) whImportCancel.addEventListener('click', closeWhImportModal);
+if (whImportFile) whImportFile.addEventListener('change', (e) => handleWhImportFile(e.target.files?.[0]));
+if (whImportSubmit) {
+  whImportSubmit.addEventListener('click', () => {
+    withButtonLoading(whImportSubmit, submitWhImport).catch(err => showToast(err.message));
+  });
+}
+if (whImportTemplate) {
+  whImportTemplate.addEventListener('click', (e) => { e.preventDefault(); downloadWhImportTemplate(); });
 }
 
 if (openAddItemBtn) openAddItemBtn.addEventListener('click', openAddItemModal);
