@@ -1303,3 +1303,103 @@ export function computeStockHealth({ products = [], quants = [], locations = [],
     }
   };
 }
+
+// ===== Aging zalegania (wiek warstw partii cenowych) =====
+//
+// Ile stanu i jakiej wartości „leży" długo. Wiek liczymy z `priceBatches[].addedAt`
+// (warstwy FIFO mają datę) względem `now` podanego przez wołającego (deterministyczne
+// w testach). Liczą się tylko warstwy z qty > 0 — zużyte FIFO to już wydany towar.
+// Kubełki: ≤30 / 31–90 / 91–180 / >180 dni. UWAGA: `addedAt` to data WEJŚCIA warstwy do
+// systemu, nie zawsze zakupu — warstwy „Stan początkowy" i import dostają datę zapisu.
+// Warstwa bez poprawnej daty trafia do najstarszego kubełka (>180) — zalegający stan bez
+// daty traktujemy ostrożnie jako stary. Czysta agregacja (wołający zawęża do Magazynu).
+const AGING_BANDS = [
+  { key: 'le30', label: '≤30 dni', max: 30 },
+  { key: 'd31_90', label: '31–90 dni', max: 90 },
+  { key: 'd91_180', label: '91–180 dni', max: 180 },
+  { key: 'gt180', label: '>180 dni', max: Infinity }
+];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function agingBandKey(ageDays) {
+  for (const b of AGING_BANDS) {
+    if (ageDays <= b.max) return b.key;
+  }
+  return 'gt180';
+}
+
+export function computeAging(items, now = new Date()) {
+  const ref = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  const refMs = ref.getTime();
+
+  const bands = new Map(AGING_BANDS.map(b => [b.key, { key: b.key, label: b.label, qty: 0, value: 0 }]));
+  const products = [];
+  let totalQty = 0;
+  let totalValue = 0;
+
+  for (const it of Array.isArray(items) ? items : []) {
+    const layers = (Array.isArray(it.priceBatches) ? it.priceBatches : [])
+      .filter(b => (Number(b.qty) || 0) > 0);
+    if (!layers.length) continue;
+
+    let pQty = 0;
+    let pValue = 0;
+    let oldestDays = 0;
+    let agedQty = 0;   // >180 dni
+    let agedValue = 0;
+
+    for (const b of layers) {
+      const qty = Number(b.qty) || 0;
+      const unit = Number(b.unitPrice) || 0;
+      const value = qty * unit;
+      const t = b.addedAt ? new Date(b.addedAt).getTime() : NaN;
+      // Brak/zła data → wiek nieskończony (najstarszy kubełek).
+      const ageDays = Number.isNaN(t) ? Infinity : Math.max(0, Math.floor((refMs - t) / DAY_MS));
+
+      const band = bands.get(agingBandKey(ageDays));
+      band.qty += qty;
+      band.value += value;
+
+      pQty += qty;
+      pValue += value;
+      if (ageDays > oldestDays) oldestDays = ageDays;
+      if (ageDays > 180) { agedQty += qty; agedValue += value; }
+    }
+
+    totalQty += pQty;
+    totalValue += pValue;
+    products.push({
+      itemCode: it.itemCode,
+      name: it.name || '',
+      category: it.category || '',
+      qty: pQty,
+      value: round2(pValue),
+      oldestDays: Number.isFinite(oldestDays) ? oldestDays : null, // null = warstwa bez daty
+      agedQty,
+      agedValue: round2(agedValue)
+    });
+  }
+
+  // Najpierw najbardziej zalegające (bez daty → traktowane jako najstarsze), potem wartość.
+  products.sort((a, b) =>
+    (b.oldestDays === null ? Infinity : b.oldestDays) - (a.oldestDays === null ? Infinity : a.oldestDays)
+    || b.agedValue - a.agedValue
+    || String(a.itemCode).localeCompare(String(b.itemCode), 'pl'));
+
+  const bandRows = AGING_BANDS.map(b => {
+    const r = bands.get(b.key);
+    return { key: r.key, label: r.label, qty: r.qty, value: round2(r.value) };
+  });
+
+  return {
+    bands: bandRows,
+    products,
+    totalQty,
+    totalValue: round2(totalValue),
+    productCount: products.length,
+    // Skrót: ile „leży" >180 dni (suma kubełka gt180).
+    agedQty: bands.get('gt180').qty,
+    agedValue: round2(bands.get('gt180').value)
+  };
+}

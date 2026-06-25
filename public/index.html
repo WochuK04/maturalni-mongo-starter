@@ -408,6 +408,7 @@
             <button class="subtab" data-whreport="moves" type="button">Historia ruchów</button>
             <button class="subtab" data-whreport="period" type="button">Ruchy w okresie</button>
             <button class="subtab" data-whreport="gift" type="button">Prezenty ≤20 zł</button>
+            <button class="subtab" data-whreport="aging" type="button">Wiek zapasu</button>
             <button class="subtab" data-whreport="health" type="button">Spójność danych</button>
           </div>
           <div id="whReportStock">
@@ -459,6 +460,13 @@
             </div>
             <div id="whGiftSummary" class="wh-valuation-summary"></div>
             <div id="whGiftContent" class="admin-content"></div>
+          </div>
+          <div id="whReportAging" hidden>
+            <div class="toolbar">
+              <button id="whAgingExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
+            </div>
+            <div id="whAgingSummary" class="wh-valuation-summary"></div>
+            <div id="whAgingContent" class="admin-content"></div>
           </div>
           <div id="whReportHealth" hidden>
             <div class="toolbar">
