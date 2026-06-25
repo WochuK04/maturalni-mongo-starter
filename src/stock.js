@@ -916,6 +916,20 @@ export async function computeReplenishment(db) {
   });
 }
 
+// Z policzonej reguły (jeden wiersz z computeReplenishment) buduje pozycję draftu
+// „przyjęcia". Uzupełniać da się tylko reguły itemowe poniżej minimum z dodatnim
+// `toOrder` — reguła kategorii nie wskazuje jednego produktu, więc nie da się z niej
+// zbudować linii przyjęcia (`below` już zawiera warunek aktywności). Czysta logika
+// (bez bazy): zwraca { eligible, reason?, line? }.
+export function replenishmentDraft(row) {
+  const r = row || {};
+  if (r.scope !== 'item') return { eligible: false, reason: 'category' };
+  if (!r.below) return { eligible: false, reason: 'not_below' };
+  const qty = Math.max(0, Math.floor(Number(r.toOrder) || 0));
+  if (qty <= 0) return { eligible: false, reason: 'zero' };
+  return { eligible: true, line: { itemCode: r.target, quantity: qty } };
+}
+
 // ===== Wycena stanu (Σ ilość × cena zakupu wg partii) =====
 //
 // Czysta agregacja — bierze listę pozycji (już odfiltrowaną do kategorii Magazynu
