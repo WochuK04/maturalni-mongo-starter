@@ -73,6 +73,22 @@
   margin-bottom: 14px;
 }
 
+/* ===== Raport „Wycena stanu" ===== */
+/* Kolumny liczbowe wyrównane do prawej (ilość, cena, wartość). */
+#warehousePanel td.num,
+#warehousePanel th.num { text-align: right; white-space: nowrap; }
+
+.wh-valuation-summary {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-bottom: 14px;
+}
+.wh-valuation-total {
+  font-size: 26px; font-weight: 700; color: var(--text);
+}
+/* Wiersz podsumowania kategorii — delikatne tło, oddziela grupy. */
+.wh-valuation-subtotal td { background: var(--surface-2, var(--surface)); }
+.wh-valuation-subtotal td strong { color: var(--text); }
+
 /* ===== Dashboard „Przegląd" (kafelki) ===== */
 .warehouse-dashboard { display: flex; flex-direction: column; gap: 22px; }
 .wh-group { display: flex; flex-direction: column; gap: 12px; }

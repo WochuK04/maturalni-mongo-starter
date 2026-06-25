@@ -915,3 +915,66 @@ export async function computeReplenishment(db) {
     };
   });
 }
+
+// ===== Wycena stanu (Σ ilość × cena zakupu wg partii) =====
+//
+// Czysta agregacja — bierze listę pozycji (już odfiltrowaną do kategorii Magazynu
+// przez wołającego) i liczy wartość per produkt, per kategoria oraz łącznie.
+// Arytmetyka jest taka sama jak `totalValue` w widoku Produktów (źródłem są partie
+// cenowe FIFO), więc te same pieniądze widać w dwóch miejscach.
+// Pozycje bez partii: ilość = `quantity`, wartość = 0 zł (jak w widoku Produktów) —
+// po prostu nie znamy ich kosztu zakupu.
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+export function computeValuation(items) {
+  const byCategory = new Map();
+  let totalQty = 0;
+  let totalValue = 0;
+  let pricedQty = 0; // sztuki z poznanym kosztem (mają partie) — do oceny pokrycia wyceny
+
+  for (const it of Array.isArray(items) ? items : []) {
+    const batches = Array.isArray(it.priceBatches) ? it.priceBatches : [];
+    const batchQty = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    const qty = batches.length ? batchQty : (Number(it.quantity) || 0);
+    const value = batches.reduce((s, b) => s + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+    const cat = String(it.category || '—');
+
+    if (!byCategory.has(cat)) {
+      byCategory.set(cat, { category: cat, totalQty: 0, totalValue: 0, products: [] });
+    }
+    const group = byCategory.get(cat);
+    group.products.push({
+      itemCode: it.itemCode,
+      name: it.name || '',
+      qty,
+      value: round2(value),
+      avgUnitPrice: qty > 0 ? round2(value / qty) : 0,
+      batchCount: batches.length
+    });
+    group.totalQty += qty;
+    group.totalValue += value;
+    totalQty += qty;
+    totalValue += value;
+    if (batches.length) pricedQty += batchQty;
+  }
+
+  const categories = [...byCategory.values()]
+    .map(c => ({
+      ...c,
+      totalValue: round2(c.totalValue),
+      products: c.products.sort((a, b) => b.value - a.value || String(a.name).localeCompare(String(b.name), 'pl'))
+    }))
+    .sort((a, b) => b.totalValue - a.totalValue || a.category.localeCompare(b.category, 'pl'));
+
+  return {
+    categories,
+    totalQty,
+    totalValue: round2(totalValue),
+    productCount: categories.reduce((s, c) => s + c.products.length, 0),
+    // Ile sztuk ma poznany koszt — gdy < totalQty, część stanu jest wyceniona na 0 zł.
+    pricedQty,
+    unpricedQty: totalQty - pricedQty
+  };
+}

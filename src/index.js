@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation } from './stock.js';
 import { MANAGER_MAP } from './manager-map.js';
 
 const app = express();
@@ -650,6 +650,19 @@ app.get('/warehouse/products', requireAuth, requireWarehouseRead, async (_req, r
     .sort((a, b) => String(a.name).localeCompare(String(b.name), 'pl'));
 
   res.json(products);
+});
+
+// Wycena stanu (Raportowanie): Σ ilość × cena zakupu wg partii, w rozbiciu na
+// kategorie i łącznie. Te same pieniądze co `totalValue` w kartotece Produktów,
+// tylko zagregowane. Tylko odczyt (requireWarehouseRead).
+app.get('/warehouse/valuation', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } },
+      { projection: { itemCode: 1, name: 1, category: 1, quantity: 1, priceBatches: 1 } })
+    .toArray();
+  const items = all.filter(it => isWarehouseCategory(it.category));
+  res.json(computeValuation(items));
 });
 
 // Szybkie utworzenie produktu magazynowego (dla „+ Nowy produkt" w przyjęciu).
