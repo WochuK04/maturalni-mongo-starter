@@ -275,8 +275,8 @@ export async function refreshItemCache(db, itemCode) {
 
 // Kaskadowa zmiana itemCode we wszystkich kolekcjach, które trzymają go jako klucz
 // obcy: stan (quants), ruchy, wypożyczenia, wnioski, loty, reguły min-max oraz
-// dokumenty operacji — pozycje (itemCode i targetItemCode konwersji) i snapshoty
-// do cofania (conversionDetail: sourceCode/targetCode, deliveryDetail: itemCode).
+// dokumenty operacji — pozycje (itemCode i targetItemCode konwersji) i snapshoty do
+// cofania (conversionDetail: sourceCode/targetCode, deliveryDetail/scrapDetail: itemCode).
 // Logi audytu zostają z historycznym kodem (zapis zdarzenia, nie stan bieżący).
 // Nie zmienia samego dokumentu `items` — to robi wołający (przed kaskadą).
 export async function cascadeItemCodeRename(db, oldCode, newCode) {
@@ -301,7 +301,7 @@ export async function cascadeItemCodeRename(db, oldCode, newCode) {
     { $set: { 'lines.$[e].targetItemCode': n } },
     { arrayFilters: [{ 'e.targetItemCode': o }] }
   );
-  // Snapshoty do cofania: konwersja (sourceCode/targetCode) i dostawa (itemCode).
+  // Snapshoty do cofania: konwersja (sourceCode/targetCode), dostawa i odpad (itemCode).
   await ops.updateMany(
     { 'conversionDetail.sourceCode': o },
     { $set: { 'conversionDetail.$[e].sourceCode': n } },
@@ -315,6 +315,11 @@ export async function cascadeItemCodeRename(db, oldCode, newCode) {
   await ops.updateMany(
     { 'deliveryDetail.itemCode': o },
     { $set: { 'deliveryDetail.$[e].itemCode': n } },
+    { arrayFilters: [{ 'e.itemCode': o }] }
+  );
+  await ops.updateMany(
+    { 'scrapDetail.itemCode': o },
+    { $set: { 'scrapDetail.$[e].itemCode': n } },
     { arrayFilters: [{ 'e.itemCode': o }] }
   );
 }
@@ -450,6 +455,22 @@ export async function validateOperation(db, operationId, actorEmail) {
           .toArray()
       : [];
     for (const it of its) preDelivery.set(it.itemCode, {
+      quantity: Number(it.quantity) || 0,
+      priceBatches: Array.isArray(it.priceBatches) ? it.priceBatches.map(b => ({ ...b })) : []
+    });
+  }
+
+  // Odpad (złom): jak dostawa — towar opuszcza stan, więc zdejmujemy partie cenowe FIFO
+  // (inaczej wycena zawyżałaby wartość o złomowane sztuki). Snapshot SPRZED ruchów.
+  const preScrap = new Map();
+  if (op.type === 'scrap') {
+    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const its = codes.length
+      ? await db.collection(collections.items)
+          .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
+          .toArray()
+      : [];
+    for (const it of its) preScrap.set(it.itemCode, {
       quantity: Number(it.quantity) || 0,
       priceBatches: Array.isArray(it.priceBatches) ? it.priceBatches.map(b => ({ ...b })) : []
     });
@@ -595,8 +616,14 @@ export async function validateOperation(db, operationId, actorEmail) {
   // Dostawa → zdejmij partie cenowe (towar opuszcza stan); zapamiętaj zdjęte partie,
   // by cofnięcie mogło je oddać.
   if (op.type === 'delivery') {
-    const detail = await applyDeliveryBatches(db, op, lines, preDelivery, now);
+    const detail = await consumeStockBatches(db, op, lines, preDelivery, now);
     if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { deliveryDetail: detail } });
+  }
+
+  // Odpad → zdejmij partie cenowe (jak dostawa); zapamiętaj zdjęte partie do cofnięcia.
+  if (op.type === 'scrap') {
+    const detail = await consumeStockBatches(db, op, lines, preScrap, now);
+    if (detail.length) await ops.updateOne({ _id: op._id }, { $set: { scrapDetail: detail } });
   }
 
   return { reference: op.reference, affected: [...affected] };
@@ -643,7 +670,7 @@ async function applyReceiptPriceBatches(db, op, lines, preReceipt, now) {
 
 // Zdejmuje `qty` z tablicy partii FIFO (mutuje qty partii). Zwraca koszt zdjętej
 // ilości i listę zdjętych transz (do odwrócenia operacji).
-function fifoConsume(batches, qty) {
+export function fifoConsume(batches, qty) {
   let remaining = Math.max(0, qty);
   let cost = 0;
   const consumed = [];
@@ -711,16 +738,17 @@ async function applyConversionBatches(db, op, lines, preConv, now) {
   return detail;
 }
 
-// Zdejmuje partie cenowe przy wydaniu (dostawa — towar opuszcza stan). FIFO z partii
-// każdego produktu na podstawie snapshotu sprzed ruchów; ustawia ilość = suma partii
-// po zdjęciu. Zwraca detal [{ itemCode, qty, consumed }] do oddania przy cofnięciu.
-async function applyDeliveryBatches(db, op, lines, preDelivery, now) {
+// Zdejmuje partie cenowe przy ROZCHODZIE (dostawa lub odpad — towar opuszcza stan).
+// FIFO z partii każdego produktu na podstawie snapshotu sprzed ruchów; ustawia ilość =
+// suma partii po zdjęciu. Zwraca detal [{ itemCode, qty, consumed }] do oddania przy
+// cofnięciu. Tej samej logiki używają dostawa (deliveryDetail) i odpad (scrapDetail).
+async function consumeStockBatches(db, op, lines, preStock, now) {
   const items = db.collection(collections.items);
   const detail = [];
   const work = new Map();
   const productBatches = (code) => {
     if (!work.has(code)) {
-      const pre = preDelivery.get(code) || { quantity: 0, priceBatches: [] };
+      const pre = preStock.get(code) || { quantity: 0, priceBatches: [] };
       const b = pre.priceBatches.map(x => ({ ...x }));
       if (b.length === 0 && pre.quantity > 0) b.push({ qty: pre.quantity, unitPrice: 0, note: 'Stan początkowy', addedAt: now });
       work.set(code, b);
@@ -804,14 +832,20 @@ export async function reverseOperation(db, operationId, actorEmail) {
     }
   }
 
-  // Dostawa: oddaj partie cenowe zdjęte przy wydaniu (z zapamiętanego detalu).
-  if (op.type === 'delivery' && Array.isArray(op.deliveryDetail)) {
+  // Dostawa/odpad: oddaj partie cenowe zdjęte przy rozchodzie (z zapamiętanego detalu).
+  // Stare dokumenty odpadu bez `scrapDetail` (sprzed wprowadzenia zdejmowania partii)
+  // nic tu nie oddają — i słusznie: wtedy partie nie były zdejmowane.
+  for (const { detail, label } of [
+    { detail: op.type === 'delivery' ? op.deliveryDetail : null, label: 'dostawy' },
+    { detail: op.type === 'scrap' ? op.scrapDetail : null, label: 'odpadu' }
+  ]) {
+    if (!Array.isArray(detail)) continue;
     const items = db.collection(collections.items);
-    for (const d of op.deliveryDetail) {
+    for (const d of detail) {
       if (!Array.isArray(d.consumed) || !d.consumed.length) continue;
       const it = await items.findOne({ itemCode: d.itemCode }, { projection: { priceBatches: 1 } });
       const batches = it && Array.isArray(it.priceBatches) ? it.priceBatches.slice() : [];
-      for (const c of d.consumed) batches.push({ qty: Number(c.qty) || 0, unitPrice: Number(c.unitPrice) || 0, note: `Zwrot z dostawy ${op.reference}`, addedAt: new Date() });
+      for (const c of d.consumed) batches.push({ qty: Number(c.qty) || 0, unitPrice: Number(c.unitPrice) || 0, note: `Zwrot z ${label} ${op.reference}`, addedAt: new Date() });
       const total = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
       await items.updateOne({ itemCode: d.itemCode }, { $set: { priceBatches: batches, quantity: total, updatedAt: new Date() } });
     }
@@ -820,7 +854,7 @@ export async function reverseOperation(db, operationId, actorEmail) {
   const now = new Date();
   await ops.updateOne(
     { _id: op._id },
-    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '', deliveryDetail: '' } }
+    { $set: { state: 'draft', updatedAt: now, reversedByEmail: actorEmail, reversedAt: now }, $unset: { doneAt: '', doneByEmail: '', conversionDetail: '', deliveryDetail: '', scrapDetail: '' } }
   );
   return { reference: op.reference, affected };
 }
