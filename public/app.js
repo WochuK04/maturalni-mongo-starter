@@ -214,6 +214,10 @@ const whGiftThreshold = document.getElementById('whGiftThreshold');
 const whGiftExport = document.getElementById('whGiftExport');
 const whGiftSummary = document.getElementById('whGiftSummary');
 const whGiftContent = document.getElementById('whGiftContent');
+const whReportAging = document.getElementById('whReportAging');
+const whAgingSummary = document.getElementById('whAgingSummary');
+const whAgingContent = document.getElementById('whAgingContent');
+const whAgingExport = document.getElementById('whAgingExport');
 const whReportHealth = document.getElementById('whReportHealth');
 const whHealthSummary = document.getElementById('whHealthSummary');
 const whHealthContent = document.getElementById('whHealthContent');
@@ -401,6 +405,8 @@ let warehouseMovesReportState = null;
 let warehouseGiftState = null;
 // Health-check spójności: pełna odpowiedź (rozjazdy + quanty ujemne/sieroty + podsumowanie).
 let warehouseHealthState = null;
+// Aging zalegania: pełna odpowiedź (kubełki wieku + produkty + podsumowanie).
+let warehouseAgingState = null;
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3925,12 +3931,14 @@ async function switchReportView(view) {
   if (whReportMoves) whReportMoves.hidden = view !== 'moves';
   if (whReportPeriod) whReportPeriod.hidden = view !== 'period';
   if (whReportGift) whReportGift.hidden = view !== 'gift';
+  if (whReportAging) whReportAging.hidden = view !== 'aging';
   if (whReportHealth) whReportHealth.hidden = view !== 'health';
   if (view === 'stock') await loadWarehouseStock();
   else if (view === 'valuation') await loadWarehouseValuation();
   else if (view === 'moves') await loadWarehouseMoves();
   else if (view === 'period') await loadWarehouseMovesReport();
   else if (view === 'gift') await loadWarehouseGiftReport();
+  else if (view === 'aging') await loadWarehouseAging();
   else if (view === 'health') await loadWarehouseHealth();
 }
 
@@ -4285,6 +4293,73 @@ function exportWarehouseGiftCsv() {
   downloadCsv(`magazyn-prezenty-vat-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
+// --- Aging zalegania (wiek warstw partii) ---
+// Ile stanu i wartości „leży" wg wieku warstw cenowych (≤30/31–90/91–180/>180 dni).
+// Wiek liczony z priceBatches[].addedAt — czyli od WEJŚCIA warstwy do systemu.
+async function loadWarehouseAging() {
+  warehouseAgingState = await api('/warehouse/aging');
+  if (whAgingExport) whAgingExport.disabled = !(warehouseAgingState?.products || []).length;
+  renderWarehouseAging(warehouseAgingState);
+}
+
+function renderWarehouseAging(data) {
+  const bands = data?.bands || [];
+  const products = data?.products || [];
+
+  if (whAgingSummary) {
+    const bandCells = bands.map(b => `
+      <tr>
+        <td>${escapeHtml(b.label)}</td>
+        <td class="num">${escapeHtml(b.qty)}</td>
+        <td class="num">${escapeHtml(formatPln(b.value))}</td>
+      </tr>`).join('');
+    whAgingSummary.innerHTML = `
+      <div class="wh-valuation-total">${escapeHtml(data?.agedQty || 0)} szt. leży >180 dni</div>
+      <div class="muted">wartość zalegania >180 dni: ${escapeHtml(formatPln(data?.agedValue || 0))} · łącznie ${escapeHtml(data?.totalQty || 0)} szt. / ${escapeHtml(formatPln(data?.totalValue || 0))}</div>
+      <table class="wh-period-kinds">
+        <thead><tr><th>Wiek</th><th class="num">Sztuk</th><th class="num">Wartość</th></tr></thead>
+        <tbody>${bandCells}</tbody>
+      </table>
+      <p class="muted wh-products-hint">Wiek liczony od daty wejścia warstwy do systemu (przyjęcie/import/konwersja), nie zawsze od zakupu.</p>`;
+  }
+
+  if (!products.length) { renderEmpty(whAgingContent, 'Brak pozycji z warstwami na stanie.'); return; }
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead><tr>
+      <th>Kod</th><th>Nazwa</th><th>Kategoria</th>
+      <th class="num">Sztuk</th><th class="num">Wartość</th>
+      <th class="num">Najstarsza (dni)</th><th class="num">>180 dni (szt.)</th><th class="num">>180 dni (wartość)</th>
+    </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = products.map(p => `
+    <tr>
+      <td>${escapeHtml(p.itemCode || '—')}</td>
+      <td>${escapeHtml(p.name || '—')}</td>
+      <td class="muted">${escapeHtml(p.category || '—')}</td>
+      <td class="num">${escapeHtml(p.qty)}</td>
+      <td class="num">${escapeHtml(formatPln(p.value))}</td>
+      <td class="num">${p.oldestDays == null ? '—' : escapeHtml(p.oldestDays)}</td>
+      <td class="num">${escapeHtml(p.agedQty)}</td>
+      <td class="num">${escapeHtml(formatPln(p.agedValue))}</td>
+    </tr>`).join('');
+  table.appendChild(tbody);
+  whAgingContent.innerHTML = '';
+  whAgingContent.appendChild(table);
+}
+
+function exportWarehouseAgingCsv() {
+  const products = warehouseAgingState?.products || [];
+  if (!products.length) { showToast('Brak pozycji do eksportu.'); return; }
+  const headers = ['Kod', 'Nazwa', 'Kategoria', 'Sztuk', 'Wartosc (zl)', 'Najstarsza (dni)', '>180 dni (szt)', '>180 dni wartosc (zl)'];
+  const data = products.map(p => [
+    p.itemCode || '', p.name || '', p.category || '',
+    p.qty ?? 0, (Number(p.value) || 0).toFixed(2),
+    p.oldestDays == null ? '' : p.oldestDays, p.agedQty ?? 0, (Number(p.agedValue) || 0).toFixed(2)
+  ]);
+  downloadCsv(`magazyn-wiek-zapasu-${csvDateStamp()}.csv`, buildCsv(headers, data));
+}
+
 // --- Health-check spójności danych ---
 // Zestawia trzy źródła ilości per produkt (cache / Σ quanty realne / Σ partie cenowe)
 // i pokazuje rozjazdy, quanty ujemne na stanie realnym oraz quanty-sieroty. „Przelicz"
@@ -4503,6 +4578,9 @@ document.querySelectorAll('#warehouseMenu .subtab').forEach(btn => {
 document.querySelectorAll('#whReportNav .subtab').forEach(btn => {
   btn.addEventListener('click', () => switchReportView(btn.dataset.whreport).catch(err => showToast(err.message)));
 });
+if (whAgingExport) {
+  whAgingExport.addEventListener('click', exportWarehouseAgingCsv);
+}
 if (whHealthRecomputeAll) {
   whHealthRecomputeAll.addEventListener('click', () => {
     if (!confirm('Przeliczyć stany wszystkich produktów z rejestru ruchów? Cache zsynchronizuje się z quantami.')) return;

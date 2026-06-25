@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache, computeAging } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -757,6 +757,19 @@ app.get('/warehouse/gift-threshold', requireAuth, requireWarehouseRead, async (r
     .toArray();
   const items = all.filter(it => isWarehouseCategory(it.category));
   res.json(computeGiftThresholdReport(items, threshold));
+});
+
+// Aging zalegania (Raportowanie): ile stanu i wartości „leży" wg wieku warstw partii
+// cenowych (≤30 / 31–90 / 91–180 / >180 dni). Wiek z priceBatches[].addedAt względem
+// teraz; te same partie co w wycenie, tylko grupowane po wieku. Tylko odczyt.
+app.get('/warehouse/aging', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } },
+      { projection: { itemCode: 1, name: 1, category: 1, priceBatches: 1 } })
+    .toArray();
+  const items = all.filter(it => isWarehouseCategory(it.category));
+  res.json(computeAging(items, new Date()));
 });
 
 // Health-check spójności danych (Raportowanie): zestawia trzy źródła ilości per produkt
