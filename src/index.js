@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -735,6 +735,22 @@ app.get('/warehouse/valuation', requireAuth, requireWarehouseRead, async (_req, 
     .toArray();
   const items = all.filter(it => isWarehouseCategory(it.category));
   res.json(computeValuation(items));
+});
+
+// Raport progu „prezent ≤20 zł" (Raportowanie): gadżety z konwersji, których
+// jednostkowy koszt nabycia przekracza próg „prezentów małej wartości" w VAT — ich
+// wydanie rodzi obowiązek podatkowy. Próg konfigurowalny przez ?threshold= (domyślnie
+// 20 zł). Te same partie cenowe co w wycenie, tylko filtrowane do konwersji. Tylko odczyt.
+app.get('/warehouse/gift-threshold', requireAuth, requireWarehouseRead, async (req, res) => {
+  const db = await getDb();
+  const raw = req.query.threshold;
+  const threshold = raw != null && raw !== '' ? Number(raw) : GIFT_VAT_THRESHOLD;
+  const all = await db.collection(collections.items)
+    .find({ isActive: { $ne: false } },
+      { projection: { itemCode: 1, name: 1, category: 1, priceBatches: 1 } })
+    .toArray();
+  const items = all.filter(it => isWarehouseCategory(it.category));
+  res.json(computeGiftThresholdReport(items, threshold));
 });
 
 // Szybkie utworzenie produktu magazynowego (dla „+ Nowy produkt" w przyjęciu).

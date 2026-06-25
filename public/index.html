@@ -407,6 +407,7 @@
             <button class="subtab" data-whreport="valuation" type="button">Wycena stanu</button>
             <button class="subtab" data-whreport="moves" type="button">Historia ruchów</button>
             <button class="subtab" data-whreport="period" type="button">Ruchy w okresie</button>
+            <button class="subtab" data-whreport="gift" type="button">Prezenty ≤20 zł</button>
           </div>
           <div id="whReportStock">
             <div class="toolbar">
@@ -449,6 +450,14 @@
             </div>
             <div id="whPeriodSummary" class="wh-period-summary"></div>
             <div id="whPeriodContent" class="admin-content"></div>
+          </div>
+          <div id="whReportGift" hidden>
+            <div class="toolbar wh-period-toolbar">
+              <label class="wh-period-field">Próg (zł) <input id="whGiftThreshold" class="search-input" type="number" min="0" step="1" value="20" /></label>
+              <button id="whGiftExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
+            </div>
+            <div id="whGiftSummary" class="wh-valuation-summary"></div>
+            <div id="whGiftContent" class="admin-content"></div>
           </div>
         </div>
 
