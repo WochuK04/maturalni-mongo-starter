@@ -290,10 +290,26 @@
               Nadaj rolę kierownika i ustaw, do kogo trafiają wnioski danego użytkownika.
             </p>
           </div>
-          <button id="loadUsersBtn" class="btn btn-secondary" type="button">
-            Odśwież
-          </button>
+          <div class="actions-inline">
+            <button id="addUserBtn" class="btn btn-primary" type="button">+ Dodaj użytkownika</button>
+            <button id="loadUsersBtn" class="btn btn-secondary" type="button">Odśwież</button>
+          </div>
         </div>
+        <form id="addUserForm" class="admin-form" hidden>
+          <input id="newUserName" name="fullName" placeholder="Imię i nazwisko" autocomplete="off" />
+          <input id="newUserEmail" name="email" type="email" placeholder="E-mail służbowy" autocomplete="off" required />
+          <select id="newUserRole" name="role" aria-label="Rola">
+            <option value="user">Użytkownik</option>
+            <option value="viewer">Podgląd (read-only)</option>
+            <option value="manager">Kierownik</option>
+            <option value="admin">Administrator</option>
+          </select>
+          <select id="newUserManager" name="managerEmail" aria-label="Kierownik">
+            <option value="">— bez kierownika —</option>
+          </select>
+          <button type="submit" class="btn btn-primary">Dodaj</button>
+          <button type="button" id="cancelAddUserBtn" class="btn btn-secondary">Anuluj</button>
+        </form>
         <div id="usersContent" class="admin-content"></div>
       </section>
     </section>
