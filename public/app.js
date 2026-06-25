@@ -214,6 +214,10 @@ const whGiftThreshold = document.getElementById('whGiftThreshold');
 const whGiftExport = document.getElementById('whGiftExport');
 const whGiftSummary = document.getElementById('whGiftSummary');
 const whGiftContent = document.getElementById('whGiftContent');
+const whReportHealth = document.getElementById('whReportHealth');
+const whHealthSummary = document.getElementById('whHealthSummary');
+const whHealthContent = document.getElementById('whHealthContent');
+const whHealthRecomputeAll = document.getElementById('whHealthRecomputeAll');
 // Modal operacji.
 const operationModal = document.getElementById('operationModal');
 const operationModalType = document.getElementById('operationModalType');
@@ -395,6 +399,8 @@ let warehouseValuationFiltered = [];
 let warehouseMovesReportState = null;
 // Raport progu „prezent ≤20 zł" (VAT): pełna odpowiedź (próg + pozycje + podsumowanie).
 let warehouseGiftState = null;
+// Health-check spójności: pełna odpowiedź (rozjazdy + quanty ujemne/sieroty + podsumowanie).
+let warehouseHealthState = null;
 let currentOperation = null;
 let currentReorderRule = null;
 
@@ -3919,11 +3925,13 @@ async function switchReportView(view) {
   if (whReportMoves) whReportMoves.hidden = view !== 'moves';
   if (whReportPeriod) whReportPeriod.hidden = view !== 'period';
   if (whReportGift) whReportGift.hidden = view !== 'gift';
+  if (whReportHealth) whReportHealth.hidden = view !== 'health';
   if (view === 'stock') await loadWarehouseStock();
   else if (view === 'valuation') await loadWarehouseValuation();
   else if (view === 'moves') await loadWarehouseMoves();
   else if (view === 'period') await loadWarehouseMovesReport();
   else if (view === 'gift') await loadWarehouseGiftReport();
+  else if (view === 'health') await loadWarehouseHealth();
 }
 
 async function loadWarehouseStock() {
@@ -4277,6 +4285,93 @@ function exportWarehouseGiftCsv() {
   downloadCsv(`magazyn-prezenty-vat-${csvDateStamp()}.csv`, buildCsv(headers, data));
 }
 
+// --- Health-check spójności danych ---
+// Zestawia trzy źródła ilości per produkt (cache / Σ quanty realne / Σ partie cenowe)
+// i pokazuje rozjazdy, quanty ujemne na stanie realnym oraz quanty-sieroty. „Przelicz"
+// woła recomputeQuants + refreshItemCache na backendzie (odtworzenie z rejestru ruchów).
+const HEALTH_ISSUE_LABELS = {
+  cache_vs_quant: 'cache ≠ quanty',
+  batch_vs_cache: 'partie ≠ cache',
+  batch_vs_quant: 'partie ≠ quanty'
+};
+const HEALTH_ORPHAN_LABELS = { item: 'nieznany produkt', location: 'nieznana lokalizacja' };
+
+async function loadWarehouseHealth() {
+  warehouseHealthState = await api('/warehouse/health');
+  renderWarehouseHealth(warehouseHealthState);
+}
+
+function renderWarehouseHealth(data) {
+  const mism = data?.mismatches || [];
+  const neg = data?.negativeQuants || [];
+  const orph = data?.orphanQuants || [];
+  const s = data?.summary || {};
+
+  if (whHealthSummary) {
+    if (s.ok) {
+      whHealthSummary.innerHTML = `<div class="muted">Wszystko spójne — w ${escapeHtml(s.productCount || 0)} produktach Magazynu cache, quanty i partie cenowe się zgadzają, brak quantów ujemnych i sierot.</div>`;
+    } else {
+      whHealthSummary.innerHTML = `
+        <div class="wh-valuation-total">${escapeHtml(s.mismatchCount || 0)} ${(s.mismatchCount || 0) === 1 ? 'rozjazd' : 'rozjazdów'} ilości</div>
+        <div class="muted">${escapeHtml(s.negativeQuantCount || 0)} ujemnych quantów na stanie realnym · ${escapeHtml(s.orphanQuantCount || 0)} quantów-sierot · z ${escapeHtml(s.productCount || 0)} produktów Magazynu</div>`;
+    }
+  }
+
+  const parts = [];
+  if (mism.length) {
+    parts.push(`<h4 class="wh-health-heading">Rozjazdy ilości</h4>
+      <table><thead><tr>
+        <th>Kod</th><th>Nazwa</th><th>Kategoria</th>
+        <th class="num">Cache</th><th class="num">Σ quanty (realne)</th><th class="num">Σ partie</th>
+        <th>Rozjazd</th><th></th>
+      </tr></thead><tbody>
+      ${mism.map(m => `<tr>
+        <td>${escapeHtml(m.itemCode)}</td>
+        <td>${escapeHtml(m.name || '—')}</td>
+        <td class="muted">${escapeHtml(m.category || '—')}</td>
+        <td class="num">${escapeHtml(m.cacheQty)}</td>
+        <td class="num">${escapeHtml(m.quantStockSum)}</td>
+        <td class="num">${m.hasBatches ? escapeHtml(m.batchSum) : '—'}</td>
+        <td class="muted">${escapeHtml(m.issues.map(i => HEALTH_ISSUE_LABELS[i] || i).join(', '))}</td>
+        <td><button type="button" class="btn btn-secondary wh-mini" data-recompute-item="${escapeHtml(m.itemCode)}">Przelicz</button></td>
+      </tr>`).join('')}
+      </tbody></table>`);
+  }
+  if (neg.length) {
+    parts.push(`<h4 class="wh-health-heading">Quanty ujemne na stanie realnym</h4>
+      <table><thead><tr><th>Kod</th><th>Lokalizacja</th><th class="num">Ilość</th></tr></thead><tbody>
+      ${neg.map(n => `<tr>
+        <td>${escapeHtml(n.itemCode)}</td>
+        <td>${escapeHtml(n.locationName || n.locationId)}</td>
+        <td class="num">${escapeHtml(n.quantity)}</td>
+      </tr>`).join('')}
+      </tbody></table>`);
+  }
+  if (orph.length) {
+    parts.push(`<h4 class="wh-health-heading">Quanty-sieroty</h4>
+      <table><thead><tr><th>Kod</th><th>Lokalizacja</th><th class="num">Ilość</th><th>Powód</th></tr></thead><tbody>
+      ${orph.map(o => `<tr>
+        <td>${escapeHtml(o.itemCode)}</td>
+        <td>${escapeHtml(o.locationName || o.locationId || '—')}</td>
+        <td class="num">${escapeHtml(o.quantity)}</td>
+        <td class="muted">${escapeHtml((o.reasons || []).map(r => HEALTH_ORPHAN_LABELS[r] || r).join(', '))}</td>
+      </tr>`).join('')}
+      </tbody></table>`);
+  }
+
+  if (!parts.length) { renderEmpty(whHealthContent, 'Dane są spójne — nic do pokazania.'); return; }
+  whHealthContent.innerHTML = parts.join('');
+}
+
+async function recomputeWarehouseHealth(itemCode) {
+  try {
+    const body = itemCode ? { itemCode } : {};
+    await api('/warehouse/health/recompute', { method: 'POST', body: JSON.stringify(body) });
+    showToast(itemCode ? `Przeliczono ${itemCode}` : 'Przeliczono wszystkie pozycje');
+    await loadWarehouseHealth();
+  } catch (err) { showToast(err.message); }
+}
+
 // --- Konfiguracja (lokalizacje) ---
 function renderWarehouseLocations(locations) {
   const tree = locations.filter(l => ['view', 'internal', 'employee'].includes(l.kind));
@@ -4408,6 +4503,18 @@ document.querySelectorAll('#warehouseMenu .subtab').forEach(btn => {
 document.querySelectorAll('#whReportNav .subtab').forEach(btn => {
   btn.addEventListener('click', () => switchReportView(btn.dataset.whreport).catch(err => showToast(err.message)));
 });
+if (whHealthRecomputeAll) {
+  whHealthRecomputeAll.addEventListener('click', () => {
+    if (!confirm('Przeliczyć stany wszystkich produktów z rejestru ruchów? Cache zsynchronizuje się z quantami.')) return;
+    recomputeWarehouseHealth(null);
+  });
+}
+if (whHealthContent) {
+  whHealthContent.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-recompute-item]');
+    if (btn) recomputeWarehouseHealth(btn.dataset.recomputeItem);
+  });
+}
 if (whOpTypeNav) {
   whOpTypeNav.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-whoptype]');
