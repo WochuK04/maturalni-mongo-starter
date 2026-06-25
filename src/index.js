@@ -944,11 +944,17 @@ app.get('/warehouse/overview', requireAuth, requireWarehouseRead, async (_req, r
     ...(counts[type] || { draft: 0, ready: 0, done: 0, cancelled: 0, total: 0 })
   }));
 
-  // Zapotrzebowanie: ile kategorii/pozycji jest poniżej minimum (do uzupełnienia).
+  // Zapotrzebowanie: ile kategorii/pozycji jest poniżej minimum + co konkretnie
+  // brakuje (najpilniejsze pierwsze) — by Przegląd pokazał listę, nie samą liczbę.
   const replRows = await computeReplenishment(db);
+  const belowRows = replRows
+    .filter(r => r.below)
+    .sort((a, b) => b.toOrder - a.toOrder || String(a.label).localeCompare(String(b.label), 'pl'))
+    .map(r => ({ label: r.label, scope: r.scope, onHand: r.onHand, minQty: r.minQty, toOrder: r.toOrder }));
   const replenishment = {
     rules: replRows.length,
-    below: replRows.filter(r => r.below).length
+    below: belowRows.length,
+    items: belowRows
   };
 
   res.json({ types, replenishment });
