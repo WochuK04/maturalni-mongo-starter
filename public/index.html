@@ -394,6 +394,7 @@
         <div id="whProductsView" hidden>
           <div class="toolbar">
             <input id="whProductsSearch" class="search-input" type="search" placeholder="Szukaj po nazwie, kodzie, kategorii…" />
+            <button id="whImportBtn" type="button" class="btn btn-secondary" hidden>Importuj CSV</button>
             <button id="whProductsExport" type="button" class="btn btn-secondary">Eksportuj CSV</button>
           </div>
           <div id="whProductsContent" class="admin-content"></div>
@@ -864,6 +865,38 @@
       <div class="actions-inline modal-form-actions">
         <button type="button" class="btn btn-primary" id="importSubmitBtn" disabled>Importuj</button>
         <button type="button" class="btn btn-secondary" id="cancelImportBtn">Zamknij</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="whImportModal" class="form-modal import-modal">
+    <div class="modal-form">
+      <div class="modal-form-head">
+        <div>
+          <p class="eyebrow">Magazyn</p>
+          <h3>Importuj produkty z CSV</h3>
+        </div>
+        <button type="button" class="modal-close" id="whImportClose" aria-label="Zamknij okno">×</button>
+      </div>
+
+      <p class="modal-form-hint muted">
+        Wymagane kolumny: <strong>nazwa</strong>, <strong>kategoria</strong> (gadżet / opakowanie / sponsor / towar).
+        Opcjonalne: kod (auto, gdy pusty), ilość (domyślnie 0), cena (jednostkowa zakupu), marka, model, uwagi.
+        Gdy ilość &gt; 0, zakładana jest partia cenowa — wartość wchodzi do wyceny stanu.
+        <a href="#" id="whImportTemplate">Pobierz szablon CSV</a>
+      </p>
+
+      <label class="field field-wide">
+        <span>Plik CSV</span>
+        <input type="file" id="whImportFile" accept=".csv,text/csv" />
+      </label>
+
+      <div id="whImportPreview" class="import-preview" hidden></div>
+      <div id="whImportResult" class="import-result" hidden></div>
+
+      <div class="actions-inline modal-form-actions">
+        <button type="button" class="btn btn-primary" id="whImportSubmit" disabled>Importuj</button>
+        <button type="button" class="btn btn-secondary" id="whImportCancel">Zamknij</button>
       </div>
     </div>
   </dialog>

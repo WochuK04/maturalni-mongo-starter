@@ -774,6 +774,124 @@ app.post('/warehouse/products', requireAuth, requireAdmin, async (req, res) => {
   res.status(201).json({ id: String(insertedId), itemCode: doc.itemCode, name: doc.name, category: doc.category });
 });
 
+// Import wsadowy produktów Magazynu z CSV (UI: Magazyn → Produkty → Importuj CSV).
+// Body: { items: [{ itemCode?, name, category, quantity?, unitPrice?, brand?, model?, notes? }] }.
+// Kod opcjonalny — gdy pusty, generujemy z prefiksu kategorii. Ilość ≥ 0 (0 = stan
+// dobudują przyjęcia). Gdy ilość > 0, zakładamy partię cenową {qty, unitPrice}, więc
+// wycena stanu i model FIFO działają od razu. Tylko kategorie magazynowe.
+app.post('/warehouse/products/bulk', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!rawItems) return res.status(400).json({ message: 'Body musi zawierać tablicę items' });
+  if (!rawItems.length) return res.status(400).json({ message: 'Lista do importu jest pusta' });
+  if (rawItems.length > 500) return res.status(400).json({ message: 'Maksymalnie 500 pozycji na jeden import' });
+
+  const now = new Date();
+  const errors = [];
+  const valid = [];
+  const seenInFile = new Set();
+
+  rawItems.forEach((row, index) => {
+    const rowNumber = index + 1;
+    const name = String(row?.name || '').trim();
+    const category = String(row?.category || '').trim();
+    const itemCode = normalizeItemCode(row?.itemCode);
+
+    if (!name || !category) {
+      errors.push({ row: rowNumber, itemCode, message: 'Brak wymaganych pól (nazwa, kategoria)' });
+      return;
+    }
+    if (!isWarehouseCategory(category)) {
+      errors.push({ row: rowNumber, itemCode, message: 'Kategoria spoza Magazynu (gadżet/opakowanie/sponsor/towar)' });
+      return;
+    }
+    if (itemCode && seenInFile.has(itemCode)) {
+      errors.push({ row: rowNumber, itemCode, message: 'Zduplikowany kod w pliku' });
+      return;
+    }
+    if (itemCode) seenInFile.add(itemCode);
+
+    const quantity = Math.max(0, Math.floor(Number(row?.quantity) || 0));
+    const unitPrice = Math.max(0, Math.round((Number(row?.unitPrice) || 0) * 100) / 100);
+    valid.push({
+      rowNumber, itemCode, name, category, quantity, unitPrice,
+      brand: String(row?.brand || '').trim(),
+      model: String(row?.model || '').trim(),
+      notes: String(row?.notes || '').trim()
+    });
+  });
+
+  // Duplikaty względem bazy — tylko dla jawnie podanych kodów.
+  const providedCodes = valid.filter(v => v.itemCode).map(v => v.itemCode);
+  let existingCodes = new Set();
+  if (providedCodes.length) {
+    const found = await db.collection(collections.items)
+      .find({ itemCode: { $in: providedCodes } }, { projection: { itemCode: 1 } })
+      .toArray();
+    existingCodes = new Set(found.map(f => f.itemCode));
+  }
+
+  // Generator kodów odporny na kolizje wewnątrz paczki (indeks w sufiksie) i z bazą.
+  const used = new Set(existingCodes);
+  const generateCode = async (category, idx) => {
+    for (let i = 0; i < 8; i += 1) {
+      const rnd = i === 0 ? '' : Math.floor(Math.random() * 1e4).toString(36).toUpperCase();
+      const candidate = `${itemCodePrefix(category)}-${Date.now().toString(36).toUpperCase()}${idx}${rnd}`;
+      if (used.has(candidate)) continue;
+      const exists = await db.collection(collections.items).findOne({ itemCode: candidate }, { projection: { _id: 1 } });
+      if (!exists) { used.add(candidate); return candidate; }
+    }
+    const fb = `${itemCodePrefix(category)}-${Date.now().toString(36).toUpperCase()}${idx}X`;
+    used.add(fb);
+    return fb;
+  };
+
+  const docs = [];
+  for (let i = 0; i < valid.length; i += 1) {
+    const v = valid[i];
+    let code = v.itemCode;
+    if (code) {
+      if (existingCodes.has(code)) {
+        errors.push({ row: v.rowNumber, itemCode: code, message: 'Kod już istnieje w bazie' });
+        continue;
+      }
+    } else {
+      code = await generateCode(v.category, i);
+    }
+
+    const priceBatches = v.quantity > 0
+      ? [{ qty: v.quantity, unitPrice: v.unitPrice, note: 'Import CSV', addedAt: now }]
+      : [];
+
+    docs.push({
+      itemCode: code, category: v.category, name: v.name, details: '',
+      quantity: v.quantity, currentLocation: 'Magazyn', conditionStatus: 'ok', operationalStatus: 'available',
+      assignedToName: null, assignedToEmail: null, notes: v.notes,
+      imageUrl: '', thumbnailUrl: '', brand: v.brand, model: v.model, qrCodeValue: '',
+      tags: [], serialNumber: '', warrantyUntil: '', detailedLocation: '',
+      priceBatches, isStudioLocked: false, isActive: true, createdAt: now, updatedAt: now
+    });
+  }
+
+  let added = 0;
+  if (docs.length) {
+    const result = await db.collection(collections.items).insertMany(docs, { ordered: false });
+    added = result.insertedCount;
+    const auditDocs = docs.map((doc, i) => ({
+      actorEmail: req.user.email, actionType: 'item_created', entityType: 'item',
+      entityId: String(result.insertedIds[i]),
+      payload: { itemCode: doc.itemCode, source: 'warehouse-import' }, createdAt: now
+    }));
+    await db.collection(collections.auditLogs).insertMany(auditDocs);
+  }
+
+  res.status(added ? 201 : 200).json({
+    message: `Zaimportowano ${added} z ${rawItems.length} pozycji`,
+    added, skipped: errors.length, total: rawItems.length, errors
+  });
+});
+
 // ----- Dostawcy (kartoteka kontrahentów dla przyjęć) -----
 function supplierView(s) {
   return {
