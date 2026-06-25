@@ -2806,6 +2806,38 @@ function renderOverview(types, replenishment) {
         num: replenishment.below || 0, numLabel: 'do uzupełnienia',
         sub: replenishment.rules || 0, subLabel: 'reguł min-max'
       })}</div></div>`;
+
+    // Lista braków: co konkretnie jest poniżej minimum (klik → widok reguł).
+    const shortages = replenishment.items || [];
+    if (shortages.length) {
+      const rows = shortages.map(it => `
+        <tr class="wh-shortage-row" data-whgo="replenishment">
+          <td>${escapeHtml(it.label)}</td>
+          <td class="num">${escapeHtml(it.onHand)}</td>
+          <td class="num">${escapeHtml(it.minQty)}</td>
+          <td class="num"><strong>${escapeHtml(it.toOrder)}</strong></td>
+        </tr>`).join('');
+      html += `
+        <div class="wh-group">
+          <p class="eyebrow">Braki — poniżej minimum</p>
+          <div class="admin-content">
+            <table class="wh-shortage-table">
+              <thead><tr>
+                <th>Pozycja / kategoria</th>
+                <th class="num">Na stanie</th><th class="num">Minimum</th><th class="num">Do zamówienia</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    } else if (replenishment.rules) {
+      // Reguły są, ale nic nie spadło poniżej minimum — pozytywny stan.
+      html += `
+        <div class="wh-group">
+          <p class="eyebrow">Braki — poniżej minimum</p>
+          <p class="muted wh-shortage-ok">Wszystko powyżej minimum.</p>
+        </div>`;
+    }
   }
 
   if (!html) { renderEmpty(whOverviewContent, 'Brak danych.'); return; }

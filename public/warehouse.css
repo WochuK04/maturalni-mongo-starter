@@ -89,6 +89,13 @@
 .wh-valuation-subtotal td { background: var(--surface-2, var(--surface)); }
 .wh-valuation-subtotal td strong { color: var(--text); }
 
+/* ===== Przegląd: lista braków (poniżej minimum) ===== */
+/* Wiersze klikalne — prowadzą do widoku reguł min-max (data-whgo). */
+.wh-shortage-table tbody tr { cursor: pointer; transition: background 0.12s ease; }
+.wh-shortage-table tbody tr:hover { background: var(--surface-2, var(--surface)); }
+.wh-shortage-table td.num strong { color: var(--warning-text, var(--text)); }
+.wh-shortage-ok { margin: 0; }
+
 /* ===== Dashboard „Przegląd" (kafelki) ===== */
 .warehouse-dashboard { display: flex; flex-direction: column; gap: 22px; }
 .wh-group { display: flex; flex-direction: column; gap: 12px; }
