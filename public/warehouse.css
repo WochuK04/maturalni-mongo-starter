@@ -89,6 +89,13 @@
 .wh-valuation-subtotal td { background: var(--surface-2, var(--surface)); }
 .wh-valuation-subtotal td strong { color: var(--text); }
 
+/* ===== Health-check spójności danych ===== */
+/* Nagłówki sekcji (rozjazdy / quanty ujemne / sieroty) między tabelami. */
+.wh-health-heading {
+  margin: 20px 0 8px; font-size: 14px; color: var(--text);
+}
+.wh-health-heading:first-child { margin-top: 0; }
+
 /* ===== Raport „Ruchy w okresie" ===== */
 .wh-period-toolbar { flex-wrap: wrap; align-items: center; }
 .wh-period-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }

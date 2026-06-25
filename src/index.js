@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -757,6 +757,59 @@ app.get('/warehouse/gift-threshold', requireAuth, requireWarehouseRead, async (r
     .toArray();
   const items = all.filter(it => isWarehouseCategory(it.category));
   res.json(computeGiftThresholdReport(items, threshold));
+});
+
+// Health-check spójności danych (Raportowanie): zestawia trzy źródła ilości per produkt
+// Magazynu — cache `items.quantity`, Σ quantów na stanie realnym, Σ partii cenowych —
+// i pokazuje rozjazdy, a do tego quanty ujemne na stanie realnym oraz quanty-sieroty.
+// Pełny zbiór kodów (active + nieaktywne) idzie do wykrycia sierot, by quant towaru
+// spoza Magazynu nie wyglądał na osierocony. Tylko odczyt.
+app.get('/warehouse/health', requireAuth, requireWarehouseRead, async (_req, res) => {
+  const db = await getDb();
+  const allItems = await db.collection(collections.items)
+    .find({}, { projection: { itemCode: 1, name: 1, category: 1, quantity: 1, priceBatches: 1 } })
+    .toArray();
+  const products = allItems.filter(it => isWarehouseCategory(it.category));
+  const knownItemCodes = allItems.map(it => it.itemCode);
+  const quants = await db.collection(collections.quants)
+    .find({}, { projection: { itemCode: 1, locationId: 1, quantity: 1 } })
+    .toArray();
+  const locations = await db.collection(collections.locations)
+    .find({}, { projection: { name: 1, kind: 1 } })
+    .toArray();
+  res.json(computeStockHealth({ products, quants, locations, knownItemCodes }));
+});
+
+// „Przelicz" health-checku: odtwarza quanty z rejestru ruchów (recomputeQuants) i
+// synchronizuje cache (refreshItemCache). Z `itemCode` — dla jednego produktu; bez —
+// pełne przeliczenie (wszystkie quanty + cache każdego produktu, który ma quanty).
+// refreshItemCache pomija produkty bez quantów, więc przeliczenie nie zeruje cache'u
+// pozycji wprowadzonych partiami bez ruchów. Tylko admin.
+app.post('/warehouse/health/recompute', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const itemCode = String(req.body?.itemCode ?? req.query.itemCode ?? '').trim();
+  const now = new Date();
+
+  if (itemCode) {
+    const item = await db.collection(collections.items).findOne({ itemCode }, { projection: { _id: 1 } });
+    if (!item) return res.status(404).json({ message: 'Produkt nie istnieje' });
+    await recomputeQuants(db, itemCode);
+    await refreshItemCache(db, itemCode);
+    await db.collection(collections.auditLogs).insertOne({
+      actorEmail: req.user.email, actionType: 'warehouse_health_recompute', entityType: 'item',
+      entityId: itemCode, payload: { scope: 'item', itemCode }, createdAt: now
+    });
+    return res.json({ scope: 'item', itemCode, recomputed: 1 });
+  }
+
+  await recomputeQuants(db);
+  const codes = await db.collection(collections.quants).distinct('itemCode', {});
+  for (const code of codes) await refreshItemCache(db, code);
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email, actionType: 'warehouse_health_recompute', entityType: 'system',
+    entityId: 'all', payload: { scope: 'all', items: codes.length }, createdAt: now
+  });
+  res.json({ scope: 'all', recomputed: codes.length });
 });
 
 // Szybkie utworzenie produktu magazynowego (dla „+ Nowy produkt" w przyjęciu).

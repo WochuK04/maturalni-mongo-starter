@@ -1201,3 +1201,105 @@ export function computeGiftThresholdReport(items, threshold = GIFT_VAT_THRESHOLD
     }
   };
 }
+
+// ===== Health-check spójności stanu (cache vs quanty vs partie cenowe) =====
+//
+// Diagnostyka, nie przepływ. Dla każdego produktu Magazynu zestawia trzy niezależnie
+// utrzymywane liczby i pokazuje, gdzie się rozjeżdżają:
+//   • `items.quantity` (cache),
+//   • Σ `quants.quantity` na lokalizacjach realnych (internal/employee),
+//   • Σ `priceBatches[].qty`.
+// Te trzy powinny się zgadzać dla towaru prowadzonego ruchami; rozjazd wskazuje stałą
+// cache po awarii, import bez ruchów (partie bez quantów) albo dane sprzed Fazy 0.
+// Dodatkowo wyłapuje quanty ujemne NA STANIE REALNYM (lokalizacje wirtualne mogą
+// schodzić < 0 z definicji — to nie błąd) oraz quanty-sieroty (nieznany `itemCode`
+// albo nieistniejąca lokalizacja). Akcja „przelicz" (po stronie endpointu) woła
+// recomputeQuants + refreshItemCache — odtwarza quanty z rejestru ruchów i synchronizuje
+// cache. Czysta agregacja: wołający podaje produkty już zawężone do kategorii Magazynu,
+// wszystkie quanty, lokalizacje oraz pełny zbiór znanych kodów (do wykrycia sierot).
+export function computeStockHealth({ products = [], quants = [], locations = [], knownItemCodes = [] } = {}) {
+  const stockableLocIds = new Set();
+  const locNameById = new Map();
+  for (const loc of locations) {
+    const id = String(loc._id);
+    locNameById.set(id, loc.name || id);
+    if (isStockableKind(loc.kind)) stockableLocIds.add(id);
+  }
+  const known = knownItemCodes instanceof Set
+    ? new Set([...knownItemCodes].map(String))
+    : new Set((knownItemCodes || []).map(String));
+
+  // Quanty pogrupowane wg produktu: suma na stanie realnym + obecność jakiegokolwiek quanta.
+  const quantStockByItem = new Map();
+  const hasQuantByItem = new Set();
+  for (const q of quants) {
+    const code = String(q.itemCode);
+    hasQuantByItem.add(code);
+    if (stockableLocIds.has(String(q.locationId))) {
+      quantStockByItem.set(code, (quantStockByItem.get(code) || 0) + (Number(q.quantity) || 0));
+    }
+  }
+
+  const mismatches = [];
+  for (const it of Array.isArray(products) ? products : []) {
+    const code = String(it.itemCode);
+    const cacheQty = Number(it.quantity) || 0;
+    const quantStockSum = quantStockByItem.get(code) || 0;
+    const batches = Array.isArray(it.priceBatches) ? it.priceBatches : [];
+    const hasBatches = batches.length > 0;
+    const batchSum = batches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+
+    // Każdy rozjeżdżający się PARÓW źródeł osobno — czytelny sygnał, która dwójka się nie zgadza.
+    const issues = [];
+    if (cacheQty !== quantStockSum) issues.push('cache_vs_quant');
+    if (hasBatches && batchSum !== cacheQty) issues.push('batch_vs_cache');
+    if (hasBatches && batchSum !== quantStockSum) issues.push('batch_vs_quant');
+    if (!issues.length) continue;
+
+    mismatches.push({
+      itemCode: code,
+      name: it.name || '',
+      category: it.category || '',
+      cacheQty,
+      quantStockSum,
+      batchSum,
+      hasBatches,
+      hasQuants: hasQuantByItem.has(code),
+      issues
+    });
+  }
+  mismatches.sort((a, b) => String(a.itemCode).localeCompare(String(b.itemCode), 'pl'));
+
+  // Anomalie quantów (po wszystkich quantach, nie tylko produktach Magazynu).
+  const negativeQuants = [];
+  const orphanQuants = [];
+  for (const q of Array.isArray(quants) ? quants : []) {
+    const code = String(q.itemCode);
+    const locId = String(q.locationId);
+    const qty = Number(q.quantity) || 0;
+    if (stockableLocIds.has(locId) && qty < 0) {
+      negativeQuants.push({ itemCode: code, locationId: locId, locationName: locNameById.get(locId) || locId, quantity: qty });
+    }
+    const reasons = [];
+    if (!known.has(code)) reasons.push('item');
+    if (!locNameById.has(locId)) reasons.push('location');
+    if (reasons.length) {
+      orphanQuants.push({ itemCode: code, locationId: locId, locationName: locNameById.get(locId) || null, quantity: qty, reasons });
+    }
+  }
+  negativeQuants.sort((a, b) => String(a.itemCode).localeCompare(String(b.itemCode), 'pl'));
+  orphanQuants.sort((a, b) => String(a.itemCode).localeCompare(String(b.itemCode), 'pl'));
+
+  return {
+    mismatches,
+    negativeQuants,
+    orphanQuants,
+    summary: {
+      productCount: Array.isArray(products) ? products.length : 0,
+      mismatchCount: mismatches.length,
+      negativeQuantCount: negativeQuants.length,
+      orphanQuantCount: orphanQuants.length,
+      ok: mismatches.length === 0 && negativeQuants.length === 0 && orphanQuants.length === 0
+    }
+  };
+}
