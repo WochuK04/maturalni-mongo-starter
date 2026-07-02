@@ -1316,6 +1316,14 @@ function renderAvailableItems(items) {
 }
 
 // Widok 1: duża galeria kart (domyślny).
+// Inicjały do mono-awatara karty (2 znaki). „Bateria Nikon" → „BN".
+function initialsFromName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '–';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 function renderAvailableGallery(items) {
   availableList.innerHTML = '';
   const fragment = document.createDocumentFragment();
@@ -1323,15 +1331,10 @@ function renderAvailableGallery(items) {
   items.forEach(item => {
     const node = availableTpl.content.cloneNode(true);
     const card = node.querySelector('.equipment-card');
-    const image = node.querySelector('.equipment-image');
-    const category = node.querySelector('.equipment-category');
+    const avatar = node.querySelector('.equipment-avatar');
     const title = node.querySelector('.equipment-title');
+    const sub = node.querySelector('.equipment-sub');
     const status = node.querySelector('.equipment-status');
-    const code = node.querySelector('.equipment-code');
-    const description = node.querySelector('.equipment-description');
-    const tags = node.querySelector('.equipment-tags');
-    const location = node.querySelector('.equipment-location');
-    const condition = node.querySelector('.equipment-condition');
     const detailsBtn = node.querySelector('.details-btn');
     const requestBtn = node.querySelector('.request-btn');
 
@@ -1339,27 +1342,16 @@ function renderAvailableGallery(items) {
     detailsBtn.dataset.itemCode = item.itemCode || '';
     requestBtn.dataset.itemCode = item.itemCode || '';
 
-    image.src = getItemImage(item);
-    image.alt = item.name ? `Zdjęcie: ${item.name}` : 'Zdjęcie sprzętu';
-    image.addEventListener('error', () => {
-      image.src = createPlaceholderImage(item);
-    }, { once: true });
-
-    category.textContent = item.category || 'Sprzęt';
+    avatar.textContent = initialsFromName(item.name);
     title.textContent = item.name || 'Bez nazwy';
+
+    // Podtytuł: kategoria + marka/model (jak w makiecie „Akcesoria · Nikon Z6III").
+    const subParts = [item.category, [item.brand, item.model].filter(Boolean).join(' ')].filter(Boolean);
+    sub.textContent = subParts.join(' · ') || 'Sprzęt';
+
     status.textContent = getStatusLabel(item.operationalStatus);
-    status.classList.add('badge-status');
     status.dataset.status = item.operationalStatus || '';
 
-    // Kod sprzętu ukryty — pokazujemy tylko markę/model (gdy są).
-    const brandModel = [item.brand, item.model].filter(Boolean).join(' ');
-    code.textContent = brandModel;
-    code.hidden = !brandModel;
-    description.textContent = item.details || 'Brak krótkiego opisu sprzętu.';
-    location.textContent = item.currentLocation || 'Brak lokalizacji';
-    condition.textContent = `stan: ${getConditionLabel(item.conditionStatus)}`;
-
-    renderTags(tags, item.tags);
     fragment.appendChild(node);
   });
 

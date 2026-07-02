@@ -2215,3 +2215,88 @@ th {
   color: var(--muted);
   padding: 6px 0;
 }
+
+/* ---- Karta sprzętu (galeria) — wg makiety v2: mono-awatar + nazwa + pill ---- */
+.equipment-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.equipment-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.equipment-card-media {
+  height: 120px;
+  aspect-ratio: auto;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.equipment-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+  background: #eef1fb;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.5px;
+}
+
+[data-theme="dark"] .equipment-avatar {
+  background: rgba(91, 124, 240, 0.16);
+}
+
+.equipment-card .equipment-status {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.equipment-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 16px;
+}
+
+.equipment-card-body .equipment-title {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.equipment-sub {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--muted-soft);
+}
+
+.equipment-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.equipment-card-footer .btn {
+  flex: 1;
+  min-height: 0;
+  padding: 9px;
+  font-size: 13px;
+}

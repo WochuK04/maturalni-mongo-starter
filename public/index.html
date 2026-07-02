@@ -1340,32 +1340,18 @@
   <template id="availableItemTemplate">
     <article class="equipment-card">
       <div class="equipment-card-media">
-        <img class="equipment-image" src="" alt="Zdjęcie sprzętu" loading="lazy" />
+        <span class="equipment-avatar" aria-hidden="true"></span>
+        <span class="badge badge-status equipment-status"></span>
       </div>
 
       <div class="equipment-card-body">
-        <div class="equipment-card-head">
-          <div>
-            <p class="equipment-category"></p>
-            <h3 class="equipment-title"></h3>
-          </div>
-          <span class="badge equipment-status"></span>
+        <h3 class="equipment-title"></h3>
+        <p class="equipment-sub"></p>
+
+        <div class="equipment-card-footer">
+          <button class="btn btn-secondary details-btn" type="button">Szczegóły</button>
+          <button class="btn btn-primary request-btn" type="button">Wniosek</button>
         </div>
-
-        <p class="equipment-code muted"></p>
-        <p class="equipment-description muted"></p>
-
-        <div class="tag-list equipment-tags"></div>
-
-        <div class="equipment-meta">
-          <span class="meta-pill equipment-location"></span>
-          <span class="meta-pill equipment-condition"></span>
-        </div>
-      </div>
-
-      <div class="equipment-card-footer">
-        <button class="btn btn-secondary details-btn" type="button">Szczegóły</button>
-        <button class="btn btn-primary request-btn" type="button">Złóż wniosek</button>
       </div>
     </article>
   </template>
