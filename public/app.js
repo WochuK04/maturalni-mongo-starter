@@ -1187,6 +1187,8 @@ function hideAllShells() {
   const launcher = document.getElementById('launcherScreen');
   if (launcher) launcher.hidden = true;
   if (appLayout) appLayout.hidden = true;
+  const magazyn = document.getElementById('magazynLayout');
+  if (magazyn) magazyn.hidden = true;
 }
 
 function showLauncher() {
@@ -1198,6 +1200,12 @@ function showLauncher() {
 function showSprzet() {
   hideAllShells();
   if (appLayout) appLayout.hidden = false;
+}
+
+function showMagazyn() {
+  hideAllShells();
+  const magazyn = document.getElementById('magazynLayout');
+  if (magazyn) magazyn.hidden = false;
 }
 
 // Zgodność wsteczna — dawniej „pokaż aplikację po zalogowaniu".
@@ -1230,8 +1238,8 @@ async function enterSprzet(view = 'pulpit') {
 }
 
 async function enterMagazyn() {
-  showSprzet();
-  try { await handleViewChange('warehouse'); } catch (err) { showToast(err.message); }
+  showMagazyn();
+  try { await openWarehouse(); } catch (err) { showToast(err.message); }
 }
 
 // ===== Skrzynka: wspólny licznik (Prośby + Zgłoszenia) =====
@@ -6023,6 +6031,7 @@ function setupViewSwitcher(defaultView = 'available') {
 document.getElementById('launcherSprzetBtn')?.addEventListener('click', () => enterSprzet('pulpit'));
 document.getElementById('launcherMagazynBtn')?.addEventListener('click', () => enterMagazyn());
 document.getElementById('sidebarBrandBtn')?.addEventListener('click', () => showLauncher());
+document.getElementById('magazynBrandBtn')?.addEventListener('click', () => showLauncher());
 
 setupViewSwitcher('pulpit');
 loadSession().catch(err => showToast(err.message));

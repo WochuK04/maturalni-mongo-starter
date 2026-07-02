@@ -2784,3 +2784,129 @@ th {
 .sidebar-brand:hover {
   background: var(--rail-hover);
 }
+
+/* ---- Magazyn — osobny layout z navy top-headerem (wg makiety v2) ---- */
+.magazyn {
+  min-height: 100vh;
+  background: var(--bg);
+  animation: fadeIn 0.3s ease;
+}
+
+.magazyn-header {
+  background: #0c1c44;
+  color: #fff;
+}
+
+.magazyn-header-top {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px clamp(16px, 4vw, 44px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.magazyn-brand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 10px;
+  transition: background 0.16s;
+}
+
+.magazyn-brand:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.magazyn-brand img {
+  width: 30px;
+  height: 30px;
+}
+
+.magazyn-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.magazyn-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.magazyn-brand-sub {
+  font-size: 11px;
+  color: #7e90bc;
+}
+
+.btn.magazyn-refresh {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.btn.magazyn-refresh:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.magazyn-heading {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 44px) 20px;
+}
+
+.magazyn-heading h1 {
+  font-size: clamp(26px, 3vw, 32px);
+  font-weight: 600;
+  letter-spacing: -1.2px;
+  margin: 0 0 4px;
+  color: #fff;
+}
+
+.magazyn-heading p {
+  margin: 0;
+  font-size: 14px;
+  color: #9fb0d6;
+}
+
+.subtabs.magazyn-tabs {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 44px);
+  gap: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.magazyn-tabs .subtab {
+  color: #7e90bc;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  padding: 14px 2px;
+}
+
+.magazyn-tabs .subtab:hover {
+  color: #fff;
+}
+
+.magazyn-tabs .subtab.active {
+  color: #fff;
+  border-bottom-color: #fff;
+}
+
+.magazyn-body {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 26px clamp(16px, 4vw, 44px) 96px;
+}
