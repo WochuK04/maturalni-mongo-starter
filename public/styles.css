@@ -2388,3 +2388,142 @@ th {
   min-height: 40px;
   flex: 1 1 auto;
 }
+
+/* ---- Skrzynka / Moje wnioski — karty wg makiety ---- */
+.item-row.stack-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+
+.item-row.stack-card .item-title {
+  margin: 0 0 3px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.item-row.stack-card .item-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.item-row.stack-card .actions-inline {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.item-row.stack-card .actions-inline .request-status {
+  margin-right: auto;
+}
+
+.item-row.stack-card .admin-request-form {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.item-row.stack-card .admin-request-form .decision-note {
+  flex: 1 1 220px;
+  min-height: 40px;
+}
+
+/* ---- Mój zespół — karty osób wg makiety ---- */
+.team-card.card-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+}
+
+.team-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.team-ident {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.team-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: #ede9f6;
+  color: #5f4b8b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .team-avatar {
+  background: rgba(149, 123, 187, 0.22);
+  color: #c9b8e8;
+}
+
+.team-name {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.team-block + .team-block {
+  margin-top: 14px;
+}
+
+.team-block h4 {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-soft);
+}
+
+.team-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 11px 14px;
+}
+
+.team-list li strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}

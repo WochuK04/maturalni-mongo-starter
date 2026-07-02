@@ -2526,9 +2526,12 @@ async function loadTeam() {
     const head = document.createElement('div');
     head.className = 'team-card-head';
     head.innerHTML = `
-      <div>
-        <h3 class="team-name">${escapeHtml(member.fullName)}</h3>
-        <p class="muted">${escapeHtml(member.email)} · ${escapeHtml(getRoleLabel(member.role))}</p>
+      <div class="team-ident">
+        <span class="team-avatar" aria-hidden="true">${escapeHtml(initialsFromName(member.fullName))}</span>
+        <div>
+          <h3 class="team-name">${escapeHtml(member.fullName)}</h3>
+          <p class="muted">${escapeHtml(member.email)} · ${escapeHtml(getRoleLabel(member.role))}</p>
+        </div>
       </div>
       <div class="team-counts">
         <span class="badge">Sprzęt: ${member.items.length}</span>
