@@ -1371,22 +1371,25 @@
   </template>
 
   <template id="loanItemTemplate">
-    <article class="item-row">
-      <div>
-        <h3 class="item-title"></h3>
-        <p class="item-meta"></p>
+    <article class="item-row loan-row">
+      <span class="loan-avatar" aria-hidden="true"></span>
+      <div class="loan-main">
+        <h3 class="item-title loan-title"></h3>
+        <p class="item-meta loan-sub"></p>
       </div>
 
-      <form class="inline-form return-form">
-        <select class="return-location" aria-label="Miejsce zwrotu"></select>
-        <input
-          class="return-note"
-          type="text"
-          placeholder="Notatka (opcjonalnie)"
-        />
+      <form class="return-form loan-actions">
         <button class="btn btn-primary" type="submit">Oddaj</button>
         <button class="btn btn-secondary transfer-mine-btn" type="button">Przenieś</button>
-        <button class="btn btn-secondary report-issue-btn" type="button">Zgłoś problem</button>
+        <button class="btn loan-report report-issue-btn" type="button">Zgłoś problem</button>
+        <div class="loan-return-opts">
+          <select class="return-location" aria-label="Miejsce zwrotu"></select>
+          <input
+            class="return-note"
+            type="text"
+            placeholder="Notatka do zwrotu (opcjonalnie)"
+          />
+        </div>
       </form>
     </article>
   </template>

@@ -1663,6 +1663,8 @@ async function loadMyLoans() {
 
   items.forEach(item => {
     const node = loanTpl.content.cloneNode(true);
+    const avatar = node.querySelector('.loan-avatar');
+    if (avatar) avatar.textContent = initialsFromName(item.name);
     node.querySelector('.item-title').textContent =
       `${item.name || 'Bez nazwy'}`;
     node.querySelector('.item-meta').textContent =

@@ -2300,3 +2300,91 @@ th {
   padding: 9px;
   font-size: 13px;
 }
+
+/* ---- Mój sprzęt — wiersz wg makiety (awatar + nazwa/sub + akcje) ---- */
+.item-row.loan-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  row-gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.loan-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: #eef1fb;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .loan-avatar {
+  background: rgba(91, 124, 240, 0.16);
+}
+
+.loan-main {
+  min-width: 150px;
+  flex: 1 1 160px;
+}
+
+.loan-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loan-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-soft);
+}
+
+.return-form.loan-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+}
+
+.loan-actions .btn {
+  flex-shrink: 0;
+  min-height: 0;
+  padding: 10px 15px;
+  font-size: 13.5px;
+}
+
+.loan-report {
+  border: 1px solid #f3d2d8;
+  color: #bf1932;
+  background: transparent;
+}
+
+.loan-report:hover {
+  background: var(--danger-bg);
+}
+
+.loan-return-opts {
+  display: flex;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+
+.loan-return-opts .return-location,
+.loan-return-opts .return-note {
+  min-height: 40px;
+  flex: 1 1 auto;
+}
