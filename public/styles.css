@@ -2599,3 +2599,188 @@ th {
   right: 16px;
   z-index: 3;
 }
+
+/* ---- Launcher (wybór modułu po logowaniu) wg makiety v2 ---- */
+.launcher {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: #0c1c44;
+  color: #fff;
+  overflow: hidden;
+  animation: fadeIn 0.3s ease;
+}
+
+.launcher-watermark {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+}
+
+.launcher-watermark-1 { right: -120px; top: 40px; width: 460px; opacity: 0.09; transform: rotate(14deg); }
+.launcher-watermark-2 { left: -170px; bottom: -190px; width: 520px; opacity: 0.07; transform: rotate(-24deg); }
+
+.launcher-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px clamp(20px, 4vw, 56px);
+  position: relative;
+  z-index: 2;
+}
+
+.launcher-logo { height: 36px; }
+
+.launcher-userchip {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  padding: 6px 15px 6px 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.launcher-userchip-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: #3f5fbe;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.launcher-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px clamp(20px, 4vw, 56px) 90px;
+  position: relative;
+  z-index: 2;
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.launcher-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7e90bc;
+  margin: 0 0 16px;
+}
+
+.launcher-title {
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 600;
+  letter-spacing: -2.4px;
+  line-height: 1.04;
+  margin: 0 0 14px;
+  color: #fff;
+}
+
+.launcher-sub {
+  font-size: 18px;
+  color: #9fb0d6;
+  margin: 0 0 44px;
+  max-width: 520px;
+  line-height: 1.5;
+}
+
+.launcher-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.launcher-card {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  background: #fff;
+  border-radius: 24px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  min-height: 210px;
+  color: #0c1c44;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), box-shadow 0.2s;
+}
+
+.launcher-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.3);
+}
+
+.launcher-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: auto;
+}
+
+.launcher-card-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.launcher-card-icon.is-sprzet { background: #eef1fb; color: #3f5fbe; }
+.launcher-card-icon.is-magazyn { background: #ede9f6; color: #5f4b8b; }
+
+.launcher-card-arrow {
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  background: #f1f3f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0c1c44;
+}
+
+.launcher-card-title {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -1px;
+  color: #0c1c44;
+  margin: 24px 0 8px;
+}
+
+.launcher-card-desc {
+  font-size: 15px;
+  color: #737980;
+  line-height: 1.5;
+}
+
+/* Brand w railu jako przycisk „wróć do wyboru" */
+.sidebar-brand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  border-radius: 10px;
+  transition: background 0.16s;
+}
+
+.sidebar-brand:hover {
+  background: var(--rail-hover);
+}

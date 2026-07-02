@@ -45,15 +45,50 @@
     </div>
   </div>
 
+  <div class="launcher" id="launcherScreen" hidden>
+    <img class="launcher-watermark launcher-watermark-1" src="/assets/M_mark.svg" alt="" aria-hidden="true" />
+    <img class="launcher-watermark launcher-watermark-2" src="/assets/M_mark.svg" alt="" aria-hidden="true" />
+    <header class="launcher-header">
+      <img class="launcher-logo" src="/assets/M_sygnet_white.svg" alt="Maturalni" onerror="this.onerror=null;this.src='/assets/M_sygnet.svg'" />
+      <div class="launcher-userchip">
+        <span class="launcher-userchip-avatar" id="launcherAvatar" aria-hidden="true">–</span>
+        <span id="launcherUserName">Użytkownik</span>
+      </div>
+    </header>
+    <div class="launcher-body">
+      <p class="launcher-eyebrow">Zaplecze · Maturalni</p>
+      <h1 class="launcher-title">Cześć, <span id="launcherName">tam</span>.<br />Od czego zaczynamy?</h1>
+      <p class="launcher-sub">Dwa moduły, jedno zaplecze. Wybierz, gdzie chcesz teraz pracować.</p>
+      <div class="launcher-cards">
+        <button class="launcher-card" id="launcherSprzetBtn" type="button">
+          <div class="launcher-card-top">
+            <span class="launcher-card-icon is-sprzet"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
+            <span class="launcher-card-arrow"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
+          </div>
+          <div class="launcher-card-title">Sprzęt</div>
+          <div class="launcher-card-desc">Wypożyczenia, wnioski, zwroty i zespół.</div>
+        </button>
+        <button class="launcher-card" id="launcherMagazynBtn" type="button">
+          <div class="launcher-card-top">
+            <span class="launcher-card-icon is-magazyn"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></svg></span>
+            <span class="launcher-card-arrow"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
+          </div>
+          <div class="launcher-card-title">Magazyn</div>
+          <div class="launcher-card-desc">Stany, operacje, produkty i raporty.</div>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div class="layout" id="appLayout" hidden>
     <aside class="sidebar">
-      <div class="sidebar-brand">
+      <button class="sidebar-brand" id="sidebarBrandBtn" type="button" title="Wróć do wyboru modułu">
         <img src="/assets/M_sygnet_white.svg" alt="Maturalni" onerror="this.onerror=null;this.src='/assets/M_sygnet.svg'" />
         <span class="sidebar-brand-text">
           <span class="sidebar-brand-name">Zaplecze</span>
-          <span class="sidebar-brand-sub">Sprzęt</span>
+          <span class="sidebar-brand-sub">Sprzęt · wróć do wyboru</span>
         </span>
-      </div>
+      </button>
 
       <nav class="view-switcher" id="viewSwitcher" hidden aria-label="Menu nawigacyjne">
         <button class="view-tab active" data-view="pulpit" type="button">

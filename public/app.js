@@ -1179,14 +1179,59 @@ function applyRoleVisibility(user) {
 
 // ===== Brama logowania (UI ukryte do czasu zalogowania) =====
 
-function showApp() {
+// Trzy powłoki najwyższego poziomu: brama logowania, Launcher (wybór modułu),
+// aplikacja Sprzęt (rail). Magazyn na razie jest widokiem w railu (osobny layout
+// w kolejnym kroku), więc enterMagazyn wchodzi do railu na widok „warehouse".
+function hideAllShells() {
   if (loginGate) loginGate.hidden = true;
+  const launcher = document.getElementById('launcherScreen');
+  if (launcher) launcher.hidden = true;
+  if (appLayout) appLayout.hidden = true;
+}
+
+function showLauncher() {
+  hideAllShells();
+  const launcher = document.getElementById('launcherScreen');
+  if (launcher) launcher.hidden = false;
+}
+
+function showSprzet() {
+  hideAllShells();
   if (appLayout) appLayout.hidden = false;
 }
 
+// Zgodność wsteczna — dawniej „pokaż aplikację po zalogowaniu".
+function showApp() {
+  showSprzet();
+}
+
 function showLoginGate() {
+  hideAllShells();
   if (loginGate) loginGate.hidden = false;
-  if (appLayout) appLayout.hidden = true;
+}
+
+function populateLauncher() {
+  const name = currentUser?.fullName || currentUser?.email || '';
+  const first = name.split(/[\s._@-]+/).filter(Boolean)[0] || 'tam';
+  const nameEl = document.getElementById('launcherName');
+  const userEl = document.getElementById('launcherUserName');
+  const avatarEl = document.getElementById('launcherAvatar');
+  const magazynBtn = document.getElementById('launcherMagazynBtn');
+  if (nameEl) nameEl.textContent = first;
+  if (userEl) userEl.textContent = currentUser?.fullName || currentUser?.email || 'Użytkownik';
+  if (avatarEl) avatarEl.textContent = initialsFromName(currentUser?.fullName || currentUser?.email || '?');
+  // Kafel Magazynu tylko dla ról z dostępem do magazynu.
+  if (magazynBtn) magazynBtn.hidden = !WAREHOUSE_ROLES.includes(currentUser?.role);
+}
+
+async function enterSprzet(view = 'pulpit') {
+  showSprzet();
+  try { await handleViewChange(view); } catch (err) { showToast(err.message); }
+}
+
+async function enterMagazyn() {
+  showSprzet();
+  try { await handleViewChange('warehouse'); } catch (err) { showToast(err.message); }
 }
 
 // ===== Skrzynka: wspólny licznik (Prośby + Zgłoszenia) =====
@@ -1584,7 +1629,6 @@ async function loadSession() {
   try {
     const session = await api('/me');
     currentUser = session.user;
-    showApp();
     renderAuthBox();
     applyRoleVisibility(currentUser);
 
@@ -1593,7 +1637,8 @@ async function loadSession() {
     } else {
       await refreshAll();
     }
-    await handleViewChange('pulpit');
+    populateLauncher();
+    showLauncher();
 
     await refreshInboxBadge();
     startActionBadgePolling();
@@ -5973,6 +6018,11 @@ function setupViewSwitcher(defaultView = 'available') {
   viewSwitcher.hidden = false;
   setActiveView(defaultView);
 }
+
+// Launcher: wybór modułu + powrót do wyboru z railu.
+document.getElementById('launcherSprzetBtn')?.addEventListener('click', () => enterSprzet('pulpit'));
+document.getElementById('launcherMagazynBtn')?.addEventListener('click', () => enterMagazyn());
+document.getElementById('sidebarBrandBtn')?.addEventListener('click', () => showLauncher());
 
 setupViewSwitcher('pulpit');
 loadSession().catch(err => showToast(err.message));
