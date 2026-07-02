@@ -5,58 +5,17 @@
    (płaski, edge-to-edge), inny niż wyśrodkowane karty pozostałych zakładek.
    ===================================================================== */
 
-/* Pełny bleed w poziomie + na dole: panel wychodzi poza boczny/dolny padding
-   .content i zajmuje 100% szerokości obszaru roboczego. Góry nie podciągamy,
-   żeby nie nachodzić na ewentualną zawartość nad panelem. */
-#warehousePanel {
-  margin: 0 -32px -60px;
-}
-@media (max-width: 900px) {
-  #warehousePanel {
-    margin: 0 -16px -48px; /* boczny/dolny padding .content na mobile */
-  }
-}
+/* Magazyn ma teraz osobny layout najwyższego poziomu (#magazynLayout: navy
+   top-header + .magazyn-body). Układ pełnej strony robi styles.css; tu zostają
+   tylko reguły treści (widoki, tabele, raporty), przepięte na .magazyn-body. */
 
-/* Karta magazynu → płaska konsola na pełną szerokość i wysokość. */
-#warehousePanel .card {
-  max-width: none;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: var(--surface-2);
-  min-height: 100vh;
-}
-
-/* Sticky pasek nagłówka na całą szerokość. */
-#warehousePanel .section-head {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  align-items: center;
-  margin: 0;
-  padding: 18px 28px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-/* Górne menu modułu jako pełnoszerokościowy pasek zakładek pod nagłówkiem. */
-#warehousePanel #warehouseMenu {
-  margin: 0;
-  padding: 6px 28px 0;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-}
-
-/* Obszary widoków: oddech po bokach, pełna szerokość. */
+/* Obszary widoków wypełniają szerokość .magazyn-body (padding daje kontener). */
 #whOverviewView,
 #whOperationsView,
 #whProductsView,
 #whReportingView,
 #whConfigView {
-  padding: 24px 28px 40px;
+  padding: 0;
 }
 
 /* Pod-nawigacje (typy operacji, raporty) — odstęp pod paskiem menu. */
@@ -66,17 +25,17 @@
 }
 
 /* Tabele i toolbary w magazynie zawsze na pełną szerokość. */
-#warehousePanel table {
+.magazyn-body table {
   width: 100%;
 }
-#warehousePanel .admin-toolbar {
+.magazyn-body .admin-toolbar {
   margin-bottom: 14px;
 }
 
 /* ===== Raport „Wycena stanu" ===== */
 /* Kolumny liczbowe wyrównane do prawej (ilość, cena, wartość). */
-#warehousePanel td.num,
-#warehousePanel th.num { text-align: right; white-space: nowrap; }
+.magazyn-body td.num,
+.magazyn-body th.num { text-align: right; white-space: nowrap; }
 
 .wh-valuation-summary {
   display: flex; flex-direction: column; gap: 2px;
@@ -102,7 +61,7 @@
 .wh-period-field input { width: auto; }
 .wh-period-summary { margin-bottom: 16px; }
 /* Tabela podsumowania (wg rodzaju) — nie na pełną szerokość, w przeciwieństwie do list. */
-#warehousePanel .wh-period-summary table { width: auto; min-width: 380px; }
+.magazyn-body .wh-period-summary table { width: auto; min-width: 380px; }
 
 /* ===== Przegląd: lista braków (poniżej minimum) ===== */
 /* Wiersze klikalne — prowadzą do widoku reguł min-max (data-whgo). */

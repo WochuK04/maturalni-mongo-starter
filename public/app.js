@@ -377,7 +377,7 @@ function createPlaceholderImage(item = {}) {
 
 let currentUser = null;
 let workspaceMode = 'user';
-let activeView = 'available';
+let activeView = 'pulpit';
 let availableItemsState = [];
 let availableSearchTerm = '';
 let availableViewMode = localStorage.getItem('availableViewMode') === 'list' ? 'list' : 'gallery';
@@ -846,22 +846,36 @@ function renderTags(container, tags = []) {
 function renderAuthBox() {
   if (!currentUser) {
     authBox.innerHTML = `
-      <p class="muted">Nie jesteś zalogowany.</p>
-      <a class="btn btn-primary" href="/auth/google" style="text-decoration:none;text-align:center;">
-        Zaloguj firmowym Google
-      </a>
+      <div class="rail-signin">
+        <p>Nie jesteś zalogowany.</p>
+        <a class="btn btn-primary" href="/auth/google" style="text-decoration:none;text-align:center;">
+          Zaloguj firmowym Google
+        </a>
+      </div>
     `;
     return;
   }
 
+  const name = currentUser.fullName || currentUser.email || 'Użytkownik';
+  const initials = (currentUser.fullName || currentUser.email || '?')
+    .split(/[\s._@-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0))
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
   authBox.innerHTML = `
-    <label>Zalogowany jako</label>
-    <div><strong>${escapeHtml(currentUser.fullName)}</strong></div>
-    <div class="muted">${escapeHtml(currentUser.email)}</div>
-    <div class="muted">Rola: ${escapeHtml(currentUser.role)}</div>
-    <a class="btn btn-secondary" href="/auth/logout" style="text-decoration:none;text-align:center;">
-      Wyloguj
-    </a>
+    <div class="rail-user">
+      <span class="rail-user-avatar">${escapeHtml(initials || '?')}</span>
+      <span class="rail-user-info">
+        <span class="rail-user-name" title="${escapeHtml(currentUser.email || '')}">${escapeHtml(name)}</span>
+        <span class="rail-user-role">${escapeHtml(currentUser.role || '')}</span>
+      </span>
+      <a class="rail-logout" href="/auth/logout" title="Wyloguj" aria-label="Wyloguj">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+      </a>
+    </div>
   `;
 }
 
@@ -946,6 +960,10 @@ function setActiveView(view) {
 async function handleViewChange(view) {
   setActiveView(view);
 
+  if (view === 'pulpit') {
+    await loadPulpit();
+  }
+
   if (view === 'available') {
     await loadAvailableItems();
   }
@@ -976,6 +994,113 @@ async function handleViewChange(view) {
 
   if (view === 'warehouse' && WAREHOUSE_ROLES.includes(currentUser?.role)) {
     await openWarehouse();
+  }
+}
+
+// ===== Pulpit (ekran startowy) =====
+
+// Odmiana rzeczownika po liczbie (1 / 2-4 / reszta) — polska pluralizacja.
+function plPlural(n, one, few, many) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (n === 1) return one;
+  if (m10 >= 2 && m10 <= 4 && !(m100 >= 12 && m100 <= 14)) return few;
+  return many;
+}
+
+const PL_WEEKDAYS = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+const PL_MONTHS_GEN = ['stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca', 'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'];
+const PULPIT_IN_PROGRESS_STATUSES = ['pending', 'pending_manager', 'pending_admin', 'approved', 'to_order', 'ordered'];
+
+function formatPulpitWhen(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getDate()} ${PL_MONTHS_GEN[d.getMonth()]}, ${hh}:${mm}`;
+}
+
+// Ekran startowy: powitanie, liczby na kaflach i lista ostatniej aktywności.
+// Źródła danych są już istniejące — nie ruszamy backendu.
+async function loadPulpit() {
+  const greetingEl = document.getElementById('pulpitGreeting');
+  const subtitleEl = document.getElementById('pulpitSubtitle');
+  const availableEl = document.getElementById('pulpitAvailableCount');
+  const mineEl = document.getElementById('pulpitMineCount');
+  const inboxEl = document.getElementById('pulpitInboxCount');
+  const activityEl = document.getElementById('pulpitActivity');
+
+  const firstName = (currentUser?.fullName || currentUser?.email || '')
+    .split(/[\s._@-]+/)
+    .filter(Boolean)[0] || '';
+  if (greetingEl) {
+    greetingEl.textContent = `Dzień dobry${firstName ? ', ' + firstName : ''} 👋`;
+  }
+
+  const [available, myItems, actionItems, myRequests] = await Promise.all([
+    api('/items/available').catch(() => []),
+    api('/my/items').catch(() => []),
+    api('/my/action-items').catch(() => []),
+    api('/my/loan-requests').catch(() => [])
+  ]);
+
+  const availableCount = Array.isArray(available) ? available.length : 0;
+  const mineCount = Array.isArray(myItems) ? myItems.length : 0;
+  const inboxCount = Array.isArray(actionItems) ? actionItems.length : 0;
+  const inProgress = (Array.isArray(myRequests) ? myRequests : [])
+    .filter((r) => PULPIT_IN_PROGRESS_STATUSES.includes(r.status)).length;
+
+  if (availableEl) availableEl.textContent = String(availableCount);
+  if (mineEl) mineEl.textContent = String(mineCount);
+  if (inboxEl) inboxEl.textContent = String(inboxCount);
+
+  if (subtitleEl) {
+    const now = new Date();
+    const dateStr = `${PL_WEEKDAYS[now.getDay()]}, ${now.getDate()} ${PL_MONTHS_GEN[now.getMonth()]}`;
+    const mineTxt = `${mineCount} ${plPlural(mineCount, 'sprzęt', 'sprzęty', 'sprzętów')} u siebie`;
+    const reqTxt = `${inProgress} ${plPlural(inProgress, 'wniosek', 'wnioski', 'wniosków')} w toku`;
+    subtitleEl.textContent = `${dateStr} · masz ${mineTxt} i ${reqTxt}.`;
+  }
+
+  if (activityEl) {
+    const events = [];
+    (Array.isArray(myRequests) ? myRequests : []).forEach((r) => {
+      const when = r.requestedAt || r.createdAt || r.updatedAt || null;
+      const isDone = ['fulfilled', 'approved'].includes(r.status);
+      const isRejected = ['rejected', 'cancelled', 'canceled'].includes(r.status);
+      events.push({
+        ts: when ? new Date(when).getTime() || 0 : 0,
+        text: `Wniosek: ${r.itemName || 'sprzęt'} — ${getRequestStatusLabel(r.status)}`,
+        when: formatPulpitWhen(when),
+        dot: isDone ? 'is-green' : (isRejected ? '' : 'is-amber')
+      });
+    });
+    (Array.isArray(myItems) ? myItems : []).forEach((it) => {
+      events.push({
+        ts: 0,
+        text: `U Ciebie: ${it.name || 'sprzęt'}`,
+        when: it.currentLocation ? `lokalizacja: ${it.currentLocation}` : '',
+        dot: 'is-green'
+      });
+    });
+
+    events.sort((a, b) => b.ts - a.ts);
+    const top = events.slice(0, 5);
+
+    if (!top.length) {
+      activityEl.innerHTML = '<div class="pulpit-empty">Brak ostatniej aktywności.</div>';
+    } else {
+      activityEl.innerHTML = top.map((e) => `
+        <div class="pulpit-activity-item">
+          <span class="pulpit-activity-dot ${e.dot}"></span>
+          <div>
+            <div class="pulpit-activity-text">${escapeHtml(e.text)}</div>
+            ${e.when ? `<div class="pulpit-activity-when">${escapeHtml(e.when)}</div>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
   }
 }
 
@@ -1054,14 +1179,67 @@ function applyRoleVisibility(user) {
 
 // ===== Brama logowania (UI ukryte do czasu zalogowania) =====
 
-function showApp() {
+// Trzy powłoki najwyższego poziomu: brama logowania, Launcher (wybór modułu),
+// aplikacja Sprzęt (rail). Magazyn na razie jest widokiem w railu (osobny layout
+// w kolejnym kroku), więc enterMagazyn wchodzi do railu na widok „warehouse".
+function hideAllShells() {
   if (loginGate) loginGate.hidden = true;
+  const launcher = document.getElementById('launcherScreen');
+  if (launcher) launcher.hidden = true;
+  if (appLayout) appLayout.hidden = true;
+  const magazyn = document.getElementById('magazynLayout');
+  if (magazyn) magazyn.hidden = true;
+}
+
+function showLauncher() {
+  hideAllShells();
+  const launcher = document.getElementById('launcherScreen');
+  if (launcher) launcher.hidden = false;
+}
+
+function showSprzet() {
+  hideAllShells();
   if (appLayout) appLayout.hidden = false;
 }
 
+function showMagazyn() {
+  hideAllShells();
+  const magazyn = document.getElementById('magazynLayout');
+  if (magazyn) magazyn.hidden = false;
+}
+
+// Zgodność wsteczna — dawniej „pokaż aplikację po zalogowaniu".
+function showApp() {
+  showSprzet();
+}
+
 function showLoginGate() {
+  hideAllShells();
   if (loginGate) loginGate.hidden = false;
-  if (appLayout) appLayout.hidden = true;
+}
+
+function populateLauncher() {
+  const name = currentUser?.fullName || currentUser?.email || '';
+  const first = name.split(/[\s._@-]+/).filter(Boolean)[0] || 'tam';
+  const nameEl = document.getElementById('launcherName');
+  const userEl = document.getElementById('launcherUserName');
+  const avatarEl = document.getElementById('launcherAvatar');
+  const magazynBtn = document.getElementById('launcherMagazynBtn');
+  if (nameEl) nameEl.textContent = first;
+  if (userEl) userEl.textContent = currentUser?.fullName || currentUser?.email || 'Użytkownik';
+  if (avatarEl) avatarEl.textContent = initialsFromName(currentUser?.fullName || currentUser?.email || '?');
+  // Kafel Magazynu tylko dla ról z dostępem do magazynu.
+  if (magazynBtn) magazynBtn.hidden = !WAREHOUSE_ROLES.includes(currentUser?.role);
+}
+
+async function enterSprzet(view = 'pulpit') {
+  showSprzet();
+  try { await handleViewChange(view); } catch (err) { showToast(err.message); }
+}
+
+async function enterMagazyn() {
+  showMagazyn();
+  try { await openWarehouse(); } catch (err) { showToast(err.message); }
 }
 
 // ===== Skrzynka: wspólny licznik (Prośby + Zgłoszenia) =====
@@ -1191,6 +1369,14 @@ function renderAvailableItems(items) {
 }
 
 // Widok 1: duża galeria kart (domyślny).
+// Inicjały do mono-awatara karty (2 znaki). „Bateria Nikon" → „BN".
+function initialsFromName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '–';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 function renderAvailableGallery(items) {
   availableList.innerHTML = '';
   const fragment = document.createDocumentFragment();
@@ -1198,15 +1384,10 @@ function renderAvailableGallery(items) {
   items.forEach(item => {
     const node = availableTpl.content.cloneNode(true);
     const card = node.querySelector('.equipment-card');
-    const image = node.querySelector('.equipment-image');
-    const category = node.querySelector('.equipment-category');
+    const avatar = node.querySelector('.equipment-avatar');
     const title = node.querySelector('.equipment-title');
+    const sub = node.querySelector('.equipment-sub');
     const status = node.querySelector('.equipment-status');
-    const code = node.querySelector('.equipment-code');
-    const description = node.querySelector('.equipment-description');
-    const tags = node.querySelector('.equipment-tags');
-    const location = node.querySelector('.equipment-location');
-    const condition = node.querySelector('.equipment-condition');
     const detailsBtn = node.querySelector('.details-btn');
     const requestBtn = node.querySelector('.request-btn');
 
@@ -1214,27 +1395,16 @@ function renderAvailableGallery(items) {
     detailsBtn.dataset.itemCode = item.itemCode || '';
     requestBtn.dataset.itemCode = item.itemCode || '';
 
-    image.src = getItemImage(item);
-    image.alt = item.name ? `Zdjęcie: ${item.name}` : 'Zdjęcie sprzętu';
-    image.addEventListener('error', () => {
-      image.src = createPlaceholderImage(item);
-    }, { once: true });
-
-    category.textContent = item.category || 'Sprzęt';
+    avatar.textContent = initialsFromName(item.name);
     title.textContent = item.name || 'Bez nazwy';
+
+    // Podtytuł: kategoria + marka/model (jak w makiecie „Akcesoria · Nikon Z6III").
+    const subParts = [item.category, [item.brand, item.model].filter(Boolean).join(' ')].filter(Boolean);
+    sub.textContent = subParts.join(' · ') || 'Sprzęt';
+
     status.textContent = getStatusLabel(item.operationalStatus);
-    status.classList.add('badge-status');
     status.dataset.status = item.operationalStatus || '';
 
-    // Kod sprzętu ukryty — pokazujemy tylko markę/model (gdy są).
-    const brandModel = [item.brand, item.model].filter(Boolean).join(' ');
-    code.textContent = brandModel;
-    code.hidden = !brandModel;
-    description.textContent = item.details || 'Brak krótkiego opisu sprzętu.';
-    location.textContent = item.currentLocation || 'Brak lokalizacji';
-    condition.textContent = `stan: ${getConditionLabel(item.conditionStatus)}`;
-
-    renderTags(tags, item.tags);
     fragment.appendChild(node);
   });
 
@@ -1467,20 +1637,16 @@ async function loadSession() {
   try {
     const session = await api('/me');
     currentUser = session.user;
-    showApp();
     renderAuthBox();
     applyRoleVisibility(currentUser);
 
     if (currentUser.role === 'admin') {
       await refreshStats();
-      await loadAdminItems();
-    } else if (currentUser.role === 'manager') {
-      await refreshAll();
-      await handleViewChange('approvals');
     } else {
       await refreshAll();
-      await handleViewChange('available');
     }
+    populateLauncher();
+    showLauncher();
 
     await refreshInboxBadge();
     startActionBadgePolling();
@@ -1550,6 +1716,8 @@ async function loadMyLoans() {
 
   items.forEach(item => {
     const node = loanTpl.content.cloneNode(true);
+    const avatar = node.querySelector('.loan-avatar');
+    if (avatar) avatar.textContent = initialsFromName(item.name);
     node.querySelector('.item-title').textContent =
       `${item.name || 'Bez nazwy'}`;
     node.querySelector('.item-meta').textContent =
@@ -2411,9 +2579,12 @@ async function loadTeam() {
     const head = document.createElement('div');
     head.className = 'team-card-head';
     head.innerHTML = `
-      <div>
-        <h3 class="team-name">${escapeHtml(member.fullName)}</h3>
-        <p class="muted">${escapeHtml(member.email)} · ${escapeHtml(getRoleLabel(member.role))}</p>
+      <div class="team-ident">
+        <span class="team-avatar" aria-hidden="true">${escapeHtml(initialsFromName(member.fullName))}</span>
+        <div>
+          <h3 class="team-name">${escapeHtml(member.fullName)}</h3>
+          <p class="muted">${escapeHtml(member.email)} · ${escapeHtml(getRoleLabel(member.role))}</p>
+        </div>
       </div>
       <div class="team-counts">
         <span class="badge">Sprzęt: ${member.items.length}</span>
@@ -4825,6 +4996,16 @@ document.addEventListener('click', async (e) => {
     openPurchaseModal();
   }
 
+  const pulpitAction = target.closest('[data-pulpit-action]');
+  if (pulpitAction) {
+    const action = pulpitAction.dataset.pulpitAction;
+    if (action === 'available') {
+      await handleViewChange('available').catch(err => showToast(err.message));
+    } else if (action === 'returns') {
+      await handleViewChange('returns').catch(err => showToast(err.message));
+    }
+  }
+
   if (target.id === 'loadAdminItemsBtn') {
     workspaceMode = 'admin';
     setActiveView('admin');
@@ -5846,5 +6027,11 @@ function setupViewSwitcher(defaultView = 'available') {
   setActiveView(defaultView);
 }
 
-setupViewSwitcher('available');
+// Launcher: wybór modułu + powrót do wyboru z railu.
+document.getElementById('launcherSprzetBtn')?.addEventListener('click', () => enterSprzet('pulpit'));
+document.getElementById('launcherMagazynBtn')?.addEventListener('click', () => enterMagazyn());
+document.getElementById('sidebarBrandBtn')?.addEventListener('click', () => showLauncher());
+document.getElementById('magazynBrandBtn')?.addEventListener('click', () => showLauncher());
+
+setupViewSwitcher('pulpit');
 loadSession().catch(err => showToast(err.message));

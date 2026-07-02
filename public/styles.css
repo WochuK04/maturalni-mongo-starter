@@ -21,8 +21,16 @@
   --danger-text: #bf1932;
   --shadow: 0 10px 30px rgba(12, 28, 68, 0.06);
   --shadow-lg: 0 18px 44px rgba(12, 28, 68, 0.12);
-  --radius: 16px;
+  --radius: 18px;
   --radius-sm: 12px;
+  /* Ciemny navy rail (sidebar) — stały w obu motywach, wg makiety „Zaplecze v2” */
+  --rail-bg: #0c1c44;
+  --rail-text: #ffffff;
+  --rail-muted: #7e90bc;
+  --rail-active-bg: #3f5fbe;
+  --rail-hover: rgba(255, 255, 255, 0.08);
+  --rail-surface: rgba(255, 255, 255, 0.06);
+  --rail-border: rgba(255, 255, 255, 0.12);
   color-scheme: light;
 }
 
@@ -52,6 +60,14 @@
   --danger-text: #f6889a;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6);
+  /* Rail w trybie ciemnym: nieco głębszy navy, ta sama logika kolorów */
+  --rail-bg: #0a1430;
+  --rail-text: #eef2fb;
+  --rail-muted: #8496c4;
+  --rail-active-bg: #3f5fbe;
+  --rail-hover: rgba(255, 255, 255, 0.09);
+  --rail-surface: rgba(255, 255, 255, 0.05);
+  --rail-border: rgba(255, 255, 255, 0.1);
   color-scheme: dark;
 }
 
@@ -70,7 +86,7 @@
 }
 [data-theme="dark"] .tag { background: var(--surface-3); color: #9db4f5; }
 [data-theme="dark"] .login-gate {
-  background: radial-gradient(circle at 50% -10%, #1b2540 0%, var(--bg) 58%);
+  background: #0a1430;
 }
 [data-theme="dark"] .btn-danger { border-color: #5a2230; }
 [data-theme="dark"] .btn-danger:hover { background: #4a1c28; }
@@ -1150,7 +1166,7 @@ th {
   color: var(--primary);
 }
 
-/* ===== Brama logowania (widok bez sesji) ===== */
+/* ===== Brama logowania (widok bez sesji) — navy + watermark, wg makiety v2 ===== */
 .login-gate {
   position: fixed;
   inset: 0;
@@ -1158,41 +1174,111 @@ th {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: radial-gradient(circle at 50% -10%, #e7ecfb 0%, var(--bg) 58%);
+  background: #0c1c44;
+  overflow: hidden;
+}
+
+.login-watermark {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+}
+
+.login-watermark-1 {
+  right: -160px;
+  top: -110px;
+  width: 600px;
+  opacity: 0.1;
+  transform: rotate(16deg);
+}
+
+.login-watermark-2 {
+  left: -180px;
+  bottom: -200px;
+  width: 520px;
+  opacity: 0.08;
+  transform: rotate(-24deg);
 }
 
 .login-card {
-  width: min(420px, 100%);
+  position: relative;
+  z-index: 2;
+  width: min(430px, 100%);
   display: grid;
-  gap: 14px;
-  padding: 40px 32px;
+  gap: 12px;
+  justify-items: center;
+  padding: 44px;
   text-align: center;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  background: #ffffff;
+  border: 0;
+  border-radius: 26px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  animation: login-pop 0.4s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.login-sygnet {
+  width: 58px;
+  height: 58px;
+  margin-bottom: 10px;
 }
 
 .login-card .eyebrow {
   margin: 0;
+  color: #3f5fbe;
+  letter-spacing: 0.16em;
 }
 
 .login-card h1 {
   margin: 0;
-  font-size: 28px;
+  font-size: 32px;
+  letter-spacing: -1.2px;
+  color: #0c1c44;
 }
 
 .login-card .muted {
-  margin: 0;
-  line-height: 1.55;
+  margin: 0 0 12px;
+  line-height: 1.5;
+  color: #737980;
 }
 
 .login-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
+  width: 100%;
   margin-top: 6px;
+  padding: 15px;
+  border-radius: 14px;
+  background: #0c1c44;
+  border-color: #0c1c44;
+  color: #fff;
   text-decoration: none;
+}
+
+.login-btn:hover {
+  background: #1e3a85;
+  border-color: #1e3a85;
+}
+
+.login-domain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: #a2aeb9;
+}
+
+.login-domain span {
+  color: #737980;
+  font-weight: 500;
+}
+
+@keyframes login-pop {
+  from { transform: scale(0.98); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
 
 /* ===== Badge „Wymagane działania" w menu ===== */
@@ -1755,3 +1841,1072 @@ th {
 
 /* Style modułu „Magazyn" przeniesione do osobnego pliku: public/warehouse.css
    (osobny układ + pełna szerokość). Współdzielone badge-* też tam są. */
+
+/* =====================================================================
+   Redesign „Zaplecze v2" — ciemny navy rail (sidebar) + ekran Pulpit.
+   Reskin wizualny: zachowujemy WSZYSTKIE ID/klasy/atrybuty używane przez
+   app.js; zmieniamy tylko wygląd i dokładamy nowy widok „pulpit".
+   ===================================================================== */
+
+/* ---- Navy rail ---- */
+.sidebar {
+  background: var(--rail-bg);
+  border-right: 1px solid var(--rail-border);
+  gap: 16px;
+  padding: 20px 14px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 6px 8px 10px;
+}
+
+.sidebar-brand img {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.sidebar-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--rail-text);
+  letter-spacing: -0.4px;
+}
+
+.sidebar-brand-sub {
+  font-size: 11px;
+  color: var(--rail-muted);
+}
+
+/* Pozycje menu w railu */
+.sidebar .view-switcher {
+  gap: 3px;
+}
+
+.sidebar .view-tab {
+  gap: 11px;
+  color: var(--rail-muted);
+  border-radius: 12px;
+}
+
+.sidebar .view-tab svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+
+.sidebar .view-tab:hover {
+  background: var(--rail-hover);
+  color: var(--rail-text);
+}
+
+.sidebar .view-tab.active {
+  background: var(--rail-active-bg);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.sidebar .nav-badge {
+  background: var(--rail-active-bg);
+  color: #fff;
+}
+
+.sidebar .view-tab.active .nav-badge {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+/* Przyciski pomocnicze w stopce railu (motyw, panel admina) */
+.sidebar-footer .btn-secondary {
+  background: var(--rail-surface);
+  border-color: var(--rail-border);
+  color: var(--rail-text);
+}
+
+.sidebar-footer .btn-secondary:hover {
+  background: var(--rail-hover);
+  border-color: var(--rail-border);
+  color: #fff;
+}
+
+/* Box użytkownika (#authBox) w railu */
+.sidebar .user-switcher {
+  padding: 10px;
+  background: var(--rail-surface);
+  border: 1px solid var(--rail-border);
+  color: var(--rail-text);
+  box-shadow: none;
+}
+
+.rail-user {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.rail-user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--rail-active-bg);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.rail-user-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+  flex: 1;
+}
+
+.rail-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rail-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-user-role {
+  font-size: 11px;
+  color: var(--rail-muted);
+}
+
+.rail-logout {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--rail-muted);
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.rail-logout:hover {
+  color: #fff;
+  background: var(--rail-hover);
+}
+
+.rail-signin {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rail-signin p {
+  margin: 0;
+  color: var(--rail-muted);
+  font-size: 12.5px;
+}
+
+/* ---- Ekran Pulpit ---- */
+.pulpit {
+  max-width: 1180px;
+}
+
+.pulpit-head {
+  margin-bottom: 28px;
+}
+
+.pulpit-head h1 {
+  font-size: clamp(26px, 3vw, 34px);
+  font-weight: 600;
+  letter-spacing: -1.4px;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.pulpit-head p {
+  margin: 0;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.pulpit-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 26px;
+}
+
+.pulpit-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 22px;
+}
+
+.pulpit-stat-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted-soft);
+  margin-bottom: 12px;
+}
+
+.pulpit-stat-value {
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -1.5px;
+  line-height: 1;
+  color: var(--text);
+}
+
+.pulpit-stat-value.is-primary {
+  color: var(--primary);
+}
+
+.pulpit-stat-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.pulpit-stat.is-dark {
+  background: #0c1c44;
+  border-color: #0c1c44;
+}
+
+.pulpit-stat.is-dark .pulpit-stat-label {
+  color: #7e90bc;
+}
+
+.pulpit-stat.is-dark .pulpit-stat-value {
+  color: #fff;
+}
+
+.pulpit-stat.is-dark .pulpit-stat-sub {
+  color: #9fb0d6;
+}
+
+.pulpit-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.pulpit-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.pulpit-card h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pulpit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pulpit-action {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: 13px;
+  background: var(--surface-2);
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  width: 100%;
+  transition: background 160ms ease;
+}
+
+.pulpit-action:hover {
+  background: #eef1fb;
+}
+
+[data-theme="dark"] .pulpit-action:hover {
+  background: var(--surface-3);
+}
+
+.pulpit-action-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #eef1fb;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .pulpit-action-icon {
+  background: rgba(91, 124, 240, 0.16);
+}
+
+.pulpit-action .label {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.pulpit-activity {
+  display: flex;
+  flex-direction: column;
+}
+
+.pulpit-activity-item {
+  display: flex;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pulpit-activity-item:last-child {
+  border-bottom: 0;
+}
+
+.pulpit-activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: var(--primary);
+}
+
+.pulpit-activity-dot.is-green { background: #1b7a4f; }
+.pulpit-activity-dot.is-amber { background: #d98a1f; }
+
+.pulpit-activity-text {
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.pulpit-activity-when {
+  font-size: 11.5px;
+  color: var(--muted-soft);
+}
+
+.pulpit-empty {
+  font-size: 13.5px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+
+/* ---- Karta sprzętu (galeria) — wg makiety v2: mono-awatar + nazwa + pill ---- */
+.equipment-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.equipment-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.equipment-card-media {
+  height: 120px;
+  aspect-ratio: auto;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.equipment-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+  background: #eef1fb;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.5px;
+}
+
+[data-theme="dark"] .equipment-avatar {
+  background: rgba(91, 124, 240, 0.16);
+}
+
+.equipment-card .equipment-status {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.equipment-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 16px;
+}
+
+.equipment-card-body .equipment-title {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.equipment-sub {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--muted-soft);
+}
+
+.equipment-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.equipment-card-footer .btn {
+  flex: 1;
+  min-height: 0;
+  padding: 9px;
+  font-size: 13px;
+}
+
+/* ---- Mój sprzęt — wiersz wg makiety (awatar + nazwa/sub + akcje) ---- */
+.item-row.loan-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  row-gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.loan-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: #eef1fb;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .loan-avatar {
+  background: rgba(91, 124, 240, 0.16);
+}
+
+.loan-main {
+  min-width: 150px;
+  flex: 1 1 160px;
+}
+
+.loan-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loan-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-soft);
+}
+
+.return-form.loan-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+}
+
+.loan-actions .btn {
+  flex-shrink: 0;
+  min-height: 0;
+  padding: 10px 15px;
+  font-size: 13.5px;
+}
+
+.loan-report {
+  border: 1px solid #f3d2d8;
+  color: #bf1932;
+  background: transparent;
+}
+
+.loan-report:hover {
+  background: var(--danger-bg);
+}
+
+.loan-return-opts {
+  display: flex;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+
+.loan-return-opts .return-location,
+.loan-return-opts .return-note {
+  min-height: 40px;
+  flex: 1 1 auto;
+}
+
+/* ---- Skrzynka / Moje wnioski — karty wg makiety ---- */
+.item-row.stack-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+
+.item-row.stack-card .item-title {
+  margin: 0 0 3px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.item-row.stack-card .item-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.item-row.stack-card .actions-inline {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.item-row.stack-card .actions-inline .request-status {
+  margin-right: auto;
+}
+
+.item-row.stack-card .admin-request-form {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.item-row.stack-card .admin-request-form .decision-note {
+  flex: 1 1 220px;
+  min-height: 40px;
+}
+
+/* ---- Mój zespół — karty osób wg makiety ---- */
+.team-card.card-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+}
+
+.team-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.team-ident {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.team-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: #ede9f6;
+  color: #5f4b8b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .team-avatar {
+  background: rgba(149, 123, 187, 0.22);
+  color: #c9b8e8;
+}
+
+.team-name {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.team-block + .team-block {
+  margin-top: 14px;
+}
+
+.team-block h4 {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-soft);
+}
+
+.team-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 11px 14px;
+}
+
+.team-list li strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* ---- Szczegóły sprzętu — szuflada z prawej (wg makiety v2) ----
+   Zachowujemy element <dialog> i całe JS (showModal/close); zmieniamy tylko
+   geometrię: wysuwany panel przy prawej krawędzi zamiast centrowanego modala. */
+.item-modal {
+  position: fixed;
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: 440px;
+  max-width: 92vw;
+  height: 100vh;
+  max-height: 100vh;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: -12px 0 40px rgba(15, 23, 42, 0.18);
+}
+
+.item-modal[open] {
+  animation: drawer-slide-in 0.28s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+@keyframes drawer-slide-in {
+  from { transform: translateX(34px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.item-modal .modal-layout {
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  max-width: none;
+  height: 100vh;
+}
+
+.item-modal .modal-media {
+  height: 190px;
+  aspect-ratio: auto;
+  flex-shrink: 0;
+}
+
+.item-modal .modal-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 26px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.item-modal .modal-actions {
+  position: sticky;
+  bottom: 0;
+  margin: auto -26px 0;
+  padding: 16px 26px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.item-modal .modal-actions .btn {
+  flex: 1;
+}
+
+.item-modal .modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+}
+
+/* ---- Launcher (wybór modułu po logowaniu) wg makiety v2 ---- */
+.launcher {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: #0c1c44;
+  color: #fff;
+  overflow: hidden;
+  animation: fadeIn 0.3s ease;
+}
+
+.launcher-watermark {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+}
+
+.launcher-watermark-1 { right: -120px; top: 40px; width: 460px; opacity: 0.09; transform: rotate(14deg); }
+.launcher-watermark-2 { left: -170px; bottom: -190px; width: 520px; opacity: 0.07; transform: rotate(-24deg); }
+
+.launcher-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px clamp(20px, 4vw, 56px);
+  position: relative;
+  z-index: 2;
+}
+
+.launcher-logo { height: 36px; }
+
+.launcher-userchip {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  padding: 6px 15px 6px 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.launcher-userchip-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: #3f5fbe;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.launcher-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px clamp(20px, 4vw, 56px) 90px;
+  position: relative;
+  z-index: 2;
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.launcher-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7e90bc;
+  margin: 0 0 16px;
+}
+
+.launcher-title {
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 600;
+  letter-spacing: -2.4px;
+  line-height: 1.04;
+  margin: 0 0 14px;
+  color: #fff;
+}
+
+.launcher-sub {
+  font-size: 18px;
+  color: #9fb0d6;
+  margin: 0 0 44px;
+  max-width: 520px;
+  line-height: 1.5;
+}
+
+.launcher-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.launcher-card {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  background: #fff;
+  border-radius: 24px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  min-height: 210px;
+  color: #0c1c44;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), box-shadow 0.2s;
+}
+
+.launcher-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.3);
+}
+
+.launcher-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: auto;
+}
+
+.launcher-card-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.launcher-card-icon.is-sprzet { background: #eef1fb; color: #3f5fbe; }
+.launcher-card-icon.is-magazyn { background: #ede9f6; color: #5f4b8b; }
+
+.launcher-card-arrow {
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  background: #f1f3f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0c1c44;
+}
+
+.launcher-card-title {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -1px;
+  color: #0c1c44;
+  margin: 24px 0 8px;
+}
+
+.launcher-card-desc {
+  font-size: 15px;
+  color: #737980;
+  line-height: 1.5;
+}
+
+/* Brand w railu jako przycisk „wróć do wyboru" */
+.sidebar-brand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  border-radius: 10px;
+  transition: background 0.16s;
+}
+
+.sidebar-brand:hover {
+  background: var(--rail-hover);
+}
+
+/* ---- Magazyn — osobny layout z navy top-headerem (wg makiety v2) ---- */
+.magazyn {
+  min-height: 100vh;
+  background: var(--bg);
+  animation: fadeIn 0.3s ease;
+}
+
+.magazyn-header {
+  background: #0c1c44;
+  color: #fff;
+}
+
+.magazyn-header-top {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px clamp(16px, 4vw, 44px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.magazyn-brand {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 10px;
+  transition: background 0.16s;
+}
+
+.magazyn-brand:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.magazyn-brand img {
+  width: 30px;
+  height: 30px;
+}
+
+.magazyn-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.magazyn-brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.magazyn-brand-sub {
+  font-size: 11px;
+  color: #7e90bc;
+}
+
+.btn.magazyn-refresh {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.btn.magazyn-refresh:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.magazyn-heading {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 44px) 20px;
+}
+
+.magazyn-heading h1 {
+  font-size: clamp(26px, 3vw, 32px);
+  font-weight: 600;
+  letter-spacing: -1.2px;
+  margin: 0 0 4px;
+  color: #fff;
+}
+
+.magazyn-heading p {
+  margin: 0;
+  font-size: 14px;
+  color: #9fb0d6;
+}
+
+.subtabs.magazyn-tabs {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 44px);
+  gap: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.magazyn-tabs .subtab {
+  color: #7e90bc;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  padding: 14px 2px;
+}
+
+.magazyn-tabs .subtab:hover {
+  color: #fff;
+}
+
+.magazyn-tabs .subtab.active {
+  color: #fff;
+  border-bottom-color: #fff;
+}
+
+.magazyn-body {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 26px clamp(16px, 4vw, 44px) 96px;
+}
