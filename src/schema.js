@@ -20,10 +20,11 @@ export const collections = {
   suppliers: 'suppliers',
   deliveryDestinations: 'deliveryDestinations',
 
-  // Turbo Weekend — eventy edukacyjne w miastach + lista pakowania (ile czego
-  // zabrać wg liczby uczestników).
+  // Wyjazdy (eventy edukacyjne, np. Turbo Weekend) w miastach + lista pakowania
+  // (ile czego zabrać wg liczby uczestników) + stan spakowania/powrotu.
   turboWeekends: 'turboWeekends',
-  packingItems: 'packingItems'
+  packingItems: 'packingItems',
+  packingProgress: 'packingProgress'
 };
 
 export const itemShape = {
@@ -168,5 +169,11 @@ export async function ensureIndexes(db) {
   await db.collection(collections.packingItems).createIndexes([
     { key: { isActive: 1, sortOrder: 1 }, name: 'idx_packing_active_sort' },
     { key: { name: 1 }, name: 'idx_packing_name' }
+  ]);
+
+  // Stan spakowania/powrotu: jeden dokument na (wyjazd, pozycja listy).
+  await db.collection(collections.packingProgress).createIndexes([
+    { key: { turboWeekendId: 1, packingItemId: 1 }, unique: true, name: 'uniq_progress_tw_item' },
+    { key: { turboWeekendId: 1 }, name: 'idx_progress_tw' }
   ]);
 }

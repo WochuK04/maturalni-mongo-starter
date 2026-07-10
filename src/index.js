@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import { getDb, connectToDatabase } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
-import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache, computeAging } from './stock.js';
+import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache, computeAging, applyMove } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
 
@@ -4327,7 +4327,10 @@ function normalizePackingBody(body) {
     perPerson: mode === 'per_person' ? Math.max(0, Number(body?.perPerson) || 0) : null,
     fixed: mode === 'fixed' ? Math.max(0, Math.round(Number(body?.fixed) || 0)) : null,
     roundUpTo: Math.max(1, Math.round(Number(body?.roundUpTo) || 1)),
-    category: String(body?.category || 'Materiały').trim() || 'Materiały'
+    category: String(body?.category || 'Materiały').trim() || 'Materiały',
+    // Opcjonalny link do produktu Magazynu (itemCode). Tylko pozycje z linkiem
+    // ruszają stan magazynowy przy pakowaniu/powrocie.
+    itemCode: body?.itemCode ? normalizeItemCode(body.itemCode) : null
   };
   return doc;
 }
@@ -4358,21 +4361,51 @@ app.get('/tw/:id/packing', requireAuth, async (req, res) => {
     .sort({ sortOrder: 1, name: 1 })
     .toArray();
 
-  const packing = items.map(it => ({
-    _id: it._id,
-    name: it.name,
-    unit: it.unit || 'szt.',
-    mode: it.mode,
-    perPerson: it.perPerson,
-    fixed: it.fixed,
-    roundUpTo: it.roundUpTo || 1,
-    category: it.category || 'Materiały',
-    quantity: computePackingQuantity(it, participants)
-  }));
+  // Stan spakowania/powrotu tego wyjazdu + stan magazynu produktów z linkiem.
+  const progressDocs = await db.collection(collections.packingProgress)
+    .find({ turboWeekendId: String(id) })
+    .toArray();
+  const progressByItem = new Map(progressDocs.map(p => [String(p.packingItemId), p]));
+
+  const linkedCodes = [...new Set(items.map(it => it.itemCode).filter(Boolean))];
+  const stockByCode = new Map();
+  if (linkedCodes.length) {
+    const prods = await db.collection(collections.items)
+      .find({ itemCode: { $in: linkedCodes } }, { projection: { itemCode: 1, quantity: 1, name: 1 } })
+      .toArray();
+    for (const p of prods) stockByCode.set(p.itemCode, { quantity: Number(p.quantity) || 0, name: p.name });
+  }
+
+  const packing = items.map(it => {
+    const needed = computePackingQuantity(it, participants);
+    const prog = progressByItem.get(String(it._id));
+    const packedQty = prog ? Number(prog.packedQty) || 0 : 0;
+    const returnedQty = prog ? Number(prog.returnedQty) || 0 : 0;
+    const status = packedQty <= 0 ? 'todo' : (returnedQty > 0 ? 'returned' : 'packed');
+    const stock = it.itemCode ? stockByCode.get(it.itemCode) : null;
+    return {
+      _id: it._id,
+      name: it.name,
+      unit: it.unit || 'szt.',
+      mode: it.mode,
+      perPerson: it.perPerson,
+      fixed: it.fixed,
+      roundUpTo: it.roundUpTo || 1,
+      category: it.category || 'Materiały',
+      itemCode: it.itemCode || null,
+      stockOnHand: stock ? stock.quantity : null,
+      quantity: needed,
+      packedQty,
+      returnedQty,
+      consumedQty: Math.max(0, packedQty - returnedQty),
+      status
+    };
+  });
 
   res.json({
     turboWeekend: {
-      _id: tw._id, city: tw.city, region: tw.region || '', eventDate: tw.eventDate || '',
+      _id: tw._id, eventType: tw.eventType || 'Turbo Weekend', city: tw.city,
+      region: tw.region || '', eventDate: tw.eventDate || '',
       participants, bus: tw.bus || '', notes: tw.notes || ''
     },
     participants,
@@ -4380,14 +4413,171 @@ app.get('/tw/:id/packing', requireAuth, async (req, res) => {
   });
 });
 
+// Lokalizacje magazynowe do ruchów pakowania: WH/Stock (źródło) i VIRT/Customers
+// (wydania „na wyjazd"). Zwraca { stockId, tripId } albo null gdy brak drzewa.
+async function tripStockLocations(db) {
+  const [stock, trip] = await Promise.all([
+    db.collection(collections.locations).findOne({ code: 'WH/Stock' }, { projection: { _id: 1 } }),
+    db.collection(collections.locations).findOne({ code: 'VIRT/Customers' }, { projection: { _id: 1 } })
+  ]);
+  if (!stock || !trip) return null;
+  return { stockId: String(stock._id), tripId: String(trip._id) };
+}
+
+// Ruch stanu dla pakowania/powrotu: 'out' = Magazyn→wydania (odjęcie stanu),
+// 'in' = wydania→Magazyn (zwrot na stan). Aktualizuje quanty i cache items.quantity.
+async function moveTripStock(db, { itemCode, qty, direction, actorEmail, note }) {
+  const quantity = Math.max(0, Number(qty) || 0);
+  if (!itemCode || quantity <= 0) return;
+  const locs = await tripStockLocations(db);
+  if (!locs) return; // brak drzewa lokalizacji — pomijamy ruch, checklist działa dalej
+  const out = direction === 'out';
+  await applyMove(db, {
+    itemCode,
+    fromLocationId: out ? locs.stockId : locs.tripId,
+    toLocationId: out ? locs.tripId : locs.stockId,
+    quantity,
+    kind: out ? 'delivery' : 'receipt',
+    actorEmail: actorEmail || null,
+    note: note || ''
+  });
+  await refreshItemCache(db, itemCode);
+}
+
+// Oznacz pozycję jako spakowaną (odejmij stan produktu z linkiem).
+app.post('/tw/:id/packing/:packingItemId/pack', requireAuth, async (req, res) => {
+  const db = await getDb();
+  let twId, itemId;
+  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
+  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId });
+  const item = await db.collection(collections.packingItems).findOne({ _id: itemId });
+  if (!tw || !item) return res.status(404).json({ message: 'Nie znaleziono wyjazdu lub pozycji' });
+
+  const needed = computePackingQuantity(item, Math.max(0, Number(tw.participants) || 0));
+  const existing = await db.collection(collections.packingProgress)
+    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
+
+  const alreadyPacked = existing ? Number(existing.packedQty) || 0 : 0;
+  const delta = needed - alreadyPacked; // zwykle całość; obsługuje też zmianę liczby osób
+  const now = new Date();
+
+  if (item.itemCode && delta > 0) {
+    await moveTripStock(db, {
+      itemCode: item.itemCode, qty: delta, direction: 'out',
+      actorEmail: req.user.email, note: `Wyjazd ${tw.city}: spakowano „${item.name}"`
+    });
+  } else if (item.itemCode && delta < 0) {
+    await moveTripStock(db, {
+      itemCode: item.itemCode, qty: -delta, direction: 'in',
+      actorEmail: req.user.email, note: `Wyjazd ${tw.city}: korekta spakowania „${item.name}"`
+    });
+  }
+
+  await db.collection(collections.packingProgress).updateOne(
+    { turboWeekendId: String(twId), packingItemId: String(itemId) },
+    {
+      $set: {
+        turboWeekendId: String(twId), packingItemId: String(itemId),
+        itemCode: item.itemCode || null, name: item.name, unit: item.unit || 'szt.',
+        neededQty: needed, packedQty: needed, packedAt: now, packedByEmail: req.user.email,
+        returnedQty: existing?.returnedQty || 0, updatedAt: now
+      }
+    },
+    { upsert: true }
+  );
+
+  res.json({ message: 'Spakowane', packedQty: needed });
+});
+
+// Cofnij spakowanie (pomyłka) — oddaj cały spakowany stan z powrotem.
+app.post('/tw/:id/packing/:packingItemId/unpack', requireAuth, async (req, res) => {
+  const db = await getDb();
+  let twId, itemId;
+  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
+  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const prog = await db.collection(collections.packingProgress)
+    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
+  if (!prog || (Number(prog.packedQty) || 0) <= 0) {
+    return res.json({ message: 'Nic do cofnięcia' });
+  }
+
+  // Oddaj na stan to, co jeszcze nie wróciło (packed − returned).
+  const toReturn = Math.max(0, (Number(prog.packedQty) || 0) - (Number(prog.returnedQty) || 0));
+  if (prog.itemCode && toReturn > 0) {
+    const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId }, { projection: { city: 1 } });
+    await moveTripStock(db, {
+      itemCode: prog.itemCode, qty: toReturn, direction: 'in',
+      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: cofnięto spakowanie „${prog.name}"`
+    });
+  }
+  await db.collection(collections.packingProgress).deleteOne({ _id: prog._id });
+  res.json({ message: 'Cofnięto spakowanie' });
+});
+
+// Powrót busa: ile danej pozycji wróciło → przyjęcie na stan. consumed = packed − returned.
+app.post('/tw/:id/packing/:packingItemId/return', requireAuth, async (req, res) => {
+  const db = await getDb();
+  let twId, itemId;
+  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
+  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const prog = await db.collection(collections.packingProgress)
+    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
+  if (!prog || (Number(prog.packedQty) || 0) <= 0) {
+    return res.status(400).json({ message: 'Ta pozycja nie została spakowana' });
+  }
+
+  const packed = Number(prog.packedQty) || 0;
+  const wantReturned = Math.max(0, Math.round(Number(req.body?.returnedQty) || 0));
+  const clamped = Math.min(packed, wantReturned);
+  const prevReturned = Number(prog.returnedQty) || 0;
+  const delta = clamped - prevReturned; // dodatnie → dodaj na stan, ujemne → zdejmij
+
+  const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId }, { projection: { city: 1 } });
+  if (prog.itemCode && delta > 0) {
+    await moveTripStock(db, {
+      itemCode: prog.itemCode, qty: delta, direction: 'in',
+      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: powrót „${prog.name}" (${clamped} szt.)`
+    });
+  } else if (prog.itemCode && delta < 0) {
+    await moveTripStock(db, {
+      itemCode: prog.itemCode, qty: -delta, direction: 'out',
+      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: korekta powrotu „${prog.name}"`
+    });
+  }
+
+  await db.collection(collections.packingProgress).updateOne(
+    { _id: prog._id },
+    { $set: { returnedQty: clamped, returnedAt: new Date(), returnedByEmail: req.user.email, updatedAt: new Date() } }
+  );
+  res.json({ message: 'Zapisano powrót', returnedQty: clamped, consumedQty: Math.max(0, packed - clamped) });
+});
+
+// Produkty Magazynu do podpięcia pod pozycje listy pakowania (datalist).
+app.get('/packing-products', requireAuth, async (_req, res) => {
+  const db = await getDb();
+  const prods = await db.collection(collections.items)
+    .find(
+      { isActive: { $ne: false }, $expr: { $in: [{ $toLower: { $ifNull: ['$category', ''] } }, WAREHOUSE_ONLY_CATEGORIES] } },
+      { projection: { itemCode: 1, name: 1, category: 1, quantity: 1 } }
+    )
+    .sort({ name: 1 })
+    .toArray();
+  res.json(prods);
+});
+
 // --- Admin: eventy TW ---
 app.post('/admin/tw', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
-  const { city, region = '', eventDate = '', participants, lat, lng, bus = '', notes = '' } = req.body || {};
+  const { city, region = '', eventDate = '', participants, lat, lng, bus = '', notes = '', eventType = '' } = req.body || {};
   if (!String(city || '').trim()) return res.status(400).json({ message: 'Miasto jest wymagane' });
 
   const now = new Date();
   const doc = {
+    eventType: String(eventType || '').trim() || 'Turbo Weekend',
     city: String(city).trim(),
     region: String(region || '').trim(),
     eventDate: String(eventDate || '').trim(),
@@ -4411,6 +4601,7 @@ app.patch('/admin/tw/:id', requireAuth, requireAdmin, async (req, res) => {
 
   const b = req.body || {};
   const update = { updatedAt: new Date() };
+  if (b.eventType !== undefined) update.eventType = String(b.eventType || '').trim() || 'Turbo Weekend';
   if (b.city !== undefined) update.city = String(b.city || '').trim();
   if (b.region !== undefined) update.region = String(b.region || '').trim();
   if (b.eventDate !== undefined) update.eventDate = String(b.eventDate || '').trim();

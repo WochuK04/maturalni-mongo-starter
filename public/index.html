@@ -486,7 +486,7 @@
           <button class="subtab" data-whmenu="operations" type="button">Operacje</button>
           <button class="subtab" data-whmenu="products" type="button">Produkty</button>
           <button class="subtab" data-whmenu="reporting" type="button">Raportowanie</button>
-          <button class="subtab" data-whmenu="turbo" type="button">Turbo Weekend</button>
+          <button class="subtab" data-whmenu="turbo" type="button">Wyjazdy</button>
           <button class="subtab" data-whmenu="config" type="button">Konfiguracja</button>
         </div>
     </header>
@@ -621,12 +621,15 @@
         <!-- Turbo Weekend: mapa eventów + busy + lista pakowania -->
         <div id="whTurboView" hidden>
           <div class="admin-toolbar tw-toolbar">
-            <p class="muted" id="twHeaderSub">Mapa eventów i lista pakowania — klik w bus lub pinezkę.</p>
-            <button class="btn btn-secondary" id="twManageBtn" type="button" hidden>Zarządzaj</button>
+            <p class="muted" id="twHeaderSub">Mapa wyjazdów i lista pakowania — klik w bus lub pinezkę.</p>
+            <div class="tw-toolbar-actions">
+              <button class="btn btn-secondary" id="twReturnModeBtn" type="button" hidden>Powrót busa</button>
+              <button class="btn btn-secondary" id="twManageBtn" type="button" hidden>Zarządzaj</button>
+            </div>
           </div>
           <div class="tw-body">
             <section class="tw-map-wrap">
-              <div class="tw-map" id="twMap" aria-label="Mapa Polski z lokalizacjami Turbo Weekendów"></div>
+              <div class="tw-map" id="twMap" aria-label="Mapa Polski z lokalizacjami wyjazdów"></div>
             </section>
             <aside class="tw-side">
               <div class="tw-side-head">
@@ -646,7 +649,7 @@
     <div class="modal-shell tw-manage-shell">
       <button class="modal-close" id="twManageCloseBtn" type="button" aria-label="Zamknij">×</button>
       <div class="tw-manage-tabs">
-        <button class="tw-tab is-active" data-twtab="events" type="button">Turbo Weekendy</button>
+        <button class="tw-tab is-active" data-twtab="events" type="button">Wyjazdy</button>
         <button class="tw-tab" data-twtab="packing" type="button">Lista pakowania</button>
       </div>
       <div class="tw-manage-body">
@@ -654,6 +657,7 @@
           <form class="tw-form" id="twEventForm">
             <input type="hidden" id="twEventId" />
             <div class="tw-form-grid">
+              <label>Typ wyjazdu<input id="twfType" list="twTypeList" placeholder="np. Turbo Weekend" /></label>
               <label>Miasto<input id="twfCity" list="twCityList" required placeholder="np. Rzeszów" /></label>
               <label>Województwo<input id="twfRegion" placeholder="np. podkarpackie" /></label>
               <label>Data<input id="twfDate" type="date" /></label>
@@ -663,8 +667,15 @@
               <label>Dł. geo. (lng)<input id="twfLng" type="number" step="0.0001" placeholder="auto z miasta" /></label>
             </div>
             <datalist id="twCityList"></datalist>
+            <datalist id="twTypeList">
+              <option value="Turbo Weekend"></option>
+              <option value="Targi edukacyjne"></option>
+              <option value="Warsztaty"></option>
+              <option value="Dzień otwarty"></option>
+              <option value="Wyjazd promocyjny"></option>
+            </datalist>
             <div class="tw-form-actions">
-              <button class="btn btn-primary" type="submit" id="twEventSubmit">Dodaj TW</button>
+              <button class="btn btn-primary" type="submit" id="twEventSubmit">Dodaj wyjazd</button>
               <button class="btn btn-secondary" type="button" id="twEventReset" hidden>Anuluj edycję</button>
             </div>
           </form>
@@ -686,7 +697,9 @@
               <label id="twpFixedWrap" hidden>Ilość stała<input id="twpFixed" type="number" min="0" value="1" /></label>
               <label>Pakowanie po<input id="twpRound" type="number" min="1" value="1" title="zaokrąglij w górę do wielokrotności" /></label>
               <label>Kategoria<input id="twpCategory" placeholder="Materiały" /></label>
+              <label class="tw-form-wide">Produkt Magazynu (odejmuje stan)<input id="twpItemCode" list="twProductList" placeholder="opcjonalnie — kod produktu, np. GAD012" /></label>
             </div>
+            <datalist id="twProductList"></datalist>
             <div class="tw-form-actions">
               <button class="btn btn-primary" type="submit" id="twPackSubmit">Dodaj pozycję</button>
               <button class="btn btn-secondary" type="button" id="twPackReset" hidden>Anuluj edycję</button>
