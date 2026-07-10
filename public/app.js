@@ -159,6 +159,7 @@ const whOpTypeNav = document.getElementById('whOpTypeNav');
 const whNewOperationBtn = document.getElementById('whNewOperationBtn');
 const whOperationsContent = document.getElementById('whOperationsContent');
 const whProductsView = document.getElementById('whProductsView');
+const whTurboView = document.getElementById('whTurboView');
 const whProductsSearch = document.getElementById('whProductsSearch');
 const whProductsContent = document.getElementById('whProductsContent');
 const whProductsExport = document.getElementById('whProductsExport');
@@ -1377,6 +1378,15 @@ function initialsFromName(name) {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+// Tekst dostępności dla pozycji z ilością > 1 („3 z 5 dostępne"). Pozycje
+// jednosztukowe nie dostają dopisku — dla nich wystarcza sam status.
+function formatAvailability(item) {
+  const total = Number(item.quantity) || 1;
+  if (total <= 1) return '';
+  const available = item.available != null ? Number(item.available) : total;
+  return `${available} z ${total} dostępne`;
+}
+
 function renderAvailableGallery(items) {
   availableList.innerHTML = '';
   const fragment = document.createDocumentFragment();
@@ -1400,6 +1410,8 @@ function renderAvailableGallery(items) {
 
     // Podtytuł: kategoria + marka/model (jak w makiecie „Akcesoria · Nikon Z6III").
     const subParts = [item.category, [item.brand, item.model].filter(Boolean).join(' ')].filter(Boolean);
+    const availTxt = formatAvailability(item);
+    if (availTxt) subParts.push(availTxt);
     sub.textContent = subParts.join(' · ') || 'Sprzęt';
 
     status.textContent = getStatusLabel(item.operationalStatus);
@@ -1431,8 +1443,11 @@ function renderAvailableListView(items) {
 
     const main = document.createElement('div');
     main.className = 'equipment-row-main';
-    const codeMeta = [item.category || 'Sprzęt', [item.brand, item.model].filter(Boolean).join(' ')]
-      .filter(Boolean).join(' · ');
+    const codeMeta = [
+      item.category || 'Sprzęt',
+      [item.brand, item.model].filter(Boolean).join(' '),
+      formatAvailability(item)
+    ].filter(Boolean).join(' · ');
     main.innerHTML =
       `<div class="equipment-row-title">${escapeHtml(item.name || 'Bez nazwy')}</div>` +
       `<div class="equipment-row-meta muted">${escapeHtml(codeMeta)}</div>`;
@@ -1718,10 +1733,16 @@ async function loadMyLoans() {
     const node = loanTpl.content.cloneNode(true);
     const avatar = node.querySelector('.loan-avatar');
     if (avatar) avatar.textContent = initialsFromName(item.name);
+    const held = Number(item.heldQuantity) || 1;
     node.querySelector('.item-title').textContent =
-      `${item.name || 'Bez nazwy'}`;
-    node.querySelector('.item-meta').textContent =
-      `${item.category || 'Sprzęt'} · lokalizacja: ${item.currentLocation || '-'} · stan: ${getConditionLabel(item.conditionStatus)}`;
+      held > 1 ? `${item.name || 'Bez nazwy'} ×${held}` : `${item.name || 'Bez nazwy'}`;
+    const metaParts = [
+      item.category || 'Sprzęt',
+      `lokalizacja: ${item.currentLocation || '-'}`,
+      `stan: ${getConditionLabel(item.conditionStatus)}`
+    ];
+    if (held > 1) metaParts.push(`masz ${held} szt.`);
+    node.querySelector('.item-meta').textContent = metaParts.join(' · ');
 
     const form = node.querySelector('.return-form');
     const locationSelect = node.querySelector('.return-location');
@@ -2996,12 +3017,14 @@ async function switchWarehouseMenu(menu) {
   if (whOperationsView) whOperationsView.hidden = menu !== 'operations';
   if (whProductsView) whProductsView.hidden = menu !== 'products';
   if (whReportingView) whReportingView.hidden = menu !== 'reporting';
+  if (whTurboView) whTurboView.hidden = menu !== 'turbo';
   if (whConfigView) whConfigView.hidden = menu !== 'config';
 
   if (menu === 'overview') await loadWarehouseOverview();
   else if (menu === 'operations') await openOperations(warehouseOpType);
   else if (menu === 'products') await loadWarehouseProducts();
   else if (menu === 'reporting') await switchReportView(warehouseReportView);
+  else if (menu === 'turbo') await openTurboWeekend();
   else if (menu === 'config') await renderWarehouseConfig();
 }
 
@@ -6026,6 +6049,418 @@ function setupViewSwitcher(defaultView = 'available') {
   viewSwitcher.hidden = false;
   setActiveView(defaultView);
 }
+
+// ===================== Turbo Weekend =====================================
+
+// Gazeter głównych miast (lng, lat) — do auto-pozycji pinezki i podpowiedzi.
+const TW_CITIES = {
+  'Warszawa': [21.01, 52.23], 'Kraków': [19.94, 50.06], 'Łódź': [19.46, 51.76],
+  'Wrocław': [17.04, 51.11], 'Poznań': [16.93, 52.41], 'Gdańsk': [18.65, 54.35],
+  'Szczecin': [14.55, 53.43], 'Bydgoszcz': [18.0, 53.12], 'Lublin': [22.57, 51.25],
+  'Białystok': [23.16, 53.13], 'Katowice': [19.02, 50.26], 'Rzeszów': [22.0, 50.04],
+  'Kielce': [20.63, 50.87], 'Olsztyn': [20.49, 53.78], 'Opole': [17.93, 50.67],
+  'Toruń': [18.6, 53.01], 'Zielona Góra': [15.5, 51.94], 'Gorzów Wielkopolski': [15.24, 52.74],
+  'Częstochowa': [19.12, 50.81], 'Radom': [21.15, 51.4], 'Płock': [19.71, 52.55],
+  'Koszalin': [16.18, 54.19], 'Słupsk': [17.03, 54.46], 'Elbląg': [19.4, 54.16],
+  'Tarnów': [20.98, 50.01], 'Nowy Sącz': [20.7, 49.62], 'Przemyśl': [22.77, 49.78],
+  'Suwałki': [22.93, 54.1], 'Chełm': [23.47, 51.13], 'Gniezno': [17.6, 52.53]
+};
+
+// Przybliżony kontur Polski (lng, lat), zgodny z tą samą projekcją co pinezki.
+const TW_BORDER = [
+  [14.27,53.91],[15.0,54.05],[16.2,54.28],[17.0,54.62],[18.35,54.75],[18.65,54.42],
+  [19.3,54.36],[19.65,54.45],[20.6,54.38],[21.5,54.35],[22.7,54.36],[23.0,54.38],
+  [23.48,54.15],[23.52,53.95],[23.92,53.19],[23.6,52.6],[23.18,52.28],[23.63,52.0],
+  [23.2,51.58],[23.68,50.88],[24.14,50.85],[23.7,50.4],[22.9,49.98],[22.65,49.55],
+  [22.55,49.09],[21.85,49.4],[21.0,49.35],[20.08,49.18],[19.63,49.2],[19.2,49.4],
+  [18.85,49.52],[18.55,49.92],[18.03,50.0],[17.72,50.2],[16.9,50.44],[16.45,50.65],
+  [15.38,50.78],[14.98,50.86],[14.6,51.55],[14.72,51.9],[14.6,52.5],[14.13,52.85],
+  [14.44,53.25],[14.27,53.72]
+];
+
+const TW_BOUNDS = { latMin: 48.9, latMax: 55.0, lngMin: 13.9, lngMax: 24.25 };
+const TW_VIEW = { w: 640, h: 620, pad: 26 };
+
+function twProject(lng, lat) {
+  const { latMin, latMax, lngMin, lngMax } = TW_BOUNDS;
+  const cos = Math.cos(((latMin + latMax) / 2) * Math.PI / 180);
+  const lngSpan = (lngMax - lngMin) * cos;
+  const latSpan = latMax - latMin;
+  const scale = Math.min((TW_VIEW.w - 2 * TW_VIEW.pad) / lngSpan, (TW_VIEW.h - 2 * TW_VIEW.pad) / latSpan);
+  const offX = (TW_VIEW.w - lngSpan * scale) / 2;
+  const offY = (TW_VIEW.h - latSpan * scale) / 2;
+  return [offX + (lng - lngMin) * cos * scale, offY + (latMax - lat) * scale];
+}
+
+// Współrzędne eventu: zapisane lat/lng albo z gazetera po nazwie miasta.
+function twCoords(ev) {
+  if (ev.lat != null && ev.lng != null && ev.lat !== '' && ev.lng !== '') {
+    return [Number(ev.lng), Number(ev.lat)];
+  }
+  const g = TW_CITIES[ev.city] || TW_CITIES[String(ev.city || '').trim()];
+  return g || null;
+}
+
+let twEvents = [];
+let twSelectedId = null;
+
+async function openTurboWeekend() {
+  const isAdmin = currentUser?.role === 'admin';
+  const manageBtn = document.getElementById('twManageBtn');
+  if (manageBtn) manageBtn.hidden = !isAdmin;
+  populateTwCityDatalist();
+  await loadTwEvents();
+}
+
+async function loadTwEvents() {
+  twEvents = await api('/tw').catch(() => []);
+  renderTwMap();
+  renderTwBuses();
+  const sub = document.getElementById('twHeaderSub');
+  if (sub) sub.textContent = `${twEvents.length} ${plPlural(twEvents.length, 'event', 'eventy', 'eventów')} · klik w bus lub pinezkę`;
+  // Zachowaj zaznaczenie, jeśli nadal istnieje; inaczej wyczyść panel.
+  if (twSelectedId && twEvents.some(e => String(e._id) === String(twSelectedId))) {
+    selectTw(twSelectedId);
+  } else {
+    twSelectedId = null;
+    const panel = document.getElementById('twPanel');
+    if (panel) panel.innerHTML = '<div class="tw-panel-empty">Wybierz bus, aby policzyć listę pakowania.</div>';
+  }
+}
+
+function renderTwMap() {
+  const wrap = document.getElementById('twMap');
+  if (!wrap) return;
+
+  const border = TW_BORDER.map(([lng, lat], i) => {
+    const [x, y] = twProject(lng, lat);
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ') + ' Z';
+
+  const pins = twEvents.map(ev => {
+    const c = twCoords(ev);
+    if (!c) return '';
+    const [x, y] = twProject(c[0], c[1]);
+    const active = String(ev._id) === String(twSelectedId);
+    const label = escapeHtml(`${ev.city}${ev.participants ? ` · ${ev.participants}` : ''}`);
+    return `<g class="tw-pin${active ? ' is-active' : ''}" data-tw-id="${ev._id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})" tabindex="0" role="button" aria-label="${escapeHtml(ev.city)}">
+        <circle class="tw-pin-halo" r="16"></circle>
+        <circle class="tw-pin-dot" r="6"></circle>
+        <text class="tw-pin-label" x="0" y="-20" text-anchor="middle">${label}</text>
+      </g>`;
+  }).join('');
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${TW_VIEW.w} ${TW_VIEW.h}" class="tw-map-svg" preserveAspectRatio="xMidYMid meet" role="img">
+      <path class="tw-map-land" d="${border}"></path>
+      ${pins}
+    </svg>`;
+
+  wrap.querySelectorAll('.tw-pin').forEach(pin => {
+    const id = pin.getAttribute('data-tw-id');
+    pin.addEventListener('click', () => selectTw(id));
+    pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectTw(id); } });
+  });
+}
+
+function renderTwBuses() {
+  const list = document.getElementById('twBusList');
+  const count = document.getElementById('twBusCount');
+  if (count) count.textContent = twEvents.length ? `${twEvents.length}` : '';
+  if (!list) return;
+  if (!twEvents.length) {
+    list.innerHTML = '<div class="tw-panel-empty">Brak Turbo Weekendów. ' +
+      (currentUser?.role === 'admin' ? 'Dodaj je w „Zarządzaj”.' : 'Poproś administratora o dodanie.') + '</div>';
+    return;
+  }
+  list.innerHTML = '';
+  twEvents.forEach(ev => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tw-bus' + (String(ev._id) === String(twSelectedId) ? ' is-active' : '');
+    btn.dataset.twId = ev._id;
+    const busName = ev.bus || 'Bus';
+    btn.innerHTML =
+      `<span class="tw-bus-icon">🚌</span>` +
+      `<span class="tw-bus-main"><span class="tw-bus-title">${escapeHtml(busName)} · ${escapeHtml(ev.city)} TW</span>` +
+      `<span class="tw-bus-meta muted">${ev.eventDate ? escapeHtml(ev.eventDate) + ' · ' : ''}${escapeHtml(String(ev.participants || 0))} os.</span></span>` +
+      `<span class="tw-bus-count">${escapeHtml(String(ev.participants || 0))}</span>`;
+    btn.addEventListener('click', () => selectTw(ev._id));
+    list.appendChild(btn);
+  });
+}
+
+async function selectTw(id) {
+  twSelectedId = String(id);
+  renderTwMap();
+  renderTwBuses();
+  const panel = document.getElementById('twPanel');
+  if (panel) panel.innerHTML = '<div class="tw-panel-empty">Liczę listę pakowania…</div>';
+  try {
+    const data = await api(`/tw/${encodeURIComponent(id)}/packing`);
+    renderTwPanel(data);
+  } catch (err) {
+    if (panel) panel.innerHTML = `<div class="tw-panel-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function twRuleText(it) {
+  if (it.mode === 'fixed') return `stała: ${it.fixed} ${it.unit}`;
+  const per = Number(it.perPerson) || 0;
+  const round = Number(it.roundUpTo) || 1;
+  return `${per}/os.${round > 1 ? ` · paczki po ${round}` : ''}`;
+}
+
+function renderTwPanel(data) {
+  const panel = document.getElementById('twPanel');
+  if (!panel) return;
+  const tw = data.turboWeekend || {};
+  const rows = (data.items || []).map(it => `
+      <tr>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="tw-th-num"><strong>${escapeHtml(String(it.quantity))}</strong> <span class="muted">${escapeHtml(it.unit)}</span></td>
+        <td class="tw-rule muted">${escapeHtml(twRuleText(it))}</td>
+      </tr>`).join('');
+
+  panel.innerHTML = `
+    <div class="tw-panel-head">
+      <div>
+        <div class="tw-panel-city">${escapeHtml(tw.city || '')} <span class="muted">TW</span></div>
+        <div class="tw-panel-meta muted">${tw.bus ? escapeHtml(tw.bus) + ' · ' : ''}${tw.eventDate ? escapeHtml(tw.eventDate) + ' · ' : ''}${escapeHtml(String(data.participants || 0))} uczestników</div>
+      </div>
+      <div class="tw-panel-people"><span class="tw-panel-people-num">${escapeHtml(String(data.participants || 0))}</span><span class="muted">osób</span></div>
+    </div>
+    <table class="tw-packing-table">
+      <thead><tr><th>Pozycja</th><th class="tw-th-num">Ile zabrać</th><th>Reguła</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" class="muted">Lista pakowania jest pusta.</td></tr>'}</tbody>
+    </table>`;
+}
+
+// --- Panel zarządzania (admin) ---
+function populateTwCityDatalist() {
+  const dl = document.getElementById('twCityList');
+  if (!dl) return;
+  dl.innerHTML = Object.keys(TW_CITIES).sort((a, b) => a.localeCompare(b))
+    .map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+}
+
+function openTwManage() {
+  const modal = document.getElementById('twManageModal');
+  if (!modal) return;
+  switchTwTab('events');
+  resetTwEventForm();
+  resetTwPackingForm();
+  renderTwEventAdminList();
+  renderTwPackingAdminList();
+  if (typeof modal.showModal === 'function') modal.showModal(); else modal.setAttribute('open', '');
+}
+
+function switchTwTab(tab) {
+  document.querySelectorAll('.tw-tab').forEach(t => t.classList.toggle('is-active', t.dataset.twtab === tab));
+  document.querySelectorAll('.tw-tabpane').forEach(p => { p.hidden = p.dataset.twpane !== tab; });
+}
+
+function resetTwEventForm() {
+  const f = document.getElementById('twEventForm');
+  if (f) f.reset();
+  const id = document.getElementById('twEventId');
+  if (id) id.value = '';
+  const submit = document.getElementById('twEventSubmit');
+  if (submit) submit.textContent = 'Dodaj TW';
+  const reset = document.getElementById('twEventReset');
+  if (reset) reset.hidden = true;
+}
+
+function renderTwEventAdminList() {
+  const wrap = document.getElementById('twEventAdminList');
+  if (!wrap) return;
+  if (!twEvents.length) { wrap.innerHTML = '<p class="muted">Brak eventów.</p>'; return; }
+  wrap.innerHTML = twEvents.map(ev => `
+      <div class="tw-admin-row">
+        <div class="tw-admin-row-main">
+          <strong>${escapeHtml(ev.bus || 'Bus')} · ${escapeHtml(ev.city)}</strong>
+          <span class="muted">${ev.eventDate ? escapeHtml(ev.eventDate) + ' · ' : ''}${escapeHtml(String(ev.participants || 0))} os.</span>
+        </div>
+        <div class="tw-admin-row-actions">
+          <button class="btn btn-secondary btn-sm" data-tw-edit="${ev._id}" type="button">Edytuj</button>
+          <button class="btn btn-danger btn-sm" data-tw-del="${ev._id}" type="button">Usuń</button>
+        </div>
+      </div>`).join('');
+  wrap.querySelectorAll('[data-tw-edit]').forEach(b => b.addEventListener('click', () => editTwEvent(b.getAttribute('data-tw-edit'))));
+  wrap.querySelectorAll('[data-tw-del]').forEach(b => b.addEventListener('click', () => deleteTwEvent(b.getAttribute('data-tw-del'))));
+}
+
+function editTwEvent(id) {
+  const ev = twEvents.find(e => String(e._id) === String(id));
+  if (!ev) return;
+  switchTwTab('events');
+  document.getElementById('twEventId').value = ev._id;
+  document.getElementById('twfCity').value = ev.city || '';
+  document.getElementById('twfRegion').value = ev.region || '';
+  document.getElementById('twfDate').value = ev.eventDate || '';
+  document.getElementById('twfParticipants').value = ev.participants || 0;
+  document.getElementById('twfBus').value = ev.bus || '';
+  document.getElementById('twfLat').value = ev.lat ?? '';
+  document.getElementById('twfLng').value = ev.lng ?? '';
+  document.getElementById('twEventSubmit').textContent = 'Zapisz zmiany';
+  document.getElementById('twEventReset').hidden = false;
+}
+
+async function deleteTwEvent(id) {
+  if (!confirm('Usunąć ten Turbo Weekend?')) return;
+  try {
+    await api(`/admin/tw/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    showToast('Usunięto Turbo Weekend');
+    await loadTwEvents();
+    renderTwEventAdminList();
+  } catch (err) { showToast(err.message); }
+}
+
+async function submitTwEvent(e) {
+  e.preventDefault();
+  const id = document.getElementById('twEventId').value;
+  const payload = {
+    city: document.getElementById('twfCity').value.trim(),
+    region: document.getElementById('twfRegion').value.trim(),
+    eventDate: document.getElementById('twfDate').value,
+    participants: Number(document.getElementById('twfParticipants').value) || 0,
+    bus: document.getElementById('twfBus').value.trim(),
+    lat: document.getElementById('twfLat').value,
+    lng: document.getElementById('twfLng').value
+  };
+  if (!payload.city) { showToast('Podaj miasto'); return; }
+  // Auto-uzupełnienie współrzędnych z gazetera, jeśli puste.
+  if ((!payload.lat || !payload.lng) && TW_CITIES[payload.city]) {
+    payload.lng = TW_CITIES[payload.city][0];
+    payload.lat = TW_CITIES[payload.city][1];
+  }
+  try {
+    if (id) {
+      await api(`/admin/tw/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      showToast('Zapisano zmiany');
+    } else {
+      await api('/admin/tw', { method: 'POST', body: JSON.stringify(payload) });
+      showToast('Dodano Turbo Weekend');
+    }
+    resetTwEventForm();
+    await loadTwEvents();
+    renderTwEventAdminList();
+  } catch (err) { showToast(err.message); }
+}
+
+// --- Lista pakowania (admin) ---
+let twPackingItems = [];
+
+function resetTwPackingForm() {
+  const f = document.getElementById('twPackingForm');
+  if (f) f.reset();
+  document.getElementById('twPackId').value = '';
+  document.getElementById('twpMode').value = 'per_person';
+  toggleTwPackMode();
+  document.getElementById('twPackSubmit').textContent = 'Dodaj pozycję';
+  document.getElementById('twPackReset').hidden = true;
+}
+
+function toggleTwPackMode() {
+  const mode = document.getElementById('twpMode').value;
+  document.getElementById('twpPerPersonWrap').hidden = mode !== 'per_person';
+  document.getElementById('twpFixedWrap').hidden = mode !== 'fixed';
+}
+
+async function renderTwPackingAdminList() {
+  const wrap = document.getElementById('twPackAdminList');
+  if (!wrap) return;
+  twPackingItems = await api('/packing-items').catch(() => []);
+  if (!twPackingItems.length) { wrap.innerHTML = '<p class="muted">Brak pozycji.</p>'; return; }
+  wrap.innerHTML = twPackingItems.map(it => `
+      <div class="tw-admin-row">
+        <div class="tw-admin-row-main">
+          <strong>${escapeHtml(it.name)}</strong>
+          <span class="muted">${escapeHtml(twRuleText(it))}</span>
+        </div>
+        <div class="tw-admin-row-actions">
+          <button class="btn btn-secondary btn-sm" data-twp-edit="${it._id}" type="button">Edytuj</button>
+          <button class="btn btn-danger btn-sm" data-twp-del="${it._id}" type="button">Usuń</button>
+        </div>
+      </div>`).join('');
+  wrap.querySelectorAll('[data-twp-edit]').forEach(b => b.addEventListener('click', () => editTwPacking(b.getAttribute('data-twp-edit'))));
+  wrap.querySelectorAll('[data-twp-del]').forEach(b => b.addEventListener('click', () => deleteTwPacking(b.getAttribute('data-twp-del'))));
+}
+
+function editTwPacking(id) {
+  const it = twPackingItems.find(p => String(p._id) === String(id));
+  if (!it) return;
+  document.getElementById('twPackId').value = it._id;
+  document.getElementById('twpName').value = it.name || '';
+  document.getElementById('twpUnit').value = it.unit || 'szt.';
+  document.getElementById('twpMode').value = it.mode || 'per_person';
+  document.getElementById('twpPerPerson').value = it.perPerson ?? 1;
+  document.getElementById('twpFixed').value = it.fixed ?? 1;
+  document.getElementById('twpRound').value = it.roundUpTo || 1;
+  document.getElementById('twpCategory').value = it.category || '';
+  toggleTwPackMode();
+  document.getElementById('twPackSubmit').textContent = 'Zapisz zmiany';
+  document.getElementById('twPackReset').hidden = false;
+}
+
+async function deleteTwPacking(id) {
+  if (!confirm('Usunąć tę pozycję listy pakowania?')) return;
+  try {
+    await api(`/admin/packing-items/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    showToast('Usunięto pozycję');
+    await renderTwPackingAdminList();
+    if (twSelectedId) selectTw(twSelectedId);
+  } catch (err) { showToast(err.message); }
+}
+
+async function submitTwPacking(e) {
+  e.preventDefault();
+  const id = document.getElementById('twPackId').value;
+  const mode = document.getElementById('twpMode').value;
+  const payload = {
+    name: document.getElementById('twpName').value.trim(),
+    unit: document.getElementById('twpUnit').value.trim() || 'szt.',
+    mode,
+    perPerson: Number(document.getElementById('twpPerPerson').value) || 0,
+    fixed: Number(document.getElementById('twpFixed').value) || 0,
+    roundUpTo: Number(document.getElementById('twpRound').value) || 1,
+    category: document.getElementById('twpCategory').value.trim() || 'Materiały'
+  };
+  if (!payload.name) { showToast('Podaj nazwę pozycji'); return; }
+  try {
+    if (id) {
+      await api(`/admin/packing-items/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      showToast('Zapisano zmiany');
+    } else {
+      await api('/admin/packing-items', { method: 'POST', body: JSON.stringify(payload) });
+      showToast('Dodano pozycję');
+    }
+    resetTwPackingForm();
+    await renderTwPackingAdminList();
+    if (twSelectedId) selectTw(twSelectedId);
+  } catch (err) { showToast(err.message); }
+}
+
+// Okablowanie modułu TW (widok wewnątrz Magazynu)
+document.getElementById('twManageBtn')?.addEventListener('click', () => openTwManage());
+document.getElementById('twManageCloseBtn')?.addEventListener('click', () => {
+  const m = document.getElementById('twManageModal');
+  if (m?.close) m.close(); else m?.removeAttribute('open');
+});
+document.querySelectorAll('.tw-tab').forEach(t => t.addEventListener('click', () => switchTwTab(t.dataset.twtab)));
+document.getElementById('twEventForm')?.addEventListener('submit', submitTwEvent);
+document.getElementById('twEventReset')?.addEventListener('click', () => resetTwEventForm());
+document.getElementById('twPackingForm')?.addEventListener('submit', submitTwPacking);
+document.getElementById('twPackReset')?.addEventListener('click', () => resetTwPackingForm());
+document.getElementById('twpMode')?.addEventListener('change', () => toggleTwPackMode());
+document.getElementById('twfCity')?.addEventListener('change', () => {
+  const city = document.getElementById('twfCity').value.trim();
+  const latEl = document.getElementById('twfLat');
+  const lngEl = document.getElementById('twfLng');
+  if (TW_CITIES[city] && !latEl.value && !lngEl.value) {
+    lngEl.value = TW_CITIES[city][0];
+    latEl.value = TW_CITIES[city][1];
+  }
+});
 
 // Launcher: wybór modułu + powrót do wyboru z railu.
 document.getElementById('launcherSprzetBtn')?.addEventListener('click', () => enterSprzet('pulpit'));

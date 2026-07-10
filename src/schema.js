@@ -18,7 +18,12 @@ export const collections = {
   reorderRules: 'reorderRules',
   counters: 'counters',
   suppliers: 'suppliers',
-  deliveryDestinations: 'deliveryDestinations'
+  deliveryDestinations: 'deliveryDestinations',
+
+  // Turbo Weekend — eventy edukacyjne w miastach + lista pakowania (ile czego
+  // zabrać wg liczby uczestników).
+  turboWeekends: 'turboWeekends',
+  packingItems: 'packingItems'
 };
 
 export const itemShape = {
@@ -149,5 +154,19 @@ export async function ensureIndexes(db) {
   await db.collection(collections.reorderRules).createIndexes([
     { key: { scope: 1, target: 1 }, unique: true, name: 'uniq_reorder_scope_target' },
     { key: { isActive: 1 }, name: 'idx_reorder_active' }
+  ]);
+
+  // === Turbo Weekend ===
+
+  // Eventy w miastach: liczba uczestników + pozycja na mapie (lat/lng) + bus.
+  await db.collection(collections.turboWeekends).createIndexes([
+    { key: { isActive: 1, eventDate: 1 }, name: 'idx_tw_active_date' },
+    { key: { city: 1 }, name: 'idx_tw_city' }
+  ]);
+
+  // Lista pakowania: pozycje ze współczynnikiem na osobę albo stałą ilością.
+  await db.collection(collections.packingItems).createIndexes([
+    { key: { isActive: 1, sortOrder: 1 }, name: 'idx_packing_active_sort' },
+    { key: { name: 1 }, name: 'idx_packing_name' }
   ]);
 }

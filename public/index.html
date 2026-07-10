@@ -486,6 +486,7 @@
           <button class="subtab" data-whmenu="operations" type="button">Operacje</button>
           <button class="subtab" data-whmenu="products" type="button">Produkty</button>
           <button class="subtab" data-whmenu="reporting" type="button">Raportowanie</button>
+          <button class="subtab" data-whmenu="turbo" type="button">Turbo Weekend</button>
           <button class="subtab" data-whmenu="config" type="button">Konfiguracja</button>
         </div>
     </header>
@@ -616,8 +617,86 @@
             <div id="warehouseLocationsContent" class="admin-content"></div>
           </div>
         </div>
+
+        <!-- Turbo Weekend: mapa eventów + busy + lista pakowania -->
+        <div id="whTurboView" hidden>
+          <div class="admin-toolbar tw-toolbar">
+            <p class="muted" id="twHeaderSub">Mapa eventów i lista pakowania — klik w bus lub pinezkę.</p>
+            <button class="btn btn-secondary" id="twManageBtn" type="button" hidden>Zarządzaj</button>
+          </div>
+          <div class="tw-body">
+            <section class="tw-map-wrap">
+              <div class="tw-map" id="twMap" aria-label="Mapa Polski z lokalizacjami Turbo Weekendów"></div>
+            </section>
+            <aside class="tw-side">
+              <div class="tw-side-head">
+                <h2>Busy</h2>
+                <span class="muted" id="twBusCount"></span>
+              </div>
+              <div class="tw-bus-list" id="twBusList"></div>
+              <div class="tw-panel" id="twPanel"></div>
+            </aside>
+          </div>
+        </div>
     </div>
   </div>
+
+  <!-- Panel zarządzania TW (admin) -->
+  <dialog id="twManageModal" class="item-modal tw-manage">
+    <div class="modal-shell tw-manage-shell">
+      <button class="modal-close" id="twManageCloseBtn" type="button" aria-label="Zamknij">×</button>
+      <div class="tw-manage-tabs">
+        <button class="tw-tab is-active" data-twtab="events" type="button">Turbo Weekendy</button>
+        <button class="tw-tab" data-twtab="packing" type="button">Lista pakowania</button>
+      </div>
+      <div class="tw-manage-body">
+        <section class="tw-tabpane" data-twpane="events">
+          <form class="tw-form" id="twEventForm">
+            <input type="hidden" id="twEventId" />
+            <div class="tw-form-grid">
+              <label>Miasto<input id="twfCity" list="twCityList" required placeholder="np. Rzeszów" /></label>
+              <label>Województwo<input id="twfRegion" placeholder="np. podkarpackie" /></label>
+              <label>Data<input id="twfDate" type="date" /></label>
+              <label>Uczestnicy<input id="twfParticipants" type="number" min="0" value="0" /></label>
+              <label>Bus<input id="twfBus" placeholder="np. Bus 1" /></label>
+              <label>Szer. geo. (lat)<input id="twfLat" type="number" step="0.0001" placeholder="auto z miasta" /></label>
+              <label>Dł. geo. (lng)<input id="twfLng" type="number" step="0.0001" placeholder="auto z miasta" /></label>
+            </div>
+            <datalist id="twCityList"></datalist>
+            <div class="tw-form-actions">
+              <button class="btn btn-primary" type="submit" id="twEventSubmit">Dodaj TW</button>
+              <button class="btn btn-secondary" type="button" id="twEventReset" hidden>Anuluj edycję</button>
+            </div>
+          </form>
+          <div class="tw-admin-list" id="twEventAdminList"></div>
+        </section>
+        <section class="tw-tabpane" data-twpane="packing" hidden>
+          <form class="tw-form" id="twPackingForm">
+            <input type="hidden" id="twPackId" />
+            <div class="tw-form-grid">
+              <label>Nazwa<input id="twpName" required placeholder="np. Notesy" /></label>
+              <label>Jednostka<input id="twpUnit" placeholder="szt." /></label>
+              <label>Tryb
+                <select id="twpMode">
+                  <option value="per_person">na osobę</option>
+                  <option value="fixed">stała ilość</option>
+                </select>
+              </label>
+              <label id="twpPerPersonWrap">Na osobę<input id="twpPerPerson" type="number" step="0.01" min="0" value="1" /></label>
+              <label id="twpFixedWrap" hidden>Ilość stała<input id="twpFixed" type="number" min="0" value="1" /></label>
+              <label>Pakowanie po<input id="twpRound" type="number" min="1" value="1" title="zaokrąglij w górę do wielokrotności" /></label>
+              <label>Kategoria<input id="twpCategory" placeholder="Materiały" /></label>
+            </div>
+            <div class="tw-form-actions">
+              <button class="btn btn-primary" type="submit" id="twPackSubmit">Dodaj pozycję</button>
+              <button class="btn btn-secondary" type="button" id="twPackReset" hidden>Anuluj edycję</button>
+            </div>
+          </form>
+          <div class="tw-admin-list" id="twPackAdminList"></div>
+        </section>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="itemDetailsModal" class="item-modal">
     <form method="dialog" class="modal-shell">
