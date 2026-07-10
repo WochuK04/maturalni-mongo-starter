@@ -2799,8 +2799,6 @@ th {
 }
 
 .magazyn-header-top {
-  max-width: 1180px;
-  margin: 0 auto;
   padding: 16px clamp(16px, 4vw, 44px);
   display: flex;
   align-items: center;
@@ -2860,8 +2858,6 @@ th {
 }
 
 .magazyn-heading {
-  max-width: 1180px;
-  margin: 0 auto;
   padding: 0 clamp(16px, 4vw, 44px) 20px;
 }
 
@@ -2880,14 +2876,12 @@ th {
 }
 
 .subtabs.magazyn-tabs {
-  max-width: 1180px;
-  margin: 0 auto;
   padding: 0 clamp(16px, 4vw, 44px);
-  gap: 24px;
+  gap: 8px 22px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   border-bottom: 0;
-  overflow-x: auto;
-  flex-wrap: nowrap;
+  overflow-x: visible;
+  flex-wrap: wrap;
 }
 
 .magazyn-tabs .subtab {
@@ -2907,8 +2901,6 @@ th {
 }
 
 .magazyn-body {
-  max-width: 1180px;
-  margin: 0 auto;
   padding: 26px clamp(16px, 4vw, 44px) 96px;
 }
 
@@ -3010,6 +3002,42 @@ th {
 .tw-th-num { text-align: right; white-space: nowrap; }
 .tw-packing-table td.tw-th-num { text-align: right; }
 .tw-rule { font-size: .78rem; }
+
+/* Interaktywny checklist pakowania */
+.tw-toolbar-actions { display: flex; gap: 8px; }
+.tw-checklist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; }
+.tw-check {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 4px; border-bottom: 1px solid var(--border);
+}
+.tw-check:last-child { border-bottom: none; }
+.tw-check-box {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
+  border: 2px solid var(--border-strong); background: var(--surface);
+  color: #fff; font-size: .9rem; font-weight: 700; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; transition: all .12s;
+}
+.tw-check-box:hover { border-color: var(--accent); }
+.tw-check.is-packed .tw-check-box { background: #1f9d55; border-color: #1f9d55; }
+.tw-check.is-packed .tw-check-name { color: var(--muted); text-decoration: line-through; }
+.tw-check-main { flex: 1; min-width: 0; }
+.tw-check-name { font-weight: 600; }
+.tw-check-sub { font-size: .76rem; }
+.tw-check-qty { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tw-check.is-dim { opacity: .5; }
+.tw-stock-badge {
+  font-size: .74rem; background: var(--surface-2); border-radius: 999px;
+  padding: 2px 8px; white-space: nowrap; color: var(--muted);
+}
+.tw-return-hint { font-size: .8rem; margin: 6px 0 2px; }
+.tw-return-field { display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); }
+.tw-return-field input {
+  width: 66px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tw-form-wide { grid-column: 1 / -1; }
+#twReturnModeBtn.is-active { border-color: var(--accent); color: var(--text); }
 
 /* Panel zarządzania */
 .tw-manage-shell { max-width: 720px; width: min(720px, 94vw); }

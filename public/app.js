@@ -6108,8 +6108,22 @@ async function openTurboWeekend() {
   const isAdmin = currentUser?.role === 'admin';
   const manageBtn = document.getElementById('twManageBtn');
   if (manageBtn) manageBtn.hidden = !isAdmin;
+  twReturnMode = false;
   populateTwCityDatalist();
+  await populateTwProductDatalist();
   await loadTwEvents();
+  updateTwReturnBtn();
+}
+
+// Produkty Magazynu do podpięcia pod pozycje listy pakowania (datalist).
+let twProducts = [];
+async function populateTwProductDatalist() {
+  const dl = document.getElementById('twProductList');
+  if (!dl) return;
+  twProducts = await api('/packing-products').catch(() => []);
+  dl.innerHTML = twProducts
+    .map(p => `<option value="${escapeHtml(p.itemCode)}">${escapeHtml(p.name || '')}${p.quantity != null ? ` (stan ${p.quantity})` : ''}</option>`)
+    .join('');
 }
 
 async function loadTwEvents() {
@@ -6117,14 +6131,16 @@ async function loadTwEvents() {
   renderTwMap();
   renderTwBuses();
   const sub = document.getElementById('twHeaderSub');
-  if (sub) sub.textContent = `${twEvents.length} ${plPlural(twEvents.length, 'event', 'eventy', 'eventów')} · klik w bus lub pinezkę`;
+  if (sub) sub.textContent = `${twEvents.length} ${plPlural(twEvents.length, 'wyjazd', 'wyjazdy', 'wyjazdów')} · klik w bus lub pinezkę`;
   // Zachowaj zaznaczenie, jeśli nadal istnieje; inaczej wyczyść panel.
   if (twSelectedId && twEvents.some(e => String(e._id) === String(twSelectedId))) {
     selectTw(twSelectedId);
   } else {
     twSelectedId = null;
+    twLastPacking = null;
     const panel = document.getElementById('twPanel');
     if (panel) panel.innerHTML = '<div class="tw-panel-empty">Wybierz bus, aby policzyć listę pakowania.</div>';
+    updateTwReturnBtn();
   }
 }
 
@@ -6168,7 +6184,7 @@ function renderTwBuses() {
   if (count) count.textContent = twEvents.length ? `${twEvents.length}` : '';
   if (!list) return;
   if (!twEvents.length) {
-    list.innerHTML = '<div class="tw-panel-empty">Brak Turbo Weekendów. ' +
+    list.innerHTML = '<div class="tw-panel-empty">Brak wyjazdów. ' +
       (currentUser?.role === 'admin' ? 'Dodaj je w „Zarządzaj”.' : 'Poproś administratora o dodanie.') + '</div>';
     return;
   }
@@ -6179,15 +6195,19 @@ function renderTwBuses() {
     btn.className = 'tw-bus' + (String(ev._id) === String(twSelectedId) ? ' is-active' : '');
     btn.dataset.twId = ev._id;
     const busName = ev.bus || 'Bus';
+    const type = ev.eventType || 'Wyjazd';
     btn.innerHTML =
       `<span class="tw-bus-icon">🚌</span>` +
-      `<span class="tw-bus-main"><span class="tw-bus-title">${escapeHtml(busName)} · ${escapeHtml(ev.city)} TW</span>` +
-      `<span class="tw-bus-meta muted">${ev.eventDate ? escapeHtml(ev.eventDate) + ' · ' : ''}${escapeHtml(String(ev.participants || 0))} os.</span></span>` +
+      `<span class="tw-bus-main"><span class="tw-bus-title">${escapeHtml(busName)} · ${escapeHtml(ev.city)}</span>` +
+      `<span class="tw-bus-meta muted">${escapeHtml(type)}${ev.eventDate ? ' · ' + escapeHtml(ev.eventDate) : ''} · ${escapeHtml(String(ev.participants || 0))} os.</span></span>` +
       `<span class="tw-bus-count">${escapeHtml(String(ev.participants || 0))}</span>`;
     btn.addEventListener('click', () => selectTw(ev._id));
     list.appendChild(btn);
   });
 }
+
+let twReturnMode = false;
+let twLastPacking = null;
 
 async function selectTw(id) {
   twSelectedId = String(id);
@@ -6197,7 +6217,9 @@ async function selectTw(id) {
   if (panel) panel.innerHTML = '<div class="tw-panel-empty">Liczę listę pakowania…</div>';
   try {
     const data = await api(`/tw/${encodeURIComponent(id)}/packing`);
+    twLastPacking = data;
     renderTwPanel(data);
+    updateTwReturnBtn();
   } catch (err) {
     if (panel) panel.innerHTML = `<div class="tw-panel-empty">${escapeHtml(err.message)}</div>`;
   }
@@ -6210,29 +6232,105 @@ function twRuleText(it) {
   return `${per}/os.${round > 1 ? ` · paczki po ${round}` : ''}`;
 }
 
+function updateTwReturnBtn() {
+  const btn = document.getElementById('twReturnModeBtn');
+  if (!btn) return;
+  const hasPacked = !!twLastPacking && (twLastPacking.items || []).some(i => (Number(i.packedQty) || 0) > 0);
+  btn.hidden = !twSelectedId || !hasPacked;
+  btn.textContent = twReturnMode ? 'Zakończ powrót' : 'Powrót busa';
+  btn.classList.toggle('is-active', twReturnMode);
+}
+
 function renderTwPanel(data) {
   const panel = document.getElementById('twPanel');
   if (!panel) return;
   const tw = data.turboWeekend || {};
-  const rows = (data.items || []).map(it => `
-      <tr>
-        <td>${escapeHtml(it.name)}</td>
-        <td class="tw-th-num"><strong>${escapeHtml(String(it.quantity))}</strong> <span class="muted">${escapeHtml(it.unit)}</span></td>
-        <td class="tw-rule muted">${escapeHtml(twRuleText(it))}</td>
-      </tr>`).join('');
+  const items = data.items || [];
+  const packedCount = items.filter(i => (Number(i.packedQty) || 0) > 0).length;
 
-  panel.innerHTML = `
+  const head = `
     <div class="tw-panel-head">
       <div>
-        <div class="tw-panel-city">${escapeHtml(tw.city || '')} <span class="muted">TW</span></div>
-        <div class="tw-panel-meta muted">${tw.bus ? escapeHtml(tw.bus) + ' · ' : ''}${tw.eventDate ? escapeHtml(tw.eventDate) + ' · ' : ''}${escapeHtml(String(data.participants || 0))} uczestników</div>
+        <div class="tw-panel-city">${escapeHtml(tw.city || '')} <span class="muted">${escapeHtml(tw.eventType || 'Wyjazd')}</span></div>
+        <div class="tw-panel-meta muted">${tw.bus ? escapeHtml(tw.bus) + ' · ' : ''}${tw.eventDate ? escapeHtml(tw.eventDate) + ' · ' : ''}${escapeHtml(String(data.participants || 0))} uczestników · spakowano ${packedCount}/${items.length}</div>
       </div>
       <div class="tw-panel-people"><span class="tw-panel-people-num">${escapeHtml(String(data.participants || 0))}</span><span class="muted">osób</span></div>
-    </div>
-    <table class="tw-packing-table">
-      <thead><tr><th>Pozycja</th><th class="tw-th-num">Ile zabrać</th><th>Reguła</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="3" class="muted">Lista pakowania jest pusta.</td></tr>'}</tbody>
-    </table>`;
+    </div>`;
+
+  if (!items.length) {
+    panel.innerHTML = head + '<div class="tw-panel-empty">Lista pakowania jest pusta.</div>';
+    return;
+  }
+
+  const rows = items.map(it => twReturnMode ? twReturnRow(it) : twPackRow(it)).join('');
+  panel.innerHTML = head +
+    (twReturnMode ? '<div class="tw-return-hint muted">Wpisz, ile każdej rzeczy wróciło — reszta zostaje odjęta jako zużyta, a zwrot wraca na stan magazynu.</div>' : '') +
+    `<ul class="tw-checklist">${rows}</ul>`;
+
+  panel.querySelectorAll('[data-pack-toggle]').forEach(el =>
+    el.addEventListener('click', () => togglePack(el.getAttribute('data-pack-toggle'), el.getAttribute('data-packed') === '1')));
+  panel.querySelectorAll('[data-return-input]').forEach(inp => {
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+    inp.addEventListener('change', () => saveReturn(inp.getAttribute('data-return-input'), inp.value));
+  });
+}
+
+function twStockBadge(it) {
+  if (!it.itemCode) return '';
+  const n = it.stockOnHand == null ? '—' : it.stockOnHand;
+  return `<span class="tw-stock-badge" title="Stan magazynu: ${escapeHtml(String(n))}">📦 ${escapeHtml(String(n))}</span>`;
+}
+
+function twPackRow(it) {
+  const packed = (Number(it.packedQty) || 0) > 0;
+  return `
+    <li class="tw-check ${packed ? 'is-packed' : ''}">
+      <button class="tw-check-box" type="button" data-pack-toggle="${it._id}" data-packed="${packed ? '1' : '0'}" aria-pressed="${packed}" title="${packed ? 'Cofnij spakowanie' : 'Oznacz jako spakowane'}">${packed ? '✓' : ''}</button>
+      <div class="tw-check-main">
+        <div class="tw-check-name">${escapeHtml(it.name)}</div>
+        <div class="tw-check-sub muted">${escapeHtml(twRuleText(it))}${it.itemCode ? ' · z magazynu' : ''}</div>
+      </div>
+      ${twStockBadge(it)}
+      <div class="tw-check-qty"><strong>${escapeHtml(String(it.quantity))}</strong> <span class="muted">${escapeHtml(it.unit)}</span></div>
+    </li>`;
+}
+
+function twReturnRow(it) {
+  const packed = Number(it.packedQty) || 0;
+  if (packed <= 0) {
+    return `<li class="tw-check is-dim"><div class="tw-check-main"><div class="tw-check-name">${escapeHtml(it.name)}</div><div class="tw-check-sub muted">nie spakowano</div></div></li>`;
+  }
+  const returned = Number(it.returnedQty) || 0;
+  const consumed = Math.max(0, packed - returned);
+  return `
+    <li class="tw-check is-return">
+      <div class="tw-check-main">
+        <div class="tw-check-name">${escapeHtml(it.name)}</div>
+        <div class="tw-check-sub muted">spakowano ${escapeHtml(String(packed))} · zużyte ${escapeHtml(String(consumed))} ${escapeHtml(it.unit)}${it.itemCode ? ' · wraca na stan' : ''}</div>
+      </div>
+      <label class="tw-return-field">wróciło
+        <input type="number" min="0" max="${packed}" value="${returned}" data-return-input="${it._id}" />
+      </label>
+    </li>`;
+}
+
+async function togglePack(itemId, isPacked) {
+  if (!twSelectedId) return;
+  const path = `/tw/${encodeURIComponent(twSelectedId)}/packing/${encodeURIComponent(itemId)}/${isPacked ? 'unpack' : 'pack'}`;
+  try {
+    await api(path, { method: 'POST' });
+    await selectTw(twSelectedId);
+  } catch (err) { showToast(err.message); }
+}
+
+async function saveReturn(itemId, value) {
+  if (!twSelectedId) return;
+  try {
+    await api(`/tw/${encodeURIComponent(twSelectedId)}/packing/${encodeURIComponent(itemId)}/return`, {
+      method: 'POST', body: JSON.stringify({ returnedQty: Number(value) || 0 })
+    });
+    await selectTw(twSelectedId);
+  } catch (err) { showToast(err.message); }
 }
 
 // --- Panel zarządzania (admin) ---
@@ -6265,7 +6363,7 @@ function resetTwEventForm() {
   const id = document.getElementById('twEventId');
   if (id) id.value = '';
   const submit = document.getElementById('twEventSubmit');
-  if (submit) submit.textContent = 'Dodaj TW';
+  if (submit) submit.textContent = 'Dodaj wyjazd';
   const reset = document.getElementById('twEventReset');
   if (reset) reset.hidden = true;
 }
@@ -6273,12 +6371,12 @@ function resetTwEventForm() {
 function renderTwEventAdminList() {
   const wrap = document.getElementById('twEventAdminList');
   if (!wrap) return;
-  if (!twEvents.length) { wrap.innerHTML = '<p class="muted">Brak eventów.</p>'; return; }
+  if (!twEvents.length) { wrap.innerHTML = '<p class="muted">Brak wyjazdów.</p>'; return; }
   wrap.innerHTML = twEvents.map(ev => `
       <div class="tw-admin-row">
         <div class="tw-admin-row-main">
           <strong>${escapeHtml(ev.bus || 'Bus')} · ${escapeHtml(ev.city)}</strong>
-          <span class="muted">${ev.eventDate ? escapeHtml(ev.eventDate) + ' · ' : ''}${escapeHtml(String(ev.participants || 0))} os.</span>
+          <span class="muted">${escapeHtml(ev.eventType || 'Wyjazd')}${ev.eventDate ? ' · ' + escapeHtml(ev.eventDate) : ''} · ${escapeHtml(String(ev.participants || 0))} os.</span>
         </div>
         <div class="tw-admin-row-actions">
           <button class="btn btn-secondary btn-sm" data-tw-edit="${ev._id}" type="button">Edytuj</button>
@@ -6294,6 +6392,7 @@ function editTwEvent(id) {
   if (!ev) return;
   switchTwTab('events');
   document.getElementById('twEventId').value = ev._id;
+  document.getElementById('twfType').value = ev.eventType || '';
   document.getElementById('twfCity').value = ev.city || '';
   document.getElementById('twfRegion').value = ev.region || '';
   document.getElementById('twfDate').value = ev.eventDate || '';
@@ -6306,10 +6405,10 @@ function editTwEvent(id) {
 }
 
 async function deleteTwEvent(id) {
-  if (!confirm('Usunąć ten Turbo Weekend?')) return;
+  if (!confirm('Usunąć ten wyjazd?')) return;
   try {
     await api(`/admin/tw/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    showToast('Usunięto Turbo Weekend');
+    showToast('Usunięto wyjazd');
     await loadTwEvents();
     renderTwEventAdminList();
   } catch (err) { showToast(err.message); }
@@ -6319,6 +6418,7 @@ async function submitTwEvent(e) {
   e.preventDefault();
   const id = document.getElementById('twEventId').value;
   const payload = {
+    eventType: document.getElementById('twfType').value.trim(),
     city: document.getElementById('twfCity').value.trim(),
     region: document.getElementById('twfRegion').value.trim(),
     eventDate: document.getElementById('twfDate').value,
@@ -6339,7 +6439,7 @@ async function submitTwEvent(e) {
       showToast('Zapisano zmiany');
     } else {
       await api('/admin/tw', { method: 'POST', body: JSON.stringify(payload) });
-      showToast('Dodano Turbo Weekend');
+      showToast('Dodano wyjazd');
     }
     resetTwEventForm();
     await loadTwEvents();
@@ -6375,7 +6475,7 @@ async function renderTwPackingAdminList() {
       <div class="tw-admin-row">
         <div class="tw-admin-row-main">
           <strong>${escapeHtml(it.name)}</strong>
-          <span class="muted">${escapeHtml(twRuleText(it))}</span>
+          <span class="muted">${escapeHtml(twRuleText(it))}${it.itemCode ? ' · 📦 ' + escapeHtml(it.itemCode) : ''}</span>
         </div>
         <div class="tw-admin-row-actions">
           <button class="btn btn-secondary btn-sm" data-twp-edit="${it._id}" type="button">Edytuj</button>
@@ -6397,6 +6497,7 @@ function editTwPacking(id) {
   document.getElementById('twpFixed').value = it.fixed ?? 1;
   document.getElementById('twpRound').value = it.roundUpTo || 1;
   document.getElementById('twpCategory').value = it.category || '';
+  document.getElementById('twpItemCode').value = it.itemCode || '';
   toggleTwPackMode();
   document.getElementById('twPackSubmit').textContent = 'Zapisz zmiany';
   document.getElementById('twPackReset').hidden = false;
@@ -6423,7 +6524,8 @@ async function submitTwPacking(e) {
     perPerson: Number(document.getElementById('twpPerPerson').value) || 0,
     fixed: Number(document.getElementById('twpFixed').value) || 0,
     roundUpTo: Number(document.getElementById('twpRound').value) || 1,
-    category: document.getElementById('twpCategory').value.trim() || 'Materiały'
+    category: document.getElementById('twpCategory').value.trim() || 'Materiały',
+    itemCode: document.getElementById('twpItemCode').value.trim()
   };
   if (!payload.name) { showToast('Podaj nazwę pozycji'); return; }
   try {
@@ -6442,6 +6544,12 @@ async function submitTwPacking(e) {
 
 // Okablowanie modułu TW (widok wewnątrz Magazynu)
 document.getElementById('twManageBtn')?.addEventListener('click', () => openTwManage());
+document.getElementById('twReturnModeBtn')?.addEventListener('click', () => {
+  if (!twSelectedId || !twLastPacking) return;
+  twReturnMode = !twReturnMode;
+  renderTwPanel(twLastPacking);
+  updateTwReturnBtn();
+});
 document.getElementById('twManageCloseBtn')?.addEventListener('click', () => {
   const m = document.getElementById('twManageModal');
   if (m?.close) m.close(); else m?.removeAttribute('open');
