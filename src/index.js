@@ -114,6 +114,82 @@ function isBlockedFromLoan(item) {
   return isStudioLocation || isStudioLocked;
 }
 
+// === Wydania per-sztuka („jeden rekord + licznik wydań") ==================
+// Model: jeden dokument `items` = jedna pozycja z łączną `quantity`. Ile sztuk
+// jest aktualnie wydanych = suma `quantity` aktywnych wypożyczeń tej pozycji.
+// Dzięki temu pozycja z ilością > 1 może być częściowo u pracowników, a
+// częściowo wciąż na stanie — wydanie zabiera 1 sztukę (domyślnie), nie całość.
+
+// Mapa itemCode → liczba sztuk aktualnie wydanych (suma aktywnych wypożyczeń).
+async function issuedQtyByCode(db, itemCodes) {
+  const codes = [...new Set((itemCodes || []).filter(Boolean))];
+  if (!codes.length) return new Map();
+  const rows = await db.collection(collections.loans).aggregate([
+    { $match: { itemCode: { $in: codes }, status: 'active' } },
+    { $group: { _id: '$itemCode', issued: { $sum: { $ifNull: ['$quantity', 1] } } } }
+  ]).toArray();
+  const map = new Map();
+  for (const r of rows) map.set(r._id, Number(r.issued) || 0);
+  return map;
+}
+
+// Ile sztuk danej pozycji jest jeszcze dostępnych do wydania.
+async function availableUnits(db, item) {
+  const total = Math.max(0, Number(item?.quantity) || 0);
+  const issued = (await issuedQtyByCode(db, [item.itemCode])).get(item.itemCode) || 0;
+  return Math.max(0, total - issued);
+}
+
+// Statusy zarządzane automatycznie przez przeliczenie wydań. Innych (serwis,
+// wycofany, ręcznie ustawionych) nie ruszamy.
+const AUTO_MANAGED_STATUSES = new Set(['available', 'loaned']);
+
+// Po każdym wydaniu/zwrocie przelicza stan pozycji na podstawie aktywnych
+// wypożyczeń:
+//  • są wolne sztuki → 'available', przypisanie wyczyszczone (pozycja wciąż na stanie),
+//  • brak wolnych    → 'loaned'; assignedTo = jedyny posiadacz albo null (gdy wielu).
+// Nie nadpisuje statusów „ręcznych" (serwis, wycofany itp.).
+async function syncItemAssignment(db, itemCode, { defaultLocation = 'Magazyn' } = {}) {
+  const item = await db.collection(collections.items).findOne({ itemCode });
+  if (!item) return;
+  if (!AUTO_MANAGED_STATUSES.has(item.operationalStatus)) return;
+
+  const total = Math.max(0, Number(item.quantity) || 0);
+  const activeLoans = await db.collection(collections.loans)
+    .find(
+      { itemCode, status: 'active' },
+      { projection: { userEmail: 1, userDisplayName: 1, quantity: 1 } }
+    )
+    .toArray();
+  const issued = activeLoans.reduce((sum, l) => sum + (Number(l.quantity) || 1), 0);
+  const available = Math.max(0, total - issued);
+  const holders = [...new Set(activeLoans.map(l => l.userEmail).filter(Boolean))];
+
+  const set = { updatedAt: new Date() };
+
+  if (available > 0) {
+    // Wciąż na stanie → widnieje jako dostępny; nie „przypisany" do jednej osoby.
+    set.operationalStatus = 'available';
+    set.assignedToEmail = null;
+    set.assignedToName = null;
+    if (issued === 0) set.currentLocation = item.currentLocation || defaultLocation;
+  } else {
+    // Wszystkie sztuki wydane.
+    set.operationalStatus = 'loaned';
+    set.currentLocation = 'U pracownika';
+    if (holders.length === 1) {
+      const only = activeLoans.find(l => l.userEmail === holders[0]);
+      set.assignedToEmail = holders[0];
+      set.assignedToName = only?.userDisplayName || item.assignedToName || null;
+    } else {
+      set.assignedToEmail = null;
+      set.assignedToName = null;
+    }
+  }
+
+  await db.collection(collections.items).updateOne({ _id: item._id }, { $set: set });
+}
+
 // Słownik stanów technicznych dla list rozwijanych w panelu admina.
 const ITEM_CONDITIONS = [
   { value: 'new', label: 'Nowy' },
@@ -137,6 +213,40 @@ const WAREHOUSE_ONLY_CATEGORIES = ['gadżet', 'opakowanie', 'sponsor', 'towar'];
 // (i pozostałe, np. Roll-up) żyje w widoku „Dostępny sprzęt". Case-insensitive.
 const isWarehouseCategory = (category) =>
   WAREHOUSE_ONLY_CATEGORIES.includes(String(category || '').trim().toLowerCase());
+
+// === Turbo Weekend =========================================================
+// Startowa lista pakowania. mode 'per_person' → sztuki = ceil(uczestnicy ×
+// value), 'fixed' → stała ilość niezależna od liczby osób. roundUpTo zaokrągla
+// w górę do wielokrotności (np. woda w zgrzewkach po 6).
+const DEFAULT_PACKING_ITEMS = [
+  { name: 'Notesy', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
+  { name: 'Długopisy', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
+  { name: 'Teczki z materiałami', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
+  { name: 'Identyfikatory', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
+  { name: 'Smycze', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
+  { name: 'Koszulki', mode: 'per_person', value: 1, unit: 'szt.', category: 'Gadżety' },
+  { name: 'Woda (butelki)', mode: 'per_person', value: 1.5, unit: 'szt.', roundUpTo: 6, category: 'Katering' },
+  { name: 'Przekąski / batony', mode: 'per_person', value: 1, unit: 'szt.', category: 'Katering' },
+  { name: 'Markery do flipcharta', mode: 'fixed', value: 10, unit: 'szt.', category: 'Materiały' },
+  { name: 'Baner roll-up', mode: 'fixed', value: 2, unit: 'szt.', category: 'Sprzęt' },
+  { name: 'Głośnik', mode: 'fixed', value: 1, unit: 'szt.', category: 'Sprzęt' },
+  { name: 'Mikrofon', mode: 'fixed', value: 2, unit: 'szt.', category: 'Sprzęt' },
+  { name: 'Przedłużacz', mode: 'fixed', value: 3, unit: 'szt.', category: 'Sprzęt' },
+  { name: 'Apteczka', mode: 'fixed', value: 1, unit: 'szt.', category: 'Sprzęt' }
+];
+
+// Dla danej liczby uczestników wylicza sztuki każdej pozycji listy pakowania.
+function computePackingQuantity(item, participants) {
+  const people = Math.max(0, Number(participants) || 0);
+  const roundUpTo = Math.max(1, Number(item.roundUpTo) || 1);
+  if (item.mode === 'fixed') {
+    return Math.max(0, Math.round(Number(item.fixed) || 0));
+  }
+  const raw = people * (Number(item.perPerson) || 0);
+  const rounded = Math.ceil(raw);
+  // Zaokrąglenie w górę do pełnej paczki (np. zgrzewki wody po 6).
+  return Math.ceil(rounded / roundUpTo) * roundUpTo;
+}
 
 // Stan techniczny z importu CSV bywa wpisany "po polsku" albo jako surowa wartość.
 // Sprowadzamy do znanej wartości z ITEM_CONDITIONS, w razie wątpliwości fallback.
@@ -339,7 +449,18 @@ app.get('/items/available', requireAuth, async (_req, res) => {
     })
     .toArray();
 
-  res.json(items);
+  // Dostępność per sztuka: pozycja z ilością > 1 zostaje na liście, dopóki
+  // choć jedna sztuka jest wolna (łączna ilość − sztuki wydane wg wypożyczeń).
+  const issuedMap = await issuedQtyByCode(db, items.map(i => i.itemCode));
+  const withAvailability = items
+    .map(i => {
+      const total = Math.max(0, Number(i.quantity) || 0);
+      const available = Math.max(0, total - (issuedMap.get(i.itemCode) || 0));
+      return { ...i, available };
+    })
+    .filter(i => i.available > 0);
+
+  res.json(withAvailability);
 });
 
 // Lista lokalizacji dla list rozwijanych (np. miejsce zwrotu) — dostępna dla
@@ -1726,18 +1847,41 @@ app.get('/my/loans', requireAuth, async (req, res) => {
   res.json(loans);
 });
 
-// Sprzęt, który użytkownik faktycznie ma u siebie — źródłem prawdy jest
-// dokument sprzętu (assignedToEmail), nie kolekcja loans. Dzięki temu widać też
-// sprzęt przypisany z importu Excela, dla którego nie powstał rekord wypożyczenia.
+// Sprzęt, który użytkownik faktycznie ma u siebie. Źródłem prawdy dla LICZBY
+// trzymanych sztuk są aktywne wypożyczenia (pozycja z ilością > 1 może być
+// częściowo u kilku osób). Dodatkowo pokazujemy pozycje przypisane „na sztywno"
+// (assignedToEmail — np. z importu Excela), dla których nie ma wypożyczenia.
 app.get('/my/items', requireAuth, async (req, res) => {
   const db = await getDb();
+  const email = req.user.email;
+
+  const activeLoans = await db.collection(collections.loans)
+    .find(
+      { userEmail: email, status: 'active' },
+      { projection: { itemCode: 1, quantity: 1 } }
+    )
+    .toArray();
+
+  // itemCode → liczba trzymanych sztuk (null = weź całą item.quantity, legacy).
+  const heldByCode = new Map();
+  for (const l of activeLoans) {
+    if (!l.itemCode) continue;
+    heldByCode.set(l.itemCode, (heldByCode.get(l.itemCode) || 0) + (Number(l.quantity) || 1));
+  }
+
+  const legacy = await db.collection(collections.items)
+    .find({ assignedToEmail: email, isActive: { $ne: false } }, { projection: { itemCode: 1 } })
+    .toArray();
+  for (const it of legacy) {
+    if (!heldByCode.has(it.itemCode)) heldByCode.set(it.itemCode, null);
+  }
+
+  const codes = [...heldByCode.keys()];
+  if (!codes.length) return res.json([]);
 
   const items = await db.collection(collections.items)
     .find(
-      {
-        assignedToEmail: req.user.email,
-        isActive: { $ne: false }
-      },
+      { itemCode: { $in: codes }, isActive: { $ne: false } },
       {
         projection: {
           itemCode: 1,
@@ -1746,14 +1890,26 @@ app.get('/my/items', requireAuth, async (req, res) => {
           currentLocation: 1,
           conditionStatus: 1,
           assignedToName: 1,
-          assignedToEmail: 1
+          assignedToEmail: 1,
+          quantity: 1
         }
       }
     )
-    .sort({ category: 1, name: 1, itemCode: 1 })
     .toArray();
 
-  res.json(items);
+  const out = items
+    .map(it => {
+      const held = heldByCode.get(it.itemCode);
+      return { ...it, heldQuantity: held == null ? Math.max(1, Number(it.quantity) || 1) : held };
+    })
+    .sort(
+      (a, b) =>
+        (a.category || '').localeCompare(b.category || '') ||
+        (a.name || '').localeCompare(b.name || '') ||
+        (a.itemCode || '').localeCompare(b.itemCode || '')
+    );
+
+  res.json(out);
 });
 
 // Zwrot sprzętu po itemCode (działa też bez rekordu wypożyczenia).
@@ -1771,46 +1927,46 @@ app.post('/items/:itemCode/return', requireAuth, async (req, res) => {
     return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
   }
 
-  const isOwner = item.assignedToEmail === req.user.email;
   const isAdmin = req.user.role === 'admin';
 
-  if (!isOwner && !isAdmin) {
+  // Kto co trzyma ustalamy z aktywnych wypożyczeń (pozycja z ilością > 1 może być
+  // u kilku osób). Wspieramy też legacy: przypisanie „na sztywno" bez wypożyczenia.
+  const myActiveLoans = await db.collection(collections.loans)
+    .find({ itemCode, userEmail: req.user.email, status: 'active' }, { projection: { _id: 1 } })
+    .toArray();
+  const hasMyLoan = myActiveLoans.length > 0;
+  const isLegacyOwner = item.assignedToEmail === req.user.email;
+  const issued = (await issuedQtyByCode(db, [itemCode])).get(itemCode) || 0;
+
+  if (!hasMyLoan && !isLegacyOwner && !isAdmin) {
     return res.status(403).json({ message: 'Nie możesz oddać cudzego sprzętu' });
   }
 
-  if (!item.assignedToEmail && item.operationalStatus === 'available') {
+  if (!hasMyLoan && !isLegacyOwner && issued === 0) {
     return res.status(400).json({ message: 'Ten sprzęt nie jest u nikogo wypożyczony' });
   }
 
   const now = new Date();
   const loc = String(returnLocation || 'Magazyn').trim() || 'Magazyn';
 
-  await db.collection(collections.items).updateOne(
-    { _id: item._id },
-    {
-      $set: {
-        operationalStatus: 'available',
-        currentLocation: loc,
-        assignedToEmail: null,
-        assignedToName: null,
-        updatedAt: now
-      }
-    }
-  );
+  // Pracownik oddaje TYLKO swoje sztuki; admin bez własnego wypożyczenia może
+  // wymusić zwrot całości.
+  const closeFilter = hasMyLoan
+    ? { itemCode, userEmail: req.user.email, status: 'active' }
+    : { itemCode, status: 'active' };
 
-  // Zamknij aktywne wypożyczenie, jeśli takie istnieje (dla zwykłego obiegu).
-  await db.collection(collections.loans).updateMany(
-    { itemCode, status: 'active' },
-    {
-      $set: {
-        status: 'returned',
-        returnedAt: now,
-        returnLocation: loc,
-        returnNote: String(returnNote || '').trim(),
-        closedByEmail: req.user.email
-      }
+  await db.collection(collections.loans).updateMany(closeFilter, {
+    $set: {
+      status: 'returned',
+      returnedAt: now,
+      returnLocation: loc,
+      returnNote: String(returnNote || '').trim(),
+      closedByEmail: req.user.email
     }
-  );
+  });
+
+  // Przelicz stan pozycji z pozostałych aktywnych wypożyczeń.
+  await syncItemAssignment(db, itemCode, { defaultLocation: loc });
 
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
@@ -1905,8 +2061,13 @@ app.post('/my/items/:itemCode/transfer', requireAuth, async (req, res) => {
     return res.status(404).json({ message: 'Nie znaleziono sprzętu' });
   }
 
-  // Przenosić może osoba, która ma sprzęt przypisany, albo administracja.
-  const isAssignee = item.assignedToEmail === req.user.email;
+  // Przenosić może osoba, która trzyma sprzęt (aktywne wypożyczenie lub legacy
+  // przypisanie), albo administracja.
+  const myActiveLoan = await db.collection(collections.loans).findOne(
+    { itemCode, userEmail: req.user.email, status: 'active' },
+    { projection: { _id: 1 } }
+  );
+  const isAssignee = !!myActiveLoan || item.assignedToEmail === req.user.email;
   if (!isAssignee && req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Możesz przenosić tylko swój sprzęt' });
   }
@@ -1915,8 +2076,8 @@ app.post('/my/items/:itemCode/transfer', requireAuth, async (req, res) => {
     return res.status(400).json({ message: 'Tego sprzętu nie można przenosić' });
   }
 
-  if (item.assignedToEmail === targetEmail) {
-    return res.status(400).json({ message: 'Sprzęt jest już przypisany do tej osoby' });
+  if (targetEmail === req.user.email) {
+    return res.status(400).json({ message: 'Sprzęt jest już u Ciebie' });
   }
 
   const targetUser = await db.collection(collections.users).findOne({
@@ -1928,7 +2089,10 @@ app.post('/my/items/:itemCode/transfer', requireAuth, async (req, res) => {
     return res.status(404).json({ message: 'Nie znaleziono aktywnego użytkownika o tym adresie' });
   }
 
-  const { targetName } = await performItemTransfer(db, item, targetUser, req.user, note);
+  // Pracownik przenosi WŁASNE sztuki (jego wypożyczenie), nie cudze.
+  const { targetName } = await performItemTransfer(db, item, targetUser, req.user, note, {
+    fromEmail: req.user.email
+  });
   res.json({ message: `Przeniesiono na ${targetName}`, itemCode: item.itemCode });
 });
 
@@ -2463,7 +2627,7 @@ app.post('/manager/loan-requests/:id/reject', requireAuth, requireManager, async
 
 app.post('/loans/borrow', requireAuth, async (req, res) => {
   const db = await getDb();
-  const { itemCode, targetUseLocation = 'Dom', borrowNote = '' } = req.body;
+  const { itemCode, targetUseLocation = 'Dom', borrowNote = '', quantity } = req.body;
   const userEmail = req.user.email;
   const normalizedItemCode = normalizeItemCode(itemCode);
 
@@ -2486,11 +2650,22 @@ app.post('/loans/borrow', requireAuth, async (req, res) => {
     return res.status(400).json({ message: 'Item is not available' });
   }
 
+  // Wydanie zabiera domyślnie 1 sztukę — nie całą pozycję. Walidujemy wobec
+  // sztuk wciąż dostępnych (ilość łączna − już wydane).
+  const wantQty = Math.max(1, Number(quantity) || 1);
+  const available = await availableUnits(db, item);
+  if (wantQty > available) {
+    return res.status(400).json({
+      message: `Dostępna ${available} szt. tej pozycji — nie można wydać ${wantQty}`
+    });
+  }
+
   const loan = {
     itemId: item._id,
     itemCode: normalizedItemCode,
     userEmail,
-    quantity: 1,
+    userDisplayName: req.user.fullName || req.user.email,
+    quantity: wantQty,
     fromLocation: item.currentLocation,
     targetUseLocation: String(targetUseLocation || '').trim(),
     status: 'active',
@@ -2505,25 +2680,14 @@ app.post('/loans/borrow', requireAuth, async (req, res) => {
 
   const loanResult = await db.collection(collections.loans).insertOne(loan);
 
-  await db.collection(collections.items).updateOne(
-    { _id: item._id },
-    {
-      $set: {
-        operationalStatus: 'loaned',
-        currentLocation: 'U pracownika',
-        assignedToEmail: userEmail,
-        assignedToName: req.user.fullName || req.user.email,
-        updatedAt: new Date()
-      }
-    }
-  );
+  await syncItemAssignment(db, normalizedItemCode);
 
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
     actionType: 'loan_created',
     entityType: 'loan',
     entityId: String(loanResult.insertedId),
-    payload: { itemCode: normalizedItemCode, userEmail },
+    payload: { itemCode: normalizedItemCode, userEmail, quantity: wantQty },
     createdAt: new Date()
   });
 
@@ -2569,30 +2733,22 @@ app.post('/loans/return/:id', requireAuth, async (req, res) => {
     }
   );
 
-  const itemUpdateResult = await db.collection(collections.items).updateOne(
-    { itemCode: String(loan.itemCode || '').trim().toUpperCase() },
-    {
-      $set: {
-        operationalStatus: 'available',
-        currentLocation: String(returnLocation || 'Magazyn').trim(),
-        assignedToEmail: null,
-        assignedToName: null,
-        updatedAt: new Date()
-      }
-    }
+  // Zwrot tej jednej sztuki/paczki → przeliczamy stan pozycji z pozostałych
+  // aktywnych wypożyczeń (inne osoby mogą wciąż trzymać swoje sztuki).
+  const returnLoc = String(returnLocation || 'Magazyn').trim() || 'Magazyn';
+  const normalizedLoanCode = String(loan.itemCode || '').trim().toUpperCase();
+  const itemExists = await db.collection(collections.items).findOne(
+    { itemCode: normalizedLoanCode },
+    { projection: { _id: 1 } }
   );
 
-  console.log('RETURN ITEM UPDATE RESULT', {
-    loanItemCode: loan.itemCode,
-    matchedCount: itemUpdateResult.matchedCount,
-    modifiedCount: itemUpdateResult.modifiedCount
-  });
-
-  if (itemUpdateResult.matchedCount === 0) {
+  if (!itemExists) {
     return res.status(500).json({
       message: `Nie znaleziono sprzętu do zwrotu dla itemCode ${loan.itemCode}`
     });
   }
+
+  await syncItemAssignment(db, normalizedLoanCode, { defaultLocation: returnLoc });
 
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
@@ -2949,7 +3105,8 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     warrantyUntil = '',
     detailedLocation = '',
     isStudioLocked = false,
-    assignedToEmail = ''
+    assignedToEmail = '',
+    assignQuantity
   } = req.body;
 
   if (!category || !name) {
@@ -2984,17 +3141,27 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     }
   }
 
+  const totalQuantity = Math.max(1, Number(quantity) || 1);
+
+  // Ile sztuk wydać od razu wybranej osobie (domyślnie 1 — nie cała pozycja).
+  // Reszta zostaje na stanie i pozostaje dostępna dla innych.
+  const issueQty = assignedUser
+    ? Math.min(totalQuantity, Math.max(1, Number(assignQuantity) || 1))
+    : 0;
+  // Pozycja jest w pełni „u pracownika" tylko gdy wydajemy wszystkie sztuki.
+  const fullyIssued = assignedUser && issueQty >= totalQuantity;
+
   const doc = {
     itemCode: normalizedItemCode,
     category: String(category).trim(),
     name: String(name).trim(),
     details: String(details || '').trim(),
-    quantity: Math.max(1, Number(quantity) || 1),
-    currentLocation: assignedUser ? 'U pracownika' : sourceLocation,
+    quantity: totalQuantity,
+    currentLocation: fullyIssued ? 'U pracownika' : sourceLocation,
     conditionStatus: String(conditionStatus || 'ok').trim(),
-    operationalStatus: assignedUser ? 'loaned' : 'available',
-    assignedToName: assignedUser ? (assignedUser.fullName || assignedUser.email) : null,
-    assignedToEmail: assignedUser ? assignedUser.email : null,
+    operationalStatus: fullyIssued ? 'loaned' : 'available',
+    assignedToName: fullyIssued ? (assignedUser.fullName || assignedUser.email) : null,
+    assignedToEmail: fullyIssued ? assignedUser.email : null,
     notes: String(notes || '').trim(),
     imageUrl: String(imageUrl || '').trim(),
     thumbnailUrl: String(thumbnailUrl || '').trim(),
@@ -3022,14 +3189,15 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
     createdAt: now
   });
 
-  // Sprzęt dodany od razu „na stanie pracownika” = utworzenie wypożyczenia.
+  // Sprzęt dodany od razu „na stanie pracownika” = utworzenie wypożyczenia na
+  // wydaną liczbę sztuk (domyślnie 1). Reszta pozycji zostaje na stanie.
   if (assignedUser) {
     const loan = {
       itemId: result.insertedId,
       itemCode: normalizedItemCode,
       userEmail: assignedUser.email,
       userDisplayName: assignedUser.fullName || assignedUser.email,
-      quantity: 1,
+      quantity: issueQty,
       fromLocation: sourceLocation,
       targetUseLocation: 'U pracownika',
       status: 'active',
@@ -3044,12 +3212,15 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
 
     const loanResult = await db.collection(collections.loans).insertOne(loan);
 
+    // Ustaw operationalStatus/assignedTo wg tego, ile sztuk zostało wolnych.
+    await syncItemAssignment(db, normalizedItemCode, { defaultLocation: sourceLocation });
+
     await db.collection(collections.auditLogs).insertOne({
       actorEmail: req.user.email,
       actionType: 'loan_created',
       entityType: 'loan',
       entityId: String(loanResult.insertedId),
-      payload: { itemCode: normalizedItemCode, userEmail: assignedUser.email },
+      payload: { itemCode: normalizedItemCode, userEmail: assignedUser.email, quantity: issueQty },
       createdAt: now
     });
   }
@@ -3433,31 +3604,50 @@ app.post('/admin/items/:id/discard', requireAuth, requireAdmin, async (req, res)
 // obecnego posiadacza, otwiera nowe dla osoby docelowej, aktualizuje sprzęt
 // (na „U pracownika"), dopisuje audyt i powiadomienie dla administracji.
 // Używane przez transfer admina (panel) oraz transfer pracownika („Mój sprzęt").
-async function performItemTransfer(db, item, targetUser, actor, note) {
+async function performItemTransfer(db, item, targetUser, actor, note, { fromEmail = undefined } = {}) {
   const now = new Date();
   const transferNote = String(note || '').trim();
   const targetEmail = targetUser.email;
   const targetName = targetUser.fullName || targetUser.email;
-  const fromEmail = item.assignedToEmail || null;
+  // Osoba, od której przenosimy: jawnie podana (transfer pracownika) albo
+  // dotychczasowy „jedyny posiadacz" pozycji (transfer admina).
+  const sourceEmail = fromEmail || item.assignedToEmail || null;
   const fromName = item.assignedToName || null;
   const actorEmail = actor.email;
   const actorName = actor.fullName || actor.email;
 
-  // Zamknij aktywne wypożyczenie obecnego posiadacza (jeśli sprzęt był u kogoś).
-  await db.collection(collections.loans).updateMany(
-    { itemCode: item.itemCode, status: 'active' },
-    {
-      $set: {
-        status: 'returned',
-        returnedAt: now,
-        returnLocation: 'Transfer',
-        returnNote: transferNote
-          ? `Przeniesiono na ${targetName}: ${transferNote}`
-          : `Przeniesiono na ${targetName}`,
-        closedByEmail: actorEmail
+  // Zamknij aktywne wypożyczenia TYLKO osoby źródłowej i policz jej sztuki.
+  const sourceLoans = sourceEmail
+    ? await db.collection(collections.loans)
+        .find({ itemCode: item.itemCode, userEmail: sourceEmail, status: 'active' }, { projection: { quantity: 1 } })
+        .toArray()
+    : [];
+  const closedQty = sourceLoans.reduce((sum, l) => sum + (Number(l.quantity) || 1), 0);
+
+  if (sourceEmail) {
+    await db.collection(collections.loans).updateMany(
+      { itemCode: item.itemCode, userEmail: sourceEmail, status: 'active' },
+      {
+        $set: {
+          status: 'returned',
+          returnedAt: now,
+          returnLocation: 'Transfer',
+          returnNote: transferNote
+            ? `Przeniesiono na ${targetName}: ${transferNote}`
+            : `Przeniesiono na ${targetName}`,
+          closedByEmail: actorEmail
+        }
       }
-    }
-  );
+    );
+  }
+
+  // Ile sztuk przenosimy: tyle, ile trzymała osoba źródłowa (z wypożyczeń);
+  // dla legacy (przypisanie „na sztywno" bez wypożyczenia) — całą ilość pozycji;
+  // przy transferze „z magazynu" — 1 sztukę.
+  const isLegacyHolder = closedQty === 0 && item.assignedToEmail === sourceEmail && !!sourceEmail;
+  const transferQty = closedQty > 0
+    ? closedQty
+    : (isLegacyHolder ? Math.max(1, Number(item.quantity) || 1) : 1);
 
   // Otwórz nowe wypożyczenie dla osoby docelowej.
   const loan = {
@@ -3465,7 +3655,7 @@ async function performItemTransfer(db, item, targetUser, actor, note) {
     itemCode: item.itemCode,
     userEmail: targetEmail,
     userDisplayName: targetName,
-    quantity: 1,
+    quantity: transferQty,
     fromLocation: item.currentLocation || 'Transfer',
     targetUseLocation: 'U pracownika',
     status: 'active',
@@ -3473,8 +3663,8 @@ async function performItemTransfer(db, item, targetUser, actor, note) {
     dueAt: null,
     returnedAt: null,
     borrowNote: transferNote
-      ? `Transfer od ${fromName || fromEmail || 'magazynu'}: ${transferNote}`
-      : `Transfer od ${fromName || fromEmail || 'magazynu'}`,
+      ? `Transfer od ${fromName || sourceEmail || 'magazynu'}: ${transferNote}`
+      : `Transfer od ${fromName || sourceEmail || 'magazynu'}`,
     returnNote: null,
     createdByEmail: actorEmail,
     closedByEmail: null
@@ -3482,19 +3672,16 @@ async function performItemTransfer(db, item, targetUser, actor, note) {
 
   const loanResult = await db.collection(collections.loans).insertOne(loan);
 
-  await db.collection(collections.items).updateOne(
-    { _id: item._id },
-    {
-      $set: {
-        operationalStatus: 'loaned',
-        currentLocation: 'U pracownika',
-        assignedToEmail: targetEmail,
-        assignedToName: targetName,
-        updatedAt: now
-      }
-    }
-  );
+  // Legacy: wyczyść przypisanie „na sztywno", bo teraz źródłem prawdy są wypożyczenia.
+  if (isLegacyHolder) {
+    await db.collection(collections.items).updateOne(
+      { _id: item._id },
+      { $set: { assignedToEmail: null, assignedToName: null } }
+    );
+  }
 
+  // Przelicz stan pozycji z aktywnych wypożyczeń (może wciąż mieć wolne sztuki).
+  await syncItemAssignment(db, item.itemCode);
   await db.collection(collections.auditLogs).insertOne({
     actorEmail,
     actionType: 'item_transferred',
@@ -3503,7 +3690,7 @@ async function performItemTransfer(db, item, targetUser, actor, note) {
     payload: {
       itemCode: item.itemCode,
       itemName: item.name,
-      fromEmail,
+      fromEmail: sourceEmail,
       fromName,
       toEmail: targetEmail,
       toName: targetName,
@@ -3518,7 +3705,7 @@ async function performItemTransfer(db, item, targetUser, actor, note) {
     status: 'open',
     itemCode: item.itemCode,
     itemName: item.name,
-    fromEmail,
+    fromEmail: sourceEmail,
     fromName,
     toEmail: targetEmail,
     toName: targetName,
@@ -3731,10 +3918,15 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
     return res.status(400).json({ message: 'Sprzęt nie jest już dostępny' });
   }
 
+  if ((await availableUnits(db, item)) < 1) {
+    return res.status(400).json({ message: 'Brak dostępnych sztuk tej pozycji' });
+  }
+
   const loan = {
     itemId: item._id,
     itemCode: requestDoc.itemCode,
     userEmail: requestDoc.requesterEmail,
+    userDisplayName: requestDoc.requesterName || requestDoc.requesterEmail,
     quantity: 1,
     fromLocation: item.currentLocation,
     targetUseLocation: requestDoc.targetUseLocation || 'Dom',
@@ -3762,18 +3954,8 @@ app.post('/admin/loan-requests/:id/approve', requireAuth, requireAdmin, async (r
     }
   );
 
-  await db.collection(collections.items).updateOne(
-    { _id: item._id },
-    {
-      $set: {
-        operationalStatus: 'loaned',
-        currentLocation: 'U pracownika',
-        assignedToEmail: requestDoc.requesterEmail,
-        assignedToName: requestDoc.requesterName || null,
-        updatedAt: new Date()
-      }
-    }
-  );
+  // Wydanie 1 sztuki — pozostałe sztuki pozycji zostają na stanie.
+  await syncItemAssignment(db, requestDoc.itemCode);
 
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email,
@@ -4102,6 +4284,206 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
     .toArray();
 
   res.json(logs);
+});
+
+// === Turbo Weekend: API =====================================================
+
+// Jednorazowy (per proces) seed startowej listy pakowania, gdy kolekcja pusta.
+// Middleware bootujący biegnie po trasach, więc seedujemy leniwie z endpointów.
+let packingSeedPromise = null;
+function ensurePackingSeed(db) {
+  if (!packingSeedPromise) {
+    packingSeedPromise = (async () => {
+      const count = await db.collection(collections.packingItems).countDocuments({});
+      if (count > 0) return;
+      const now = new Date();
+      await db.collection(collections.packingItems).insertMany(
+        DEFAULT_PACKING_ITEMS.map((it, i) => ({
+          name: it.name,
+          unit: it.unit || 'szt.',
+          mode: it.mode,
+          perPerson: it.mode === 'per_person' ? it.value : null,
+          fixed: it.mode === 'fixed' ? it.value : null,
+          roundUpTo: it.roundUpTo || 1,
+          category: it.category || 'Materiały',
+          sortOrder: i,
+          isActive: true,
+          createdAt: now,
+          updatedAt: now
+        }))
+      );
+    })().catch((err) => { packingSeedPromise = null; throw err; });
+  }
+  return packingSeedPromise;
+}
+
+// Normalizacja pozycji listy pakowania z body (create/update).
+function normalizePackingBody(body) {
+  const mode = body?.mode === 'fixed' ? 'fixed' : 'per_person';
+  const doc = {
+    name: String(body?.name || '').trim(),
+    unit: String(body?.unit || 'szt.').trim() || 'szt.',
+    mode,
+    perPerson: mode === 'per_person' ? Math.max(0, Number(body?.perPerson) || 0) : null,
+    fixed: mode === 'fixed' ? Math.max(0, Math.round(Number(body?.fixed) || 0)) : null,
+    roundUpTo: Math.max(1, Math.round(Number(body?.roundUpTo) || 1)),
+    category: String(body?.category || 'Materiały').trim() || 'Materiały'
+  };
+  return doc;
+}
+
+// Lista eventów TW (dla mapy i listy busów).
+app.get('/tw', requireAuth, async (_req, res) => {
+  const db = await getDb();
+  const list = await db.collection(collections.turboWeekends)
+    .find({ isActive: { $ne: false } })
+    .sort({ eventDate: 1, city: 1 })
+    .toArray();
+  res.json(list);
+});
+
+// Wyliczenie listy pakowania dla konkretnego TW (wg liczby uczestników).
+app.get('/tw/:id/packing', requireAuth, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const tw = await db.collection(collections.turboWeekends).findOne({ _id: id });
+  if (!tw) return res.status(404).json({ message: 'Nie znaleziono Turbo Weekendu' });
+
+  await ensurePackingSeed(db);
+  const participants = Math.max(0, Number(tw.participants) || 0);
+  const items = await db.collection(collections.packingItems)
+    .find({ isActive: { $ne: false } })
+    .sort({ sortOrder: 1, name: 1 })
+    .toArray();
+
+  const packing = items.map(it => ({
+    _id: it._id,
+    name: it.name,
+    unit: it.unit || 'szt.',
+    mode: it.mode,
+    perPerson: it.perPerson,
+    fixed: it.fixed,
+    roundUpTo: it.roundUpTo || 1,
+    category: it.category || 'Materiały',
+    quantity: computePackingQuantity(it, participants)
+  }));
+
+  res.json({
+    turboWeekend: {
+      _id: tw._id, city: tw.city, region: tw.region || '', eventDate: tw.eventDate || '',
+      participants, bus: tw.bus || '', notes: tw.notes || ''
+    },
+    participants,
+    items: packing
+  });
+});
+
+// --- Admin: eventy TW ---
+app.post('/admin/tw', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const { city, region = '', eventDate = '', participants, lat, lng, bus = '', notes = '' } = req.body || {};
+  if (!String(city || '').trim()) return res.status(400).json({ message: 'Miasto jest wymagane' });
+
+  const now = new Date();
+  const doc = {
+    city: String(city).trim(),
+    region: String(region || '').trim(),
+    eventDate: String(eventDate || '').trim(),
+    participants: Math.max(0, Math.round(Number(participants) || 0)),
+    lat: lat != null && lat !== '' ? Number(lat) : null,
+    lng: lng != null && lng !== '' ? Number(lng) : null,
+    bus: String(bus || '').trim(),
+    notes: String(notes || '').trim(),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  const result = await db.collection(collections.turboWeekends).insertOne(doc);
+  res.status(201).json({ _id: result.insertedId, ...doc });
+});
+
+app.patch('/admin/tw/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const b = req.body || {};
+  const update = { updatedAt: new Date() };
+  if (b.city !== undefined) update.city = String(b.city || '').trim();
+  if (b.region !== undefined) update.region = String(b.region || '').trim();
+  if (b.eventDate !== undefined) update.eventDate = String(b.eventDate || '').trim();
+  if (b.participants !== undefined) update.participants = Math.max(0, Math.round(Number(b.participants) || 0));
+  if (b.lat !== undefined) update.lat = b.lat === '' || b.lat == null ? null : Number(b.lat);
+  if (b.lng !== undefined) update.lng = b.lng === '' || b.lng == null ? null : Number(b.lng);
+  if (b.bus !== undefined) update.bus = String(b.bus || '').trim();
+  if (b.notes !== undefined) update.notes = String(b.notes || '').trim();
+
+  const result = await db.collection(collections.turboWeekends).findOneAndUpdate(
+    { _id: id }, { $set: update }, { returnDocument: 'after' }
+  );
+  const doc = result?.value || result;
+  if (!doc) return res.status(404).json({ message: 'Nie znaleziono Turbo Weekendu' });
+  res.json(doc);
+});
+
+app.delete('/admin/tw/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+  await db.collection(collections.turboWeekends).deleteOne({ _id: id });
+  res.json({ message: 'Usunięto' });
+});
+
+// --- Lista pakowania ---
+app.get('/packing-items', requireAuth, async (_req, res) => {
+  const db = await getDb();
+  await ensurePackingSeed(db);
+  const items = await db.collection(collections.packingItems)
+    .find({ isActive: { $ne: false } })
+    .sort({ sortOrder: 1, name: 1 })
+    .toArray();
+  res.json(items);
+});
+
+app.post('/admin/packing-items', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const doc = normalizePackingBody(req.body);
+  if (!doc.name) return res.status(400).json({ message: 'Nazwa jest wymagana' });
+
+  const now = new Date();
+  const last = await db.collection(collections.packingItems).find({}).sort({ sortOrder: -1 }).limit(1).toArray();
+  const sortOrder = (last[0]?.sortOrder ?? -1) + 1;
+
+  const result = await db.collection(collections.packingItems).insertOne({
+    ...doc, sortOrder, isActive: true, createdAt: now, updatedAt: now
+  });
+  res.status(201).json({ _id: result.insertedId, ...doc, sortOrder });
+});
+
+app.patch('/admin/packing-items/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+
+  const doc = normalizePackingBody(req.body);
+  if (!doc.name) return res.status(400).json({ message: 'Nazwa jest wymagana' });
+
+  const result = await db.collection(collections.packingItems).findOneAndUpdate(
+    { _id: id }, { $set: { ...doc, updatedAt: new Date() } }, { returnDocument: 'after' }
+  );
+  const updated = result?.value || result;
+  if (!updated) return res.status(404).json({ message: 'Nie znaleziono pozycji' });
+  res.json(updated);
+});
+
+app.delete('/admin/packing-items/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
+  await db.collection(collections.packingItems).deleteOne({ _id: id });
+  res.json({ message: 'Usunięto' });
 });
 
 let bootPromise = null;
