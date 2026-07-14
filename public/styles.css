@@ -2927,15 +2927,15 @@ th {
 .tw-toolbar p { margin: 0; }
 
 .tw-body {
-  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(320px, 460px);
-  gap: 22px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+  gap: 22px; max-width: 1100px;
 }
 @media (max-width: 900px) { .tw-body { grid-template-columns: 1fr; } }
 
 .tw-map-wrap {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px; position: sticky; top: 18px;
-  align-self: start;
+  align-self: start; max-width: 520px;
 }
 .tw-map { width: 100%; }
 .tw-map-svg { width: 100%; height: auto; display: block; }
