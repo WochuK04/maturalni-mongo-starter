@@ -784,18 +784,69 @@ app.get('/warehouse/moves-report', requireAuth, requireWarehouseRead, async (req
   const itemByCode = new Map(items.map(it => [it.itemCode, it]));
 
   // Tylko ruchy towarów magazynowych (jak w historii ruchów).
-  const warehouseMoves = moves.filter(m => isWarehouseCategory(itemByCode.get(m.itemCode)?.category));
+  let warehouseMoves = moves.filter(m => isWarehouseCategory(itemByCode.get(m.itemCode)?.category));
+
+  // Filtr kategorii (opcjonalny).
+  const categoryFilter = String(req.query.category || '').trim().toLowerCase();
+  if (categoryFilter) {
+    warehouseMoves = warehouseMoves.filter(m => {
+      const cat = String(itemByCode.get(m.itemCode)?.category || '').trim().toLowerCase();
+      return cat === categoryFilter;
+    });
+  }
 
   const summary = summarizeMovesByKind(warehouseMoves);
+
+  // Zbierz unikalne kategorie do filtra w UI.
+  const categories = [...new Set(
+    items.filter(it => isWarehouseCategory(it.category)).map(it => it.category)
+  )].sort((a, b) => String(a).localeCompare(String(b), 'pl'));
+
+  // Ceny partii: pobierz operacje powiązane z ruchami, by odczytać ceny FIFO.
+  const operationIds = [...new Set(warehouseMoves.map(m => m.operationId).filter(Boolean))];
+  const operations = operationIds.length
+    ? await db.collection(collections.stockOperations)
+        .find({ _id: { $in: operationIds.map(id => { try { return new ObjectId(id); } catch { return null; } }).filter(Boolean) } },
+          { projection: { type: 1, lines: 1, deliveryDetail: 1, scrapDetail: 1, conversionDetail: 1 } })
+        .toArray()
+    : [];
+  const opById = new Map(operations.map(o => [String(o._id), o]));
 
   const LIMIT = 1000;
   const rows = warehouseMoves.slice(0, LIMIT).map(m => {
     const fromLoc = m.fromLocationId ? locById.get(m.fromLocationId) : null;
     const toLoc = m.toLocationId ? locById.get(m.toLocationId) : null;
+    const item = itemByCode.get(m.itemCode);
+
+    let priceBatches = null;
+    const op = m.operationId ? opById.get(m.operationId) : null;
+    if (op) {
+      if (op.type === 'receipt') {
+        const ln = (op.lines || []).find(l => l.itemCode === m.itemCode);
+        if (ln && ln.unitPrice != null) priceBatches = [{ qty: m.quantity, unitPrice: Number(ln.unitPrice) }];
+      } else if (op.type === 'delivery' && Array.isArray(op.deliveryDetail)) {
+        const d = op.deliveryDetail.find(x => x.itemCode === m.itemCode);
+        if (d?.consumed?.length) priceBatches = d.consumed.map(c => ({ qty: c.qty, unitPrice: c.unitPrice }));
+      } else if (op.type === 'scrap' && Array.isArray(op.scrapDetail)) {
+        const d = op.scrapDetail.find(x => x.itemCode === m.itemCode);
+        if (d?.consumed?.length) priceBatches = d.consumed.map(c => ({ qty: c.qty, unitPrice: c.unitPrice }));
+      } else if (op.type === 'conversion' && Array.isArray(op.conversionDetail)) {
+        const d = op.conversionDetail.find(x => x.sourceCode === m.itemCode || x.targetCode === m.itemCode);
+        if (d) {
+          if (d.sourceCode === m.itemCode && d.consumed?.length) {
+            priceBatches = d.consumed.map(c => ({ qty: c.qty, unitPrice: c.unitPrice }));
+          } else if (d.targetCode === m.itemCode && d.producedUnit != null) {
+            priceBatches = [{ qty: d.qty, unitPrice: d.producedUnit }];
+          }
+        }
+      }
+    }
+
     return {
       id: String(m._id),
       itemCode: m.itemCode,
-      itemName: itemByCode.get(m.itemCode)?.name || '',
+      itemName: item?.name || '',
+      itemCategory: item?.category || '',
       fromName: fromLoc?.name || null,
       toName: toLoc?.name || null,
       quantity: m.quantity,
@@ -803,7 +854,8 @@ app.get('/warehouse/moves-report', requireAuth, requireWarehouseRead, async (req
       kind: m.kind || 'internal',
       actorEmail: m.actorEmail || null,
       note: m.note || '',
-      doneAt: m.doneAt || m.createdAt || null
+      doneAt: m.doneAt || m.createdAt || null,
+      priceBatches
     };
   });
 
@@ -811,6 +863,7 @@ app.get('/warehouse/moves-report', requireAuth, requireWarehouseRead, async (req
     from: from.toISOString(),
     to: to.toISOString(),
     ...summary,
+    categories,
     rows,
     truncated: warehouseMoves.length > LIMIT
   });

@@ -57,7 +57,7 @@ export const STANDARD_LOCATIONS = [
   { code: 'VIRT/Inventory', name: 'Korekta stanu (wirtualna)', kind: LOCATION_KINDS.INVENTORY, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Scrap', name: 'Złom / wybrakowane', kind: LOCATION_KINDS.SCRAP, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Suppliers', name: 'Dostawcy (przyjęcia)', kind: LOCATION_KINDS.SUPPLIER, parentCode: 'VIRT', matchName: null },
-  { code: 'VIRT/Conversion', name: 'Przetworzenie (towar→gadżet)', kind: LOCATION_KINDS.CONVERSION, parentCode: 'VIRT', matchName: null },
+  { code: 'VIRT/Conversion', name: 'Przetworzenie (konwersja)', kind: LOCATION_KINDS.CONVERSION, parentCode: 'VIRT', matchName: null },
   { code: 'VIRT/Customers', name: 'Wydania / odbiorcy', kind: LOCATION_KINDS.CUSTOMER, parentCode: 'VIRT', matchName: null }
 ];
 
@@ -356,9 +356,9 @@ export const OPERATION_TYPES = {
   internal:   { label: 'Przesunięcie wewnętrzne', group: 'Przekazy', prefix: 'mag/INT', defaultFrom: 'WH/Stock',       defaultTo: 'WH/Studio' },
   scrap:      { label: 'Odpad',                 group: 'Korekty',  prefix: 'mag/SCRAP', defaultFrom: 'WH/Stock',       defaultTo: 'VIRT/Scrap' },
   adjustment: { label: 'Inwentarz fizyczny',    group: 'Korekty',  prefix: 'mag/ADJ',   defaultFrom: null,             defaultTo: 'WH/Stock' },
-  // Konwersja (przeklasyfikowanie towar→gadżet): zdejmuje towar z Magazynu i tworzy
-  // tyle samo gadżetu, przenosząc koszt jednostkowy (potrzebny do progu „prezentów
-  // małej wartości" w VAT). Pozycja ma dodatkowe pole `targetItemCode` (gadżet-cel).
+  // Konwersja (przeklasyfikowanie między kategoriami, np. towar↔gadżet): zdejmuje
+  // źródło z Magazynu i tworzy tyle samo produktu docelowego, przenosząc koszt
+  // jednostkowy. Pozycja ma dodatkowe pole `targetItemCode`.
   conversion: { label: 'Konwersja',             group: 'Przetworzenie', prefix: 'mag/CONV', defaultFrom: 'WH/Stock',  defaultTo: 'WH/Stock' }
 };
 
@@ -534,19 +534,19 @@ export async function validateOperation(db, operationId, actorEmail) {
       adjustmentNetDiff.set(itemCode, (adjustmentNetDiff.get(itemCode) || 0) + diff);
     }
   } else if (op.type === 'conversion') {
-    // Przeklasyfikowanie: dla każdej pozycji zdejmij `quantity` towaru z Magazynu
-    // (Magazyn → VIRT/Conversion) i utwórz tyle samo gadżetu (VIRT/Conversion →
+    // Przeklasyfikowanie: dla każdej pozycji zdejmij `quantity` źródła z Magazynu
+    // (Magazyn → VIRT/Conversion) i utwórz tyle samo celu (VIRT/Conversion →
     // Magazyn). Dwa spięte ruchy; koszt przeniesie applyConversionBatches.
     const stock = await locationByCode(db, 'WH/Stock');
     if (!stock) throw new Error('Brak lokalizacji magazynu (WH/Stock)');
-    const conv = await ensureVirtualLocation(db, 'VIRT/Conversion', 'Przetworzenie (towar→gadżet)', LOCATION_KINDS.CONVERSION);
+    const conv = await ensureVirtualLocation(db, 'VIRT/Conversion', 'Przetworzenie (konwersja)', LOCATION_KINDS.CONVERSION);
 
     for (const ln of lines) {
       const sourceCode = String(ln.itemCode || '').trim();
       const targetCode = String(ln.targetItemCode || '').trim();
       const qty = Number(ln.quantity);
-      if (!sourceCode || !targetCode) throw new Error('Pozycja konwersji wymaga towaru i gadżetu');
-      if (sourceCode === targetCode) throw new Error('Towar i gadżet muszą być różne');
+      if (!sourceCode || !targetCode) throw new Error('Pozycja konwersji wymaga produktu źródłowego i docelowego');
+      if (sourceCode === targetCode) throw new Error('Produkt źródłowy i docelowy muszą być różne');
       if (!Number.isFinite(qty) || qty <= 0) throw new Error(`Niepoprawna ilość dla ${sourceCode}`);
 
       const avail = await onHandAt(db, sourceCode, String(stock._id), null);
