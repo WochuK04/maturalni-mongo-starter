@@ -6,7 +6,8 @@
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
     "import:excel": "node scripts/import-excel.js",
-    "backfill:emails": "node scripts/backfill-person-emails.js"
+    "backfill:emails": "node scripts/backfill-person-emails.js",
+    "rename:codes": "node scripts/rename-product-codes.js"
   },
   "dependencies": {
     "connect-mongo": "^5.1.0",

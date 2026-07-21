@@ -207,6 +207,7 @@ const whValuationContent = document.getElementById('whValuationContent');
 const whPeriodFrom = document.getElementById('whPeriodFrom');
 const whPeriodTo = document.getElementById('whPeriodTo');
 const whPeriodKind = document.getElementById('whPeriodKind');
+const whPeriodCategory = document.getElementById('whPeriodCategory');
 const whPeriodExport = document.getElementById('whPeriodExport');
 const whPeriodSummary = document.getElementById('whPeriodSummary');
 const whPeriodContent = document.getElementById('whPeriodContent');
@@ -3402,13 +3403,12 @@ function addOperationLine(line = {}) {
       <input class="op-line-price" type="number" min="0" step="0.01" value="${line.unitPrice ?? ''}" placeholder="0,00" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else if (isConversion) {
-    // Towar (źródło, tylko kat. „towar", z dostępnym stanem) → gadżet (cel, tylko
-    // kat. „gadżet" + tworzenie). Ilość ograniczona dostępnym stanem towaru.
+    // Konwersja w dowolnym kierunku — źródło z dostępnym stanem, cel z możliwością tworzenia.
     const srcMax = line.itemCode ? itemOnHand(line.itemCode) : 0;
     row.innerHTML = `
-      <select class="op-line-item">${itemOptions(line.itemCode, false, 'towar', true)}</select>
-      <select class="op-line-target" style="flex:1">${itemOptions(line.targetItemCode, true, 'gadżet')}</select>
-      <input class="op-line-qty" type="number" min="1"${srcMax ? ` max="${srcMax}"` : ''} value="${line.quantity ?? 1}" title="${srcMax ? `Dostępne na Magazynie: ${srcMax}` : 'Wybierz towar'}" />
+      <select class="op-line-item">${itemOptions(line.itemCode, false, null, true)}</select>
+      <select class="op-line-target" style="flex:1">${itemOptions(line.targetItemCode, true, null)}</select>
+      <input class="op-line-qty" type="number" min="1"${srcMax ? ` max="${srcMax}"` : ''} value="${line.quantity ?? 1}" title="${srcMax ? `Dostępne na Magazynie: ${srcMax}` : 'Wybierz produkt'}" />
       <button type="button" class="btn btn-secondary op-line-remove" aria-label="Usuń pozycję">×</button>`;
   } else {
     row.innerHTML = `
@@ -3428,7 +3428,7 @@ function addOperationLine(line = {}) {
       if (qty) {
         if (max > 0) { qty.max = max; if (Number(qty.value) > max) qty.value = max; }
         else qty.removeAttribute('max');
-        qty.title = sel.value ? `Dostępne na Magazynie: ${max}` : 'Wybierz towar';
+        qty.title = sel.value ? `Dostępne na Magazynie: ${max}` : 'Wybierz produkt';
       }
     }
     refreshOperationStockPanel();
@@ -3440,7 +3440,9 @@ function addOperationLine(line = {}) {
       tgtSel.value = '';
       const srcCode = row.querySelector('.op-line-item')?.value || '';
       const srcItem = (warehouseFormData?.items || []).find(it => it.itemCode === srcCode);
-      openNewProductModal(tgtSel, { name: srcItem?.name || '', category: 'gadżet' });
+      const srcCat = String(srcItem?.category || '').trim().toLowerCase();
+      const targetCat = srcCat === 'gadżet' ? 'towar' : 'gadżet';
+      openNewProductModal(tgtSel, { name: srcItem?.name || '', category: targetCat });
       return;
     }
     refreshOperationStockPanel();
@@ -3453,12 +3455,12 @@ function renderOperationLinesHead() {
   operationLinesHead.innerHTML =
     warehouseOpType === 'adjustment' ? '<span>Sprzęt</span><span>Lokalizacja</span><span>Policzono</span><span></span>'
     : warehouseOpType === 'receipt' ? '<span>Produkt</span><span>Ilość</span><span>Cena (zł)</span><span></span>'
-    : warehouseOpType === 'conversion' ? '<span>Towar (źródło)</span><span style="flex:1">Gadżet (cel)</span><span>Ilość</span><span></span>'
+    : warehouseOpType === 'conversion' ? '<span>Źródło</span><span style="flex:1">Cel</span><span>Ilość</span><span></span>'
     : '<span>Sprzęt</span><span>Ilość</span><span></span>';
 }
 
 async function openOperationModal(type, id = null) {
-  await fetchWarehouseFormData();
+  await fetchWarehouseFormData(true);
   warehouseOpType = type;
   currentOperation = { id, type, state: id ? null : 'draft' };
 
@@ -4336,6 +4338,16 @@ function ensureMovesReportControls() {
       .concat(Object.entries(MOVE_KIND_LABELS).map(([k, label]) =>
         `<option value="${escapeHtml(k)}">${escapeHtml(label)}</option>`)).join('');
   }
+  if (whPeriodCategory && !whPeriodCategory.options.length) {
+    whPeriodCategory.innerHTML = '<option value="">Wszystkie kategorie</option>';
+  }
+}
+
+function updateCategoryFilter(categories) {
+  if (!whPeriodCategory || !Array.isArray(categories)) return;
+  const current = whPeriodCategory.value;
+  whPeriodCategory.innerHTML = '<option value="">Wszystkie kategorie</option>' +
+    categories.map(c => `<option value="${escapeHtml(c)}"${c === current ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
 }
 
 async function loadWarehouseMovesReport() {
@@ -4344,8 +4356,10 @@ async function loadWarehouseMovesReport() {
   if (whPeriodFrom?.value) params.set('from', whPeriodFrom.value);
   if (whPeriodTo?.value) params.set('to', whPeriodTo.value);
   if (whPeriodKind?.value) params.set('kind', whPeriodKind.value);
+  if (whPeriodCategory?.value) params.set('category', whPeriodCategory.value);
   warehouseMovesReportState = await api(`/warehouse/moves-report?${params.toString()}`);
   if (whPeriodExport) whPeriodExport.disabled = !(warehouseMovesReportState?.rows || []).length;
+  updateCategoryFilter(warehouseMovesReportState?.categories);
   renderWarehouseMovesReport(warehouseMovesReportState);
 }
 
@@ -4383,25 +4397,40 @@ function renderWarehouseMovesReport(data) {
     }
   }
 
-  // Lista szczegółowa (te same kolumny co Historia ruchów).
+  // Lista szczegółowa z kategorią i cenami partii.
   if (!rows.length) { renderEmpty(whPeriodContent, 'Brak ruchów w wybranym okresie.'); return; }
   const table = document.createElement('table');
   table.innerHTML = `
     <thead><tr>
-      <th>Data</th><th>Sprzęt</th><th>Kod</th><th>Z</th><th>Do</th><th>Ilość</th><th>Rodzaj</th><th>Osoba</th>
+      <th>Data</th><th>Sprzęt</th><th>Kod</th><th>Kategoria</th><th>Z</th><th>Do</th><th>Ilość</th><th>Cena / partia</th><th>Rodzaj</th><th>Osoba</th>
     </tr></thead>`;
   const tbody = document.createElement('tbody');
-  tbody.innerHTML = rows.map(m => `
+  tbody.innerHTML = rows.map(m => {
+    let priceCell = '—';
+    if (Array.isArray(m.priceBatches) && m.priceBatches.length) {
+      if (m.priceBatches.length === 1) {
+        const b = m.priceBatches[0];
+        priceCell = `${escapeHtml(Number(b.unitPrice).toFixed(2))} zł`;
+      } else {
+        priceCell = m.priceBatches.map(b =>
+          `${escapeHtml(b.qty)} szt. × ${escapeHtml(Number(b.unitPrice).toFixed(2))} zł`
+        ).join('<br>');
+      }
+    }
+    return `
     <tr>
       <td>${escapeHtml(formatDateTime(m.doneAt))}</td>
       <td>${escapeHtml(m.itemName || '—')}</td>
       <td>${escapeHtml(m.itemCode || '—')}</td>
+      <td>${escapeHtml(m.itemCategory || '—')}</td>
       <td>${escapeHtml(m.fromName || '—')}</td>
       <td>${escapeHtml(m.toName || '—')}</td>
       <td>${escapeHtml(m.quantity)}</td>
+      <td>${priceCell}</td>
       <td>${escapeHtml(MOVE_KIND_LABELS[m.kind] || m.kind || '—')}</td>
       <td class="muted">${escapeHtml(m.actorEmail || '—')}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   table.appendChild(tbody);
   whPeriodContent.innerHTML = '';
   if (data.truncated) {
@@ -4416,12 +4445,32 @@ function renderWarehouseMovesReport(data) {
 function exportWarehouseMovesReportCsv() {
   const rows = warehouseMovesReportState?.rows || [];
   if (!rows.length) { showToast('Brak ruchów do eksportu.'); return; }
-  const headers = ['Data', 'Sprzet', 'Kod', 'Z', 'Do', 'Ilosc', 'Rodzaj', 'Osoba'];
-  const data = rows.map(m => [
-    formatDateTime(m.doneAt), m.itemName || '', m.itemCode || '', m.fromName || '', m.toName || '',
-    m.quantity ?? 0, MOVE_KIND_LABELS[m.kind] || m.kind || '', m.actorEmail || ''
-  ]);
-  downloadCsv(`magazyn-ruchy-okres-${csvDateStamp()}.csv`, buildCsv(headers, data));
+  const headers = ['Data', 'Sprzet', 'Kod', 'Kategoria', 'Z', 'Do', 'Ilosc', 'Cena jednostkowa', 'Wartosc', 'Partie cenowe', 'Rodzaj', 'Osoba'];
+  const csvRows = [];
+  for (const m of rows) {
+    const batches = Array.isArray(m.priceBatches) && m.priceBatches.length ? m.priceBatches : null;
+    if (batches && batches.length > 1) {
+      for (const b of batches) {
+        csvRows.push([
+          formatDateTime(m.doneAt), m.itemName || '', m.itemCode || '', m.itemCategory || '',
+          m.fromName || '', m.toName || '', b.qty,
+          Number(b.unitPrice).toFixed(2), (b.qty * Number(b.unitPrice)).toFixed(2),
+          `${b.qty} szt. x ${Number(b.unitPrice).toFixed(2)} zl`,
+          MOVE_KIND_LABELS[m.kind] || m.kind || '', m.actorEmail || ''
+        ]);
+      }
+    } else {
+      const up = batches ? Number(batches[0].unitPrice).toFixed(2) : '';
+      const val = batches ? ((m.quantity ?? 0) * Number(batches[0].unitPrice)).toFixed(2) : '';
+      csvRows.push([
+        formatDateTime(m.doneAt), m.itemName || '', m.itemCode || '', m.itemCategory || '',
+        m.fromName || '', m.toName || '', m.quantity ?? 0,
+        up, val, '',
+        MOVE_KIND_LABELS[m.kind] || m.kind || '', m.actorEmail || ''
+      ]);
+    }
+  }
+  downloadCsv(`magazyn-ruchy-okres-${csvDateStamp()}.csv`, buildCsv(headers, csvRows));
 }
 
 // --- Raport progu „prezent ≤20 zł" (VAT) ---
@@ -4861,6 +4910,7 @@ if (whValuationExport) whValuationExport.addEventListener('click', exportWarehou
 if (whPeriodFrom) whPeriodFrom.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
 if (whPeriodTo) whPeriodTo.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
 if (whPeriodKind) whPeriodKind.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
+if (whPeriodCategory) whPeriodCategory.addEventListener('change', () => loadWarehouseMovesReport().catch(err => showToast(err.message)));
 if (whPeriodExport) whPeriodExport.addEventListener('click', exportWarehouseMovesReportCsv);
 if (whGiftThreshold) whGiftThreshold.addEventListener('change', () => loadWarehouseGiftReport().catch(err => showToast(err.message)));
 if (whGiftExport) whGiftExport.addEventListener('click', exportWarehouseGiftCsv);
