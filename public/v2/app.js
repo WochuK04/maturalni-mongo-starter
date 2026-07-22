@@ -200,7 +200,7 @@
     if (view === 'pulpit') return loadPulpit();
     if (view === 'available') return loadAvailable();
     if (view === 'mojsprzet') return loadMine();
-    if (view === 'skrzynka') { loadInbox(); loadHistory(); return; }
+    if (view === 'skrzynka') { loadInbox(); loadMyRequests(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
     if (view === 'stats') return loadStats();
     if (view === 'admin') return loadAdminItems();
@@ -334,31 +334,102 @@
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
   }
 
-  // ---- Skrzynka (action items)
+  // ---- Skrzynka: wnioski (decyzje + moje) z pełnym obiegiem i komentarzami
+  function reqBadge(r) {
+    return r.kind === 'purchase' ? '<span class="chip chip-orange">Zakup</span>' : '<span class="chip chip-blue">Wypożyczenie</span>';
+  }
+  // Akcje wg statusu/rodzaju — odwzorowanie getActionConfig z v1 (routing po STATUSIE).
+  function reqActionsFor(r) {
+    const purchase = r.kind === 'purchase'; const st = r.status;
+    if (st === 'pending_manager') return [{ key: 'mgr-approve', label: 'Przekaż do administracji', cls: 'btn-primary' }, { key: 'mgr-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }];
+    if (st === 'pending_admin' || st === 'pending') return purchase
+      ? [{ key: 'adm-approve', label: 'Zatwierdź zakup', cls: 'btn-primary' }, { key: 'adm-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }]
+      : [{ key: 'adm-approve', label: 'Wydaj sprzęt', cls: 'btn-primary' }, { key: 'adm-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }];
+    if (purchase && st === 'to_order') return [{ key: 'order', label: 'Oznacz jako zamówiony', cls: 'btn-primary' }, { key: 'cancel-purchase', label: 'Anuluj zakup', cls: 'btn-danger-ghost' }];
+    if (purchase && st === 'ordered') return [{ key: 'stock', label: 'Dodaj do magazynu', cls: 'btn-primary' }, { key: 'cancel-purchase', label: 'Anuluj zakup', cls: 'btn-danger-ghost' }];
+    return [];
+  }
+  function reqMetaLine(r) {
+    const bits = [];
+    bits.push('Wnioskujący: ' + esc(r.requesterName || r.requesterEmail || '—'));
+    bits.push(esc(fmtDate(r.requestedAt)));
+    if (r.purpose) bits.push(esc(r.purpose));
+    if (r.kind === 'purchase' && r.justification) bits.push(esc(r.justification));
+    if (r.decisionNote) bits.push('Uwaga: ' + esc(r.decisionNote));
+    return bits.join(' · ');
+  }
+  function requestCard(r, mode) {
+    const decide = mode === 'decide';
+    const actions = decide ? reqActionsFor(r) : [];
+    const canCancel = mode === 'mine' && ['pending_manager', 'pending_admin', 'pending'].includes(r.status);
+    const noteBox = actions.length ? `<textarea class="req-note" data-decision-note rows="1" placeholder="Uwaga do decyzji (opcjonalnie)"></textarea>` : '';
+    const actionsHtml = actions.length
+      ? `${noteBox}<div class="row-actions">${actions.map((a) => `<button class="btn ${a.cls} btn-sm" data-req-act="${a.key}" data-req-id="${esc(r._id)}">${esc(a.label)}</button>`).join('')}</div>`
+      : (decide ? `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>W toku obiegu</div>` : '');
+    const cancelHtml = canCancel ? `<div class="row-actions"><button class="btn btn-danger-ghost btn-sm" data-req-cancel="${esc(r._id)}">Anuluj wniosek</button></div>` : '';
+    return `<div class="inbox-card" data-req-card>
+      <div class="h">${reqBadge(r)}<span class="title">${esc(r.itemName || r.itemCode || 'Wniosek')}</span>
+        <span class="chip chip-grey" style="margin-left:auto;">${esc(statusLabel(r.status))}</span></div>
+      <div class="meta">${reqMetaLine(r)}</div>
+      ${actionsHtml}${cancelHtml}
+      ${commentsThreadHtml(r._id)}
+    </div>`;
+  }
+
   function loadInbox() {
-    const list = $('[data-skrzynka-list]');
+    const wrap = $('[data-skrzynka-decide-wrap]'); const list = $('[data-skrzynka-list]');
     const render = (items) => {
-      if (!items.length) { list.innerHTML = emptyBlock('Skrzynka jest pusta', 'Nie masz obecnie nic do decyzji.'); return; }
-      const canDecide = state.user && (state.user.role === 'manager' || state.user.role === 'admin');
-      list.innerHTML = items.map((r) => {
-        const badgeClass = r.kind === 'purchase' ? 'chip chip-orange' : 'chip chip-blue';
-        const badge = r.kind === 'purchase' ? 'Zakup' : 'Wypożyczenie';
-        const actionable = canDecide && (r.status === 'pending_manager' || r.status === 'pending_admin' || r.status === 'pending');
-        return `<div class="inbox-card">
-          <div class="h"><span class="${badgeClass}">${badge}</span><span class="title">${esc(r.itemName || r.itemCode || 'Wniosek')}</span>
-            <span class="chip chip-grey" style="margin-left:auto;">${esc(statusLabel(r.status))}</span></div>
-          <div class="meta">Wnioskujący: ${esc(r.requesterName || r.requesterEmail || '—')} · ${esc(fmtDate(r.requestedAt))}${r.purpose ? ' · ' + esc(r.purpose) : ''}</div>
-          ${actionable ? `<div class="row-actions">
-            <button class="btn-primary btn btn-sm" data-approve="${esc(r._id)}">Zatwierdź</button>
-            <button class="btn-danger-ghost btn btn-sm" data-reject="${esc(r._id)}">Odrzuć</button>
-          </div>` : `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>W toku obiegu</div>`}
-        </div>`;
-      }).join('');
+      if (wrap) wrap.hidden = !items.length;
+      if (!items.length) { list.innerHTML = ''; return; }
+      list.innerHTML = items.map((r) => requestCard(r, 'decide')).join('');
+      bindCommentThreads(list);
     };
     if (state.cache.inbox) { render(state.cache.inbox); return; }
     list.innerHTML = '<div class="loading">Ładowanie…</div>';
     api('/my/action-items').then((items) => { state.cache.inbox = items; render(items); })
+      .catch(() => { if (wrap) wrap.hidden = false; list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
+  }
+
+  function loadMyRequests() {
+    const list = $('[data-skrzynka-mine]'); if (!list) return;
+    const render = (items) => {
+      if (!items.length) { list.innerHTML = emptyBlock('Brak wniosków', 'Twoje wnioski o wypożyczenie i zakup pojawią się tutaj.'); return; }
+      list.innerHTML = items.map((r) => requestCard(r, 'mine')).join('');
+      bindCommentThreads(list);
+    };
+    if (state.cache.myreq) { render(state.cache.myreq); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/my/loan-requests').then((items) => { state.cache.myreq = items; render(items); })
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
+  }
+
+  // ---- Komentarze pod wnioskiem (lazy-load przy rozwinięciu)
+  function commentsThreadHtml(id) {
+    return `<details class="cmt" data-cmt="${esc(id)}"><summary>💬 Komentarze</summary>
+      <div class="cmt-list" data-cmt-list><div class="loading" style="padding:12px;">Ładowanie…</div></div>
+      <div class="cmt-form"><input data-cmt-input maxlength="2000" placeholder="Napisz komentarz…"><button class="btn btn-primary btn-sm" data-cmt-send="${esc(id)}">Wyślij</button></div>
+    </details>`;
+  }
+  function bindCommentThreads(root) {
+    $$('details.cmt', root).forEach((d) => {
+      if (d._bound) return; d._bound = true;
+      d.addEventListener('toggle', () => { if (d.open && !d._loaded) { d._loaded = true; loadComments(d); } });
+    });
+  }
+  function loadComments(details) {
+    const id = details.getAttribute('data-cmt'); const box = $('[data-cmt-list]', details);
+    api('/loan-requests/' + encodeURIComponent(id) + '/comments').then((cs) => {
+      if (!cs.length) { box.innerHTML = '<div class="cmt-empty">Brak komentarzy. Napisz pierwszy.</div>'; return; }
+      box.innerHTML = cs.map((c) => `<div class="cmt-item"><div class="cmt-who">${esc(c.authorName || c.authorEmail)} <span class="cmt-when">${esc(fmtDate(c.createdAt))}</span></div><div class="cmt-text">${esc(c.text)}</div></div>`).join('');
+    }).catch(() => { box.innerHTML = '<div class="cmt-empty">Nie udało się wczytać komentarzy.</div>'; });
+  }
+  async function sendComment(id, details) {
+    const inp = $('[data-cmt-input]', details); const text = (inp.value || '').trim();
+    if (!text) return;
+    try {
+      await api('/loan-requests/' + encodeURIComponent(id) + '/comments', { method: 'POST', body: JSON.stringify({ text }) });
+      inp.value = ''; details._loaded = true; loadComments(details);
+    } catch (e) { toast(e.message || 'Nie udało się dodać komentarza.', true); }
   }
 
   // ---- Historia (read-only): zgłoszenia, transfery i wnioski użytkownika
@@ -1022,14 +1093,29 @@
     } catch (e) { toast(e.message || 'Nie udało się oddać.', true); }
   }
 
-  async function decide(id, approve) {
-    const isAdmin = state.user && state.user.role === 'admin';
-    const base = isAdmin ? '/admin/loan-requests/' : '/manager/loan-requests/';
+  const REQ_ACTION_MAP = {
+    'mgr-approve': ['/manager/loan-requests/', '/approve', 'Przekazano do administracji'],
+    'mgr-reject': ['/manager/loan-requests/', '/reject', 'Wniosek odrzucony'],
+    'adm-approve': ['/admin/loan-requests/', '/approve', 'Wniosek zatwierdzony'],
+    'adm-reject': ['/admin/loan-requests/', '/reject', 'Wniosek odrzucony'],
+    order: ['/admin/purchase-requests/', '/order', 'Oznaczono jako zamówiony'],
+    stock: ['/admin/purchase-requests/', '/stock', 'Dodano do magazynu'],
+    'cancel-purchase': ['/admin/purchase-requests/', '/cancel', 'Zakup anulowany']
+  };
+  async function requestAction(id, key, note) {
+    const cfg = REQ_ACTION_MAP[key]; if (!cfg) return;
     try {
-      await api(base + encodeURIComponent(id) + (approve ? '/approve' : '/reject'), { method: 'POST', body: JSON.stringify({}) });
-      toast(approve ? 'Wniosek zatwierdzony.' : 'Wniosek odrzucony.');
-      invalidate(['inbox']); loadInbox();
+      await api(cfg[0] + encodeURIComponent(id) + cfg[1], { method: 'POST', body: JSON.stringify({ decisionNote: note || '' }) });
+      toast(cfg[2]);
+      invalidate(['inbox', 'myreq', 'history']); loadInbox(); loadMyRequests();
     } catch (e) { toast(e.message || 'Nie udało się.', true); }
+  }
+  async function cancelOwnRequest(id) {
+    if (!confirm('Anulować ten wniosek?')) return;
+    try {
+      await api('/my/loan-requests/' + encodeURIComponent(id) + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+      toast('Wniosek anulowany.'); invalidate(['inbox', 'myreq', 'history']); loadMyRequests(); loadInbox();
+    } catch (e) { toast(e.message || 'Nie udało się anulować.', true); }
   }
 
   function invalidate(keys) {
@@ -1921,7 +2007,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -1996,8 +2082,12 @@
     if (t.dataset.transfer) { openSheet('transfer', { itemCode: t.dataset.transfer, name: t.dataset.name }); return; }
     if (t.dataset.report) { openSheet('report', { itemCode: t.dataset.report, name: t.dataset.name }); return; }
     if (t.dataset.return) { doReturn(t.dataset.return, t.dataset.name); return; }
-    if (t.dataset.approve) { decide(t.dataset.approve, true); return; }
-    if (t.dataset.reject) { decide(t.dataset.reject, false); return; }
+    if (t.hasAttribute('data-req-act')) {
+      const card = t.closest('[data-req-card]'); const noteEl = card && $('[data-decision-note]', card);
+      requestAction(t.getAttribute('data-req-id'), t.getAttribute('data-req-act'), noteEl ? noteEl.value : ''); return;
+    }
+    if (t.hasAttribute('data-req-cancel')) { cancelOwnRequest(t.getAttribute('data-req-cancel')); return; }
+    if (t.hasAttribute('data-cmt-send')) { const d = t.closest('details.cmt'); sendComment(t.getAttribute('data-cmt-send'), d); return; }
   });
 
   document.addEventListener('keydown', (e) => {
