@@ -82,7 +82,7 @@
   function showScreen(name) {
     state.screen = name;
     $('#boot').classList.add('hidden');
-    ['login', 'launcher', 'sprzet', 'magazyn', 'settings'].forEach((s) => {
+    ['login', 'launcher', 'sprzet', 'magazyn', 'licencje', 'onboarding', 'settings'].forEach((s) => {
       $('#screen-' + s).classList.toggle('hidden', s !== name);
     });
     if (name === 'login') { closeDrawer(); closeSheet(); }
@@ -102,6 +102,8 @@
     $$('[data-manager-only]').forEach((n) => n.classList.toggle('hidden', !isManager));
     const isWarehouse = ['viewer', 'manager', 'admin'].includes(u.role);
     $$('[data-warehouse-only]').forEach((n) => n.classList.toggle('hidden', !isWarehouse));
+    const isAdmin = u.role === 'admin';
+    $$('[data-admin-only]').forEach((n) => n.classList.toggle('hidden', !isAdmin));
     const p = $('[data-pulpit-greeting]');
     if (p) p.textContent = 'Dzień dobry, ' + first + ' 👋';
   }
@@ -114,6 +116,23 @@
       $$('[data-stat="whQty"]').forEach((n) => (n.textContent = fmtInt(val.totalQty)));
       $$('[data-stat="whProducts"]').forEach((n) => (n.textContent = fmtInt(val.productCount)));
     } catch (_) { /* brak dostępu / błąd — zostaw „—” */ }
+  }
+
+  async function refreshLicenseCounts() {
+    if (!state.user || !['manager', 'admin'].includes(state.user.role)) return;
+    try {
+      const s = await api('/licenses/summary');
+      $$('[data-stat="licMonthly"]').forEach((n) => (n.textContent = fmtMoney(s.monthlyTotal)));
+      $$('[data-stat="licActive"]').forEach((n) => (n.textContent = fmtInt(s.activeCount)));
+    } catch (_) { /* brak dostępu */ }
+  }
+
+  async function refreshOnboardingCounts() {
+    try {
+      const s = await api('/onboarding/summary');
+      $$('[data-stat="onbPct"]').forEach((n) => (n.textContent = s.pct + '%'));
+      $$('[data-stat="onbSteps"]').forEach((n) => (n.textContent = `${s.done}/${s.total}`));
+    } catch (_) { /* ignore */ }
   }
 
   // -------------------------------------------------------------- Sprzęt views
@@ -460,6 +479,65 @@
         else await api('/warehouse/locations', { method: 'POST', body: JSON.stringify(data) });
         toast('Zapisano lokalizację.'); afterConfigChange();
       }
+    },
+    license: {
+      eyebrow: 'Licencje', title: (ctx) => ctx.id ? 'Edytuj licencję' : 'Nowa licencja',
+      hint: 'Nie zapisujemy haseł — tylko login, URL panelu i notatkę „gdzie jest hasło”.', cta: 'Zapisz',
+      onOpen: async (ctx) => { if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } } },
+      fields: (ctx) => {
+        const owner = '<option value="">— brak —</option>' + (state.users || []).map((u) => `<option value="${esc(u.email)}"${u.email === ctx.ownerEmail ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const cyc = (v) => `<option value="monthly"${(ctx.costCycle || 'monthly') === 'monthly' ? ' selected' : ''}>miesięcznie</option><option value="yearly"${ctx.costCycle === 'yearly' ? ' selected' : ''}>rocznie</option>`;
+        const st = (v) => ['active', 'trial', 'cancelled'].map((s) => `<option value="${s}"${(ctx.status || 'active') === s ? ' selected' : ''}>${({ active: 'Aktywna', trial: 'Trial', cancelled: 'Anulowana' })[s]}</option>`).join('');
+        return `
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Figma Organization"></label>
+        <div class="field-2">
+          <label class="field"><span>Dostawca</span><input name="vendor" value="${esc(ctx.vendor || '')}" placeholder="np. Figma Inc."></label>
+          <label class="field"><span>Kategoria</span><input name="category" value="${esc(ctx.category || '')}" placeholder="np. Design"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Koszt (zł)</span><input name="costAmount" type="number" min="0" step="0.01" value="${ctx.costAmount != null ? ctx.costAmount : ''}" placeholder="0,00"></label>
+          <label class="field"><span>Cykl</span><select name="costCycle">${cyc()}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Stanowiska</span><input name="seats" type="number" min="0" step="1" value="${ctx.seats != null ? ctx.seats : ''}" placeholder="np. 5"></label>
+          <label class="field"><span>Data odnowienia</span><input name="renewalDate" type="date" value="${esc((ctx.renewalDate || '').slice(0, 10))}"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Status</span><select name="status">${st()}</select></label>
+          <label class="field"><span>Właściciel</span><select name="ownerEmail">${owner}</select></label>
+        </div>
+        <label class="field"><span>Używają (osoby/zespół, po przecinku)</span><input name="assignedTo" value="${esc((ctx.assignedTo || []).join(', '))}" placeholder="np. Kinga, Michał, Design"></label>
+        <div class="field-2">
+          <label class="field"><span>Login</span><input name="loginUsername" value="${esc(ctx.loginUsername || '')}" placeholder="np. billing@firma.pl"></label>
+          <label class="field"><span>URL panelu</span><input name="panelUrl" value="${esc(ctx.panelUrl || '')}" placeholder="https://…"></label>
+        </div>
+        <label class="field"><span>Gdzie jest hasło</span><input name="passwordLocation" value="${esc(ctx.passwordLocation || '')}" placeholder="np. 1Password › Zespół"></label>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę licencji.');
+        if (ctx.id) await api('/licenses/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/licenses', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano licencję.'); state.lic = null; loadLicencje(); refreshLicenseCounts();
+      }
+    },
+    onbStep: {
+      eyebrow: 'Onboarding', title: (ctx) => ctx.id ? 'Edytuj krok' : 'Nowy krok',
+      hint: 'Krok pojawi się na liście onboardingu dla wszystkich osób.', cta: 'Zapisz',
+      fields: (ctx) => `
+        <label class="field"><span>Tytuł *</span><input name="title" value="${esc(ctx.title || '')}" placeholder="np. Skonfiguruj konto Google Workspace"></label>
+        <label class="field"><span>Opis</span><textarea name="description" rows="2" placeholder="Szczegóły / kontekst">${esc(ctx.description || '')}</textarea></label>
+        <div class="field-2">
+          <label class="field"><span>Kategoria</span><input name="category" value="${esc(ctx.category || '')}" placeholder="np. Konta i dostępy"></label>
+          <label class="field"><span>Kolejność</span><input name="sortOrder" type="number" step="1" value="${ctx.sortOrder != null ? ctx.sortOrder : ''}" placeholder="0"></label>
+        </div>
+        <label class="field"><span>Link (opcjonalnie)</span><input name="url" value="${esc(ctx.url || '')}" placeholder="https://…"></label>`,
+      submit: async (data, ctx) => {
+        if (!data.title) throw new Error('Podaj tytuł kroku.');
+        if (ctx.id) await api('/onboarding/steps/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/onboarding/steps', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano krok.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts();
+      }
     }
   };
 
@@ -475,6 +553,153 @@
   function delLocation(id) {
     if (!confirm('Usunąć lokalizację?')) return;
     api('/warehouse/locations/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Licencje
+  const LIC_STATUS = { active: 'Aktywna', trial: 'Trial', cancelled: 'Anulowana' };
+  function licStatusChip(s) { return s === 'active' ? 'chip chip-new' : s === 'trial' ? 'chip chip-blue' : 'chip chip-grey'; }
+  function renewalChip(days) {
+    if (days == null) return '';
+    if (days < 0) return `<span class="chip chip-red">Po terminie (${Math.abs(days)} dni)</span>`;
+    if (days <= 30) return `<span class="chip chip-orange">Odnowienie za ${days} dni</span>`;
+    return '';
+  }
+
+  async function loadLicencje() {
+    const list = $('[data-lic-list]'); const statsEl = $('[data-lic-stats]'); const sub = $('[data-lic-subtitle]');
+    const render = () => {
+      const items = state.lic || [];
+      const live = items.filter((l) => l.status !== 'cancelled');
+      const monthly = live.reduce((s, l) => s + (l.monthlyCost || 0), 0);
+      const upcoming = live.filter((l) => l.daysToRenewal != null && l.daysToRenewal >= 0 && l.daysToRenewal <= 30).length;
+      const overdue = live.filter((l) => l.daysToRenewal != null && l.daysToRenewal < 0).length;
+      if (sub) sub.textContent = `${items.length} ${plural(items.length, 'licencja', 'licencje', 'licencji')} · ${fmtMoney(monthly)}/mies · ${upcoming} ${plural(upcoming, 'odnowienie', 'odnowienia', 'odnowień')} ≤30 dni`;
+      if (statsEl) statsEl.innerHTML = `<div class="stat-row">
+        <div class="stat"><div class="k">Koszt miesięczny</div><div class="v" style="color:#1B7A4F;">${esc(fmtMoney(monthly))}</div><div class="s">${live.length} aktywnych</div></div>
+        <div class="stat"><div class="k">Koszt roczny</div><div class="v">${esc(fmtMoney(monthly * 12))}</div><div class="s">szacunkowo</div></div>
+        <div class="stat"><div class="k">Odnowienia ≤30 dni</div><div class="v" style="color:${upcoming ? '#E57200' : '#0C1C44'};">${fmtInt(upcoming)}</div><div class="s">${overdue ? overdue + ' po terminie' : 'na czas'}</div></div>
+        <div class="stat"><div class="k">Wszystkich</div><div class="v">${fmtInt(items.length)}</div><div class="s">w rejestrze</div></div>
+      </div>`;
+      if (!items.length) { list.innerHTML = emptyBlock('Brak licencji', 'Dodaj pierwszą subskrypcję przyciskiem „Dodaj licencję”.'); return; }
+      list.innerHTML = items.map((l) => {
+        const sub2 = [l.vendor, l.category].filter(Boolean).join(' · ');
+        const cost = `${fmtMoney(l.costAmount)} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}`;
+        return `<div class="row-card">
+          <span class="row-mono" style="background:#E7F6EF;color:#1B7A4F;">${esc(initials(l.name))}</span>
+          <div class="row-main"><div class="n">${esc(l.name)}</div><div class="s">${esc(sub2 || '—')}</div></div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:120px;">
+            <span style="font-size:14px;font-weight:600;color:#1F2225;">${esc(cost)}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;"><span class="${licStatusChip(l.status)}">${esc(LIC_STATUS[l.status] || l.status)}</span>${renewalChip(l.daysToRenewal)}</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-ghost btn-sm" data-lic-detail="${esc(l.id)}">Szczegóły</button>
+            <button class="btn btn-ghost btn-sm" data-lic-edit="${esc(l.id)}">Edytuj</button>
+            <button class="btn btn-danger-ghost btn-sm" data-lic-del="${esc(l.id)}">Usuń</button>
+          </div></div>`;
+      }).join('');
+    };
+    if (state.lic) { render(); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try { state.lic = await api('/licenses'); render(); }
+    catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  function openLicenseDetail(id) {
+    const l = (state.lic || []).find((x) => x.id === id); if (!l) return;
+    const wrap = $('#drawer-wrap'); const box = $('#drawer');
+    wrap.classList.remove('hidden');
+    const assigned = (l.assignedTo || []).map((a) => `<span class="chip chip-blue">${esc(a)}</span>`).join('') || '<span class="eq-sub">—</span>';
+    const link = l.panelUrl ? `<a href="${esc(l.panelUrl)}" target="_blank" rel="noopener" style="color:#3F5FBE;word-break:break-all;">${esc(l.panelUrl)}</a>` : '—';
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags"><span class="${licStatusChip(l.status)}">${esc(LIC_STATUS[l.status] || l.status)}</span>${l.category ? `<span class="chip chip-grey">${esc(l.category)}</span>` : ''}</div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>${esc(l.name)}</h2>
+        <p class="sub">${esc(l.vendor || '—')}</p>
+        <div class="kv-grid">
+          <div class="kv"><div class="k">Koszt</div><div class="v">${esc(fmtMoney(l.costAmount))} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}</div></div>
+          <div class="kv"><div class="k">Miesięcznie</div><div class="v">${esc(fmtMoney(l.monthlyCost))}</div></div>
+          <div class="kv"><div class="k">Stanowiska</div><div class="v">${l.seats != null ? fmtInt(l.seats) : '—'}</div></div>
+          <div class="kv"><div class="k">Odnowienie</div><div class="v">${esc(fmtDay(l.renewalDate) || '—')}</div></div>
+        </div>
+        ${renewalChip(l.daysToRenewal) ? `<div style="margin-bottom:18px;">${renewalChip(l.daysToRenewal)}</div>` : ''}
+        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Dostęp</div>
+        <div class="kv" style="margin-bottom:10px;"><div class="k">Login</div><div class="v" style="font-family:ui-monospace,monospace;">${esc(l.loginUsername || '—')}</div></div>
+        <div class="kv" style="margin-bottom:10px;"><div class="k">Panel</div><div class="v">${link}</div></div>
+        <div class="kv" style="margin-bottom:18px;"><div class="k">Gdzie hasło</div><div class="v">${esc(l.passwordLocation || '—')}</div></div>
+        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Właściciel</div>
+        <p class="sub" style="margin-bottom:14px;">${esc(l.ownerName || l.ownerEmail || '—')}</p>
+        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Używają</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">${assigned}</div>
+        ${l.notes ? `<div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:6px;">Notatka</div><p class="sub">${esc(l.notes)}</p>` : ''}
+      </div>
+      <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-lic-edit="${esc(l.id)}">Edytuj</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
+  }
+
+  function delLicense(id) {
+    if (!confirm('Usunąć licencję z rejestru?')) return;
+    api('/licenses/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.lic = null; loadLicencje(); refreshLicenseCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Onboarding
+  const CHECK_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  async function loadOnboarding() {
+    const list = $('[data-onb-list]'); const prog = $('[data-onb-progress]'); const sub = $('[data-onb-subtitle]');
+    const isAdmin = state.user && state.user.role === 'admin';
+    const render = () => {
+      const steps = state.onb || [];
+      const done = steps.filter((s) => s.done).length;
+      const total = steps.length;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      if (sub) sub.textContent = total ? `${done} z ${total} ${plural(total, 'kroku', 'kroków', 'kroków')} ukończonych` : 'Brak kroków onboardingu.';
+      if (prog) prog.innerHTML = `<div class="onb-progress-card">
+        <div class="onb-progress-head"><span class="pct">${pct}%</span><span class="lbl">${done} z ${total} kroków</span></div>
+        <div class="onb-bar"><div class="fill" style="width:${pct}%;"></div></div>
+      </div>`;
+      if (!total) { list.innerHTML = emptyBlock('Brak kroków', isAdmin ? 'Dodaj pierwszy krok przyciskiem „Dodaj krok”.' : 'Administrator jeszcze nie skonfigurował onboardingu.'); return; }
+      // group by category preserving order
+      const groups = [];
+      const idx = new Map();
+      steps.forEach((s) => {
+        const c = s.category || 'Ogólne';
+        if (!idx.has(c)) { idx.set(c, groups.length); groups.push({ cat: c, items: [] }); }
+        groups[idx.get(c)].items.push(s);
+      });
+      list.innerHTML = groups.map((g) => `<div class="onb-cat">${esc(g.cat)}</div>` + g.items.map((s) => `
+        <div class="onb-item${s.done ? ' done' : ''}">
+          <div class="onb-check" data-onb-toggle="${esc(s.id)}" data-done="${s.done ? '1' : '0'}">${CHECK_SVG}</div>
+          <div class="onb-body">
+            <div class="onb-title">${esc(s.title)}</div>
+            ${s.description ? `<div class="onb-desc">${esc(s.description)}</div>` : ''}
+            ${s.url ? `<a class="onb-link" href="${esc(s.url)}" target="_blank" rel="noopener">Otwórz odnośnik →</a>` : ''}
+          </div>
+          ${isAdmin ? `<div class="onb-admin"><button class="btn btn-ghost btn-sm" data-onb-edit="${esc(s.id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-onb-del="${esc(s.id)}">Usuń</button></div>` : ''}
+        </div>`).join('')).join('');
+    };
+    if (state.onb) { render(); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try { state.onb = await api('/onboarding'); render(); }
+    catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  async function toggleStep(id, currentlyDone) {
+    // optimistic
+    const step = (state.onb || []).find((s) => s.id === id);
+    if (step) step.done = !currentlyDone;
+    loadOnboarding();
+    try {
+      await api('/onboarding/' + encodeURIComponent(id) + '/toggle', { method: 'POST', body: JSON.stringify({ done: !currentlyDone }) });
+      refreshOnboardingCounts();
+    } catch (e) {
+      if (step) step.done = currentlyDone; loadOnboarding();
+      toast(e.message || 'Nie udało się.', true);
+    }
+  }
+
+  function delStep(id) {
+    if (!confirm('Usunąć ten krok onboardingu?')) return;
+    api('/onboarding/steps/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
   let currentSheet = null;
@@ -1033,8 +1258,17 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del]');
     if (!t) return;
+
+    if (t.hasAttribute('data-lic-new')) { openSheet('license', {}); return; }
+    if (t.hasAttribute('data-lic-detail')) { openLicenseDetail(t.getAttribute('data-lic-detail')); return; }
+    if (t.hasAttribute('data-lic-edit')) { const l = (state.lic || []).find((x) => x.id === t.getAttribute('data-lic-edit')); openSheet('license', l || {}); return; }
+    if (t.hasAttribute('data-lic-del')) { delLicense(t.getAttribute('data-lic-del')); return; }
+    if (t.hasAttribute('data-onb-new')) { openSheet('onbStep', {}); return; }
+    if (t.hasAttribute('data-onb-toggle')) { toggleStep(t.getAttribute('data-onb-toggle'), t.getAttribute('data-done') === '1'); return; }
+    if (t.hasAttribute('data-onb-edit')) { const s = (state.onb || []).find((x) => x.id === t.getAttribute('data-onb-edit')); openSheet('onbStep', s || {}); return; }
+    if (t.hasAttribute('data-onb-del')) { delStep(t.getAttribute('data-onb-del')); return; }
 
     if (t.dataset.magTab) { setMagTab(t.dataset.magTab); return; }
     if (t.dataset.magOptab) { state.magOpType = t.dataset.magOptab; renderOperacje(); return; }
@@ -1064,6 +1298,8 @@
       const g = t.dataset.go;
       if (g === 'sprzet') { showScreen('sprzet'); setView('pulpit'); }
       else if (g === 'magazyn') { showScreen('magazyn'); loadMagazyn(); }
+      else if (g === 'licencje') { showScreen('licencje'); loadLicencje(); }
+      else if (g === 'onboarding') { showScreen('onboarding'); loadOnboarding(); }
       else showScreen(g === 'launcher' ? 'launcher' : g);
       return;
     }
@@ -1092,6 +1328,8 @@
         showScreen('launcher');
         refreshCounts();
         refreshWarehouseCounts();
+        refreshLicenseCounts();
+        refreshOnboardingCounts();
       } else {
         showScreen('login');
       }

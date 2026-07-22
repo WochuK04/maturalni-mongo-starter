@@ -24,7 +24,16 @@ export const collections = {
   // (ile czego zabrać wg liczby uczestników) + stan spakowania/powrotu.
   turboWeekends: 'turboWeekends',
   packingItems: 'packingItems',
-  packingProgress: 'packingProgress'
+  packingProgress: 'packingProgress',
+
+  // Licencje / subskrypcje: koszty (mies./rok), stanowiska, odnowienia, dostępy
+  // (login + URL + notatka „gdzie hasło" — haseł NIE trzymamy w bazie).
+  licenses: 'licenses',
+
+  // Onboarding: globalna lista kroków (edytowana przez admina) + postęp
+  // per użytkownik (jeden dokument na parę user+krok).
+  onboardingSteps: 'onboardingSteps',
+  onboardingProgress: 'onboardingProgress'
 };
 
 export const itemShape = {
@@ -175,5 +184,19 @@ export async function ensureIndexes(db) {
   await db.collection(collections.packingProgress).createIndexes([
     { key: { turboWeekendId: 1, packingItemId: 1 }, unique: true, name: 'uniq_progress_tw_item' },
     { key: { turboWeekendId: 1 }, name: 'idx_progress_tw' }
+  ]);
+
+  // === Licencje ===
+  await db.collection(collections.licenses).createIndexes([
+    { key: { isActive: 1, name: 1 }, name: 'idx_licenses_active_name' },
+    { key: { renewalDate: 1 }, name: 'idx_licenses_renewal' }
+  ]);
+
+  // === Onboarding ===
+  await db.collection(collections.onboardingSteps).createIndexes([
+    { key: { isActive: 1, sortOrder: 1 }, name: 'idx_onb_steps_active_sort' }
+  ]);
+  await db.collection(collections.onboardingProgress).createIndexes([
+    { key: { userEmail: 1, stepId: 1 }, unique: true, name: 'uniq_onb_progress_user_step' }
   ]);
 }
