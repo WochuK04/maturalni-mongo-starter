@@ -16,7 +16,11 @@
     view: 'pulpit',
     loaded: {},          // which sprzęt views already fetched
     cache: {},           // fetched data per view
-    users: null          // /users cache for transfer target
+    users: null,         // /users cache for transfer target
+    magTab: 'przeglad',  // active Magazyn tab
+    magReport: 'stock',  // active Raportowanie sub-report
+    magOpType: 'receipt',// active Operacje sub-tab
+    mag: {}              // Magazyn data cache
   };
 
   async function api(path, opts) {
@@ -78,7 +82,7 @@
   function showScreen(name) {
     state.screen = name;
     $('#boot').classList.add('hidden');
-    ['login', 'launcher', 'sprzet', 'settings'].forEach((s) => {
+    ['login', 'launcher', 'sprzet', 'magazyn', 'settings'].forEach((s) => {
       $('#screen-' + s).classList.toggle('hidden', s !== name);
     });
     if (name === 'login') { closeDrawer(); closeSheet(); }
@@ -96,8 +100,20 @@
     $$('[data-email]').forEach((n) => (n.textContent = u.email || '—'));
     const isManager = u.role === 'manager' || u.role === 'admin';
     $$('[data-manager-only]').forEach((n) => n.classList.toggle('hidden', !isManager));
+    const isWarehouse = ['viewer', 'manager', 'admin'].includes(u.role);
+    $$('[data-warehouse-only]').forEach((n) => n.classList.toggle('hidden', !isWarehouse));
     const p = $('[data-pulpit-greeting]');
     if (p) p.textContent = 'Dzień dobry, ' + first + ' 👋';
+  }
+
+  async function refreshWarehouseCounts() {
+    if (!state.user || !['viewer', 'manager', 'admin'].includes(state.user.role)) return;
+    try {
+      const val = await api('/warehouse/valuation');
+      state.mag.valuation = val;
+      $$('[data-stat="whQty"]').forEach((n) => (n.textContent = fmtInt(val.totalQty)));
+      $$('[data-stat="whProducts"]').forEach((n) => (n.textContent = fmtInt(val.productCount)));
+    } catch (_) { /* brak dostępu / błąd — zostaw „—” */ }
   }
 
   // -------------------------------------------------------------- Sprzęt views
@@ -484,11 +500,345 @@
   function emptyBlock(t, s) {
     return `<div class="empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#C6D0F5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg><div class="t">${esc(t)}</div>${s ? `<div class="s">${esc(s)}</div>` : ''}</div>`;
   }
+  function fmtInt(n) { return Number(n || 0).toLocaleString('pl-PL'); }
+  function fmtMoney(n) { return Number(n || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'; }
+  function fmtDay(v) {
+    if (!v) return '';
+    const d = new Date(v); if (isNaN(d)) return '';
+    const p = (x) => String(x).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
+  }
+
+  // -------------------------------------------------------------- Magazyn
+  const OP_STATE = { draft: 'Wersja robocza', ready: 'Gotowe', done: 'Zatwierdzono', cancelled: 'Anulowano' };
+  const MOVE_KIND = { receipt: 'Przyjęcie', delivery: 'Wydanie', internal: 'Przesunięcie', scrap: 'Odpad', adjustment: 'Korekta', conversion: 'Konwersja', in: 'Przyjęcie', out: 'Wydanie' };
+  const LOC_KIND = { view: 'Grupa', internal: 'Magazyn', employee: 'U pracownika', customer: 'Klienci', supplier: 'Dostawcy', transit: 'Tranzyt', inventory: 'Inwentaryzacja', scrap: 'Odpad' };
+  const OP_META = {
+    receipt: { label: 'Przyjęcia', emoji: '📥', color: '#3F5FBE', bg: '#EEF1FB' },
+    delivery: { label: 'Dostawy', emoji: '📤', color: '#5F4B8B', bg: '#EDE9F6' },
+    internal: { label: 'Wewnętrzne', emoji: '🔁', color: '#3F5FBE', bg: '#EEF1FB' },
+    scrap: { label: 'Odpad', emoji: '🗑️', color: '#BF1932', bg: '#FBEEF0' },
+    adjustment: { label: 'Inwentarz', emoji: '📋', color: '#22A06B', bg: '#E7F6EF' },
+    conversion: { label: 'Konwersje', emoji: '♻️', color: '#E57200', bg: '#FBEDE0' }
+  };
+  const OP_TAB_ORDER = ['receipt', 'delivery', 'scrap', 'adjustment', 'conversion'];
+  const REPORTS = [
+    ['stock', 'Stan'], ['valuation', 'Wycena stanu'], ['moves', 'Historia ruchów'],
+    ['period', 'Ruchy w okresie'], ['gift', 'Prezenty ≤20 zł'], ['aging', 'Wiek zapasu'], ['health', 'Spójność danych']
+  ];
+
+  function tableHTML(headers, rows) {
+    const th = headers.map((h) => `<th class="${h.num ? 'num' : ''}">${esc(h.t)}</th>`).join('');
+    const tb = rows.map((r) => {
+      const attrs = r.click ? ` class="click" data-mag-op="${esc(r.click)}"` : '';
+      const tds = r.cells.map((c) => `<td class="${c.cls || ''}">${c.html != null ? c.html : esc(c.v)}</td>`).join('');
+      return `<tr${attrs}>${tds}</tr>`;
+    }).join('');
+    return `<div class="wtable-wrap"><table class="wtable"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></div>`;
+  }
+
+  function setMagTab(tab) {
+    state.magTab = tab;
+    $$('#magTabs .mag-tab').forEach((b) => b.classList.toggle('active', b.dataset.magTab === tab));
+    $$('[data-mag-panel]').forEach((p) => (p.hidden = p.dataset.magPanel !== tab));
+    renderMagTab(tab);
+    const sc = $('#screen-magazyn'); if (sc) sc.scrollTop = 0;
+  }
+
+  async function loadMagazyn() {
+    setMagTab(state.magTab || 'przeglad');
+    // subtitle from valuation + locations
+    try {
+      const [val, locs] = await Promise.all([
+        state.mag.valuation ? Promise.resolve(state.mag.valuation) : api('/warehouse/valuation'),
+        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
+      ]);
+      state.mag.valuation = val; state.mag.locations = locs;
+      const physical = locs.filter((l) => l.onHand > 0 || l.kind === 'internal' || l.kind === 'employee').length || locs.length;
+      const sub = $('[data-mag-subtitle]');
+      if (sub) sub.textContent = `${fmtInt(val.totalQty)} szt. na stanie · ${fmtInt(val.productCount)} pozycji · ${fmtInt(locs.length)} lokalizacji · ${fmtMoney(val.totalValue)}`;
+    } catch (_) { const sub = $('[data-mag-subtitle]'); if (sub) sub.textContent = 'Brak dostępu do magazynu.'; }
+  }
+
+  function renderMagTab(tab) {
+    if (tab === 'przeglad') return renderPrzeglad();
+    if (tab === 'operacje') return renderOperacje();
+    if (tab === 'produkty') return renderProdukty();
+    if (tab === 'raportowanie') return renderRaportowanie();
+    if (tab === 'konfiguracja') return renderKonfiguracja();
+  }
+
+  // ---- Przegląd
+  async function renderPrzeglad() {
+    const el = $('[data-mag-panel="przeglad"]');
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const [ov, val, locs] = await Promise.all([
+        api('/warehouse/overview'),
+        state.mag.valuation ? Promise.resolve(state.mag.valuation) : api('/warehouse/valuation'),
+        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
+      ]);
+      state.mag.valuation = val; state.mag.locations = locs;
+      const stats = `<div class="stat-row">
+        <div class="stat"><div class="k">Na stanie</div><div class="v" style="color:#5F4B8B;">${fmtInt(val.totalQty)}</div></div>
+        <div class="stat"><div class="k">Pozycji</div><div class="v">${fmtInt(val.productCount)}</div></div>
+        <div class="stat"><div class="k">Lokalizacji</div><div class="v">${fmtInt(locs.length)}</div></div>
+        <div class="stat"><div class="k">Wartość</div><div class="v">${esc(fmtMoney(val.totalValue))}</div></div>
+      </div>`;
+      const byType = new Map((ov.types || []).map((t) => [t.type, t]));
+      const cards = OP_TAB_ORDER.map((type) => {
+        const m = OP_META[type]; const t = byType.get(type) || {};
+        const todo = (t.draft || 0) + (t.ready || 0);
+        return `<div class="op-card" style="border-top-color:${m.color};">
+          <div class="h"><span class="emoji" style="background:${m.bg};">${m.emoji}</span><span class="title">${m.label}</span></div>
+          <div class="nums"><div><div class="n">${fmtInt(todo)}</div><div class="l">do zrobienia</div></div><div><div class="n">${fmtInt(t.done || 0)}</div><div class="l">wykonano</div></div></div>
+        </div>`;
+      }).join('');
+      const repl = ov.replenishment || { below: 0, rules: 0 };
+      const replCard = `<div class="op-card" style="border-top-color:#E57200;">
+        <div class="h"><span class="emoji" style="background:#FBEDE0;">🛒</span><span class="title">Zapotrzebowanie</span></div>
+        <div class="nums"><div><div class="n">${fmtInt(repl.below)}</div><div class="l">poniżej minimum</div></div><div><div class="n">${fmtInt(repl.rules)}</div><div class="l">reguł</div></div></div>
+      </div>`;
+      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:#1F2225;">Operacje</h3><div class="op-cards">${cards}${replCard}</div></div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  // ---- Operacje
+  async function renderOperacje() {
+    const el = $('[data-mag-panel="operacje"]');
+    const subtabs = OP_TAB_ORDER.map((type) =>
+      `<button class="op-subtab ${state.magOpType === type ? 'active' : ''}" data-mag-optab="${type}">${OP_META[type].label}</button>`).join('');
+    el.innerHTML = `<div class="anim-fadeup">
+      <div class="op-subtabs">${subtabs}</div>
+      <button class="btn btn-primary" data-mag-new-op style="margin-bottom:18px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nowa operacja</button>
+      <div data-mag-op-list><div class="loading">Ładowanie…</div></div></div>`;
+    const list = $('[data-mag-op-list]');
+    try {
+      const ops = await api('/warehouse/operations?type=' + encodeURIComponent(state.magOpType));
+      if (!ops.length) { list.innerHTML = emptyBlock('Brak operacji w tym widoku', 'Utwórz operację w klasycznym widoku magazynu.'); return; }
+      list.innerHTML = tableHTML(
+        [{ t: 'Odnośnik' }, { t: 'Z' }, { t: 'Do' }, { t: 'Kontakt' }, { t: 'Dokument' }, { t: 'Status', num: true }],
+        ops.map((o) => ({
+          click: o.id,
+          cells: [
+            { v: o.reference, cls: '' }, { v: o.fromName || '—', cls: 'mut' }, { v: o.toName || '—', cls: 'mut' },
+            { v: o.supplierName || o.contact || '—', cls: 'mut' }, { v: o.sourceDocument || '—', cls: 'mut' },
+            { html: `<span class="chip chip-grey">${esc(OP_STATE[o.state] || o.state)}</span>`, cls: 'num' }
+          ]
+        }))
+      );
+    } catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  async function openOpDetail(id) {
+    const wrap = $('#drawer-wrap'); const box = $('#drawer');
+    wrap.classList.remove('hidden');
+    box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const op = await api('/warehouse/operations/' + encodeURIComponent(id));
+      const lines = (op.lines || []).map((l) =>
+        `<div class="team-eq"><div class="item"><span class="n">${esc(l.itemName || l.itemCode)}</span><span class="l">${fmtInt(l.quantity)} szt.${l.unitPrice != null ? ' · ' + fmtMoney(l.unitPrice) : ''}</span></div></div>`).join('')
+        || '<p class="sub">Brak pozycji.</p>';
+      box.innerHTML = `
+        <div class="drawer-head"><div class="tags"><span class="chip chip-blue">${esc(op.typeLabel)}</span><span class="chip chip-grey">${esc(OP_STATE[op.state] || op.state)}</span></div>
+          <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+        <div class="drawer-body">
+          <h2>${esc(op.reference)}</h2>
+          <p class="sub">${esc([op.fromName, op.toName].filter(Boolean).join(' → ') || '—')}</p>
+          <div class="kv-grid">
+            <div class="kv"><div class="k">Kontakt</div><div class="v">${esc(op.supplierName || op.contact || '—')}</div></div>
+            <div class="kv"><div class="k">Dokument</div><div class="v">${esc(op.sourceDocument || '—')}</div></div>
+            <div class="kv"><div class="k">Utworzono</div><div class="v">${esc(fmtDay(op.createdAt) || '—')}</div></div>
+            <div class="kv"><div class="k">Zatwierdzono</div><div class="v">${esc(fmtDay(op.doneAt) || '—')}</div></div>
+          </div>
+          <div style="font-size:13px;font-weight:600;color:#1F2225;margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
+          ${lines}
+        </div>
+        <div class="drawer-foot"><button class="btn btn-ghost" style="flex:1;" data-close-drawer>Zamknij</button></div>`;
+    } catch (e) { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; }
+  }
+
+  // ---- Produkty
+  async function renderProdukty() {
+    const el = $('[data-mag-panel="produkty"]');
+    el.innerHTML = `<div class="anim-fadeup">
+      <div class="mag-toolbar">
+        <div class="search mag-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A2AEB9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input placeholder="Szukaj po nazwie, kodzie, kategorii…" data-mag-prod-search></div>
+        <button class="btn btn-ghost" data-mag-csv>Eksportuj CSV</button>
+      </div>
+      <div data-mag-prod-list><div class="loading">Ładowanie…</div></div></div>`;
+    const list = $('[data-mag-prod-list]');
+    const render = (items) => {
+      if (!items.length) { list.innerHTML = emptyBlock('Brak produktów', ''); return; }
+      list.innerHTML = tableHTML(
+        [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ilość', num: true }],
+        items.map((p) => ({ cells: [
+          { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { html: `<span class="chip chip-grey">${esc(p.category)}</span>` }, { v: fmtInt(p.quantity), cls: 'num' }
+        ] }))
+      );
+    };
+    const filt = () => {
+      const q = ($('[data-mag-prod-search]').value || '').toLowerCase().trim();
+      const items = (state.mag.products || []).filter((p) => !q ||
+        (p.name || '').toLowerCase().includes(q) || (p.itemCode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q));
+      render(items);
+    };
+    const s = $('[data-mag-prod-search]'); if (s) s.addEventListener('input', filt);
+    try {
+      if (!state.mag.products) state.mag.products = await api('/warehouse/products');
+      filt();
+    } catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  function exportProductsCSV() {
+    const items = state.mag.products || [];
+    const q = (($('[data-mag-prod-search]') || {}).value || '').toLowerCase().trim();
+    const rows = items.filter((p) => !q || (p.name || '').toLowerCase().includes(q) || (p.itemCode || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q));
+    const csv = [['Kod', 'Nazwa', 'Kategoria', 'Ilość', 'Wartość']].concat(
+      rows.map((p) => [p.itemCode, p.name, p.category, p.quantity, p.totalValue])
+    ).map((r) => r.map((c) => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'produkty-magazyn.csv';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+    toast('Wyeksportowano ' + rows.length + ' pozycji.');
+  }
+
+  // ---- Raportowanie
+  function renderRaportowanie() {
+    const el = $('[data-mag-panel="raportowanie"]');
+    const nav = REPORTS.map(([id, lbl]) => `<button class="${state.magReport === id ? 'active' : ''}" data-mag-report="${id}">${lbl}</button>`).join('');
+    el.innerHTML = `<div class="anim-fadeup"><div class="subnav">${nav}</div><div data-mag-report-body><div class="loading">Ładowanie…</div></div></div>`;
+    renderReport(state.magReport);
+  }
+
+  async function renderReport(id) {
+    const body = $('[data-mag-report-body]');
+    if (!body) return;
+    body.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      if (id === 'stock') {
+        const rows = await api('/warehouse/stock');
+        body.innerHTML = rows.length ? tableHTML(
+          [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Lokalizacja' }, { t: 'Ilość', num: true }, { t: 'Dostępne', num: true }],
+          rows.map((r) => ({ cells: [
+            { v: r.itemCode, cls: 'mono-cell' }, { v: r.name }, { v: r.locationName, cls: 'mut' },
+            { v: fmtInt(r.quantity), cls: 'num' }, { html: `<span style="color:#1B7A4F;font-weight:600;">${fmtInt(r.available)}</span>`, cls: 'num' }
+          ] }))
+        ) : emptyBlock('Brak stanu', '');
+      } else if (id === 'valuation') {
+        const val = await api('/warehouse/valuation'); state.mag.valuation = val;
+        const products = (val.categories || []).flatMap((c) => c.products.map((p) => ({ ...p, category: c.category })));
+        const banner = `<div class="valuation-banner"><span class="lbl">Wartość zapasu łącznie</span><span class="val">${esc(fmtMoney(val.totalValue))}</span></div>`;
+        body.innerHTML = banner + (products.length ? tableHTML(
+          [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Ilość', num: true }, { t: 'Cena', num: true }, { t: 'Wartość', num: true }],
+          products.map((p) => ({ cells: [
+            { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { v: fmtInt(p.qty), cls: 'num' },
+            { v: fmtMoney(p.avgUnitPrice), cls: 'num mut' }, { v: fmtMoney(p.value), cls: 'num' }
+          ] }))
+        ) : emptyBlock('Brak danych wyceny', ''));
+      } else if (id === 'moves') {
+        const rows = await api('/warehouse/moves?limit=200');
+        body.innerHTML = rows.length ? tableHTML(
+          [{ t: 'Kiedy' }, { t: 'Kod' }, { t: 'Ruch' }, { t: 'Ilość', num: true }, { t: 'Lokalizacja' }],
+          rows.map((m) => ({ cells: [
+            { v: fmtDay(m.doneAt), cls: 'mut' }, { v: m.itemCode, cls: 'mono-cell' }, { v: MOVE_KIND[m.kind] || m.kind },
+            { v: fmtInt(m.quantity), cls: 'num' }, { v: m.toName || m.fromName || '—', cls: 'mut' }
+          ] }))
+        ) : emptyBlock('Brak ruchów', '');
+      } else if (id === 'period') {
+        const rep = await api('/warehouse/moves-report');
+        const rows = rep.rows || [];
+        const cnt = (k) => rows.filter((m) => m.kind === k).length;
+        const tiles = `<div class="mini-tiles">
+          <div class="mini-tile"><div class="k">Przyjęcia</div><div class="v" style="color:#1B7A4F;">${fmtInt(cnt('receipt'))}</div></div>
+          <div class="mini-tile"><div class="k">Wydania</div><div class="v" style="color:#BF1932;">${fmtInt(cnt('delivery') + cnt('scrap'))}</div></div>
+          <div class="mini-tile"><div class="k">Ruchów</div><div class="v" style="color:#0C1C44;">${fmtInt(rows.length)}</div></div>
+        </div>`;
+        body.innerHTML = tiles + (rows.length ? tableHTML(
+          [{ t: 'Kiedy' }, { t: 'Kod' }, { t: 'Ruch' }, { t: 'Ilość', num: true }],
+          rows.slice(0, 300).map((m) => ({ cells: [
+            { v: fmtDay(m.doneAt), cls: 'mut' }, { v: m.itemCode, cls: 'mono-cell' }, { v: MOVE_KIND[m.kind] || m.kind }, { v: fmtInt(m.quantity), cls: 'num' }
+          ] }))
+        ) : emptyBlock('Brak ruchów w okresie', 'Domyślnie ostatnie 30 dni.'));
+      } else if (id === 'gift') {
+        const rep = await api('/warehouse/gift-threshold');
+        const rows = rep.items || [];
+        const note = `<p style="margin:0 0 16px;font-size:13.5px;color:#737980;">Pozycje z konwersji, których jednostkowy koszt przekracza próg ${fmtMoney(rep.threshold)} — rodzą obowiązek VAT przy wydaniu jako prezent.</p>`;
+        body.innerHTML = note + (rows.length ? tableHTML(
+          [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Maks. cena', num: true }, { t: 'Ilość', num: true }],
+          rows.map((g) => ({ cells: [
+            { v: g.itemCode, cls: 'mono-cell' }, { v: g.name }, { v: fmtMoney(g.maxUnitPrice), cls: 'num' }, { v: fmtInt(g.overQty), cls: 'num' }
+          ] }))
+        ) : emptyBlock('Brak pozycji powyżej progu', ''));
+      } else if (id === 'aging') {
+        const rep = await api('/warehouse/aging');
+        const rows = rep.products || [];
+        const bucket = (d) => d == null ? 'bez daty' : d <= 30 ? '0–30 dni' : d <= 90 ? '31–90 dni' : d <= 180 ? '91–180 dni' : '>180 dni';
+        body.innerHTML = rows.length ? tableHTML(
+          [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Najstarsze (dni)', num: true }, { t: 'Przedział' }],
+          rows.map((g) => ({ cells: [
+            { v: g.itemCode, cls: 'mono-cell' }, { v: g.name }, { v: g.oldestDays == null ? '—' : fmtInt(g.oldestDays), cls: 'num' }, { v: bucket(g.oldestDays), cls: 'mut' }
+          ] }))
+        ) : emptyBlock('Brak danych wieku', '');
+      } else if (id === 'health') {
+        const h = await api('/warehouse/health');
+        const chip = (ok) => ok ? '<span class="chip chip-new">OK</span>' : '<span class="chip chip-orange">Do sprawdzenia</span>';
+        const checks = [
+          ['Rozjazdy ilości (cache/quant/partie)', (h.mismatches || []).length],
+          ['Ujemne stany', (h.negativeQuants || []).length],
+          ['Quanty-sieroty', (h.orphanQuants || []).length]
+        ];
+        body.innerHTML = tableHTML(
+          [{ t: 'Sprawdzenie' }, { t: 'Liczba', num: true }, { t: 'Stan', num: true }],
+          checks.map(([name, n]) => ({ cells: [
+            { v: name }, { v: fmtInt(n), cls: 'num' }, { html: chip(n === 0), cls: 'num' }
+          ] }))
+        );
+      }
+    } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  // ---- Konfiguracja
+  async function renderKonfiguracja() {
+    const el = $('[data-mag-panel="konfiguracja"]');
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const [suppliers, locs] = await Promise.all([
+        api('/warehouse/suppliers'),
+        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
+      ]);
+      state.mag.locations = locs;
+      const supTable = suppliers.length ? tableHTML(
+        [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }],
+        suppliers.map((s) => ({ cells: [{ v: s.name }, { v: s.contact || '—', cls: 'mut' }, { v: s.notes || '—', cls: 'mut' }] }))
+      ) : emptyBlock('Brak dostawców', '');
+      const locTable = locs.length ? tableHTML(
+        [{ t: 'Lokalizacja' }, { t: 'Kod' }, { t: 'Typ' }, { t: 'Na stanie', num: true }],
+        locs.map((l) => ({ cells: [
+          { v: l.name }, { v: l.code || '—', cls: 'mono-cell' }, { v: LOC_KIND[l.kind] || l.kind || '—', cls: 'mut' },
+          { v: l.onHand ? fmtInt(l.onHand) : '—', cls: 'num' }
+        ] }))
+      ) : emptyBlock('Brak lokalizacji', '');
+      el.innerHTML = `<div class="anim-fadeup">
+        <div class="mag-config-section"><div class="mag-config-head"><h3>Dostawcy</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="dostawca">+ Nowy dostawca</button></div>${supTable}</div>
+        <div class="mag-config-section"><div class="mag-config-head"><h3>Lokalizacje</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="lokalizacja">+ Nowa lokalizacja</button></div>${locTable}</div>
+      </div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add]');
     if (!t) return;
+
+    if (t.dataset.magTab) { setMagTab(t.dataset.magTab); return; }
+    if (t.dataset.magOptab) { state.magOpType = t.dataset.magOptab; renderOperacje(); return; }
+    if (t.dataset.magReport) { state.magReport = t.dataset.magReport; $$('[data-mag-report]').forEach((b) => b.classList.toggle('active', b === t)); renderReport(t.dataset.magReport); return; }
+    if (t.hasAttribute('data-mag-op')) { openOpDetail(t.getAttribute('data-mag-op')); return; }
+    if (t.hasAttribute('data-mag-csv')) { exportProductsCSV(); return; }
+    if (t.hasAttribute('data-mag-new-op')) { toast('Tworzenie operacji dostępne w klasycznym widoku (/). W v2 — wkrótce.'); return; }
+    if (t.hasAttribute('data-mag-config-add')) { toast('Edycja konfiguracji magazynu — wkrótce w v2. Użyj klasycznego widoku.'); return; }
 
     if (t.hasAttribute('data-stop')) { e.stopPropagation(); return; }
     if (t.id === 'sheetSubmit') { e.preventDefault(); submitSheet(); return; }
@@ -499,6 +849,7 @@
     if (t.dataset.go) {
       const g = t.dataset.go;
       if (g === 'sprzet') { showScreen('sprzet'); setView('pulpit'); }
+      else if (g === 'magazyn') { showScreen('magazyn'); loadMagazyn(); }
       else showScreen(g === 'launcher' ? 'launcher' : g);
       return;
     }
@@ -526,6 +877,7 @@
         applyUser();
         showScreen('launcher');
         refreshCounts();
+        refreshWarehouseCounts();
       } else {
         showScreen('login');
       }

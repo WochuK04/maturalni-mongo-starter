@@ -71,15 +71,18 @@
               <div><div class="num" style="color:#0C1C44;" data-stat="mine">—</div><div class="lbl">u Ciebie</div></div>
             </div>
           </button>
-          <!-- Magazyn (poza zakresem v1) -->
-          <button class="mod-card mod-soon" data-soon="Magazyn — wkrótce w v2">
+          <!-- Magazyn -->
+          <button class="mod-card" data-go="magazyn" data-warehouse-only>
             <div class="top">
               <span class="mod-icon" style="background:#EDE9F6;"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#5F4B8B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><rect width="12" height="12" x="6" y="10"/></svg></span>
-              <span class="mod-badge-soon">Wkrótce</span>
+              <span class="mod-arrow"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
             </div>
             <div class="mod-title">Magazyn</div>
             <div class="mod-desc">Stany, operacje, produkty i raporty.</div>
-            <div class="mod-stats"><div><div class="num" style="color:#5F4B8B;">—</div><div class="lbl">szt.</div></div></div>
+            <div class="mod-stats">
+              <div><div class="num" style="color:#5F4B8B;" data-stat="whQty">—</div><div class="lbl">szt.</div></div>
+              <div><div class="num" style="color:#0C1C44;" data-stat="whProducts">—</div><div class="lbl">pozycji</div></div>
+            </div>
           </button>
           <!-- Licencje -->
           <button class="mod-card mod-soon" data-soon="Licencje — moduł w przygotowaniu">
@@ -204,6 +207,38 @@
           <div class="stack" data-zespol-list><div class="loading">Ładowanie…</div></div>
         </div>
       </main>
+    </div>
+  </section>
+
+  <!-- ================= MAGAZYN ================= -->
+  <section id="screen-magazyn" class="hidden">
+    <div class="mag">
+      <div class="mag-header">
+        <div class="mag-header-in">
+          <div class="mag-topbar">
+            <button class="mag-brand" data-go="launcher"><img src="/assets/M_sygnet_white.svg" style="width:30px;height:30px;" onerror="this.src='/assets/M_sygnet.svg'"><span class="t"><span class="a">Zaplecze</span><span class="b">Magazyn</span></span></button>
+            <button class="mobile-icon-btn" data-go="settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg></button>
+          </div>
+        </div>
+        <div class="mag-hero">
+          <h1>Magazyn</h1>
+          <p data-mag-subtitle>Ładowanie…</p>
+        </div>
+        <div class="mag-tabs" id="magTabs">
+          <button class="mag-tab active" data-mag-tab="przeglad">Przegląd</button>
+          <button class="mag-tab" data-mag-tab="operacje">Operacje</button>
+          <button class="mag-tab" data-mag-tab="produkty">Produkty</button>
+          <button class="mag-tab" data-mag-tab="raportowanie">Raportowanie</button>
+          <button class="mag-tab" data-mag-tab="konfiguracja">Konfiguracja</button>
+        </div>
+      </div>
+      <div class="mag-body">
+        <div data-mag-panel="przeglad"></div>
+        <div data-mag-panel="operacje" hidden></div>
+        <div data-mag-panel="produkty" hidden></div>
+        <div data-mag-panel="raportowanie" hidden></div>
+        <div data-mag-panel="konfiguracja" hidden></div>
+      </div>
     </div>
   </section>
 
