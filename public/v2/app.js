@@ -200,9 +200,10 @@
     if (view === 'pulpit') return loadPulpit();
     if (view === 'available') return loadAvailable();
     if (view === 'mojsprzet') return loadMine();
-    if (view === 'skrzynka') { loadInbox(); loadMyRequests(); loadHistory(); return; }
+    if (view === 'skrzynka') { loadInbox(); loadReports(); loadMyRequests(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
     if (view === 'stats') return loadStats();
+    if (view === 'rejestry') return loadRejestry();
     if (view === 'admin') return loadAdminItems();
   }
 
@@ -401,6 +402,42 @@
     list.innerHTML = '<div class="loading">Ładowanie…</div>';
     api('/my/loan-requests').then((items) => { state.cache.myreq = items; render(items); })
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
+  }
+
+  // ---- Zgłoszenia admina (notifications: usterki + transfery)
+  const ISSUE_LABELS = { damage: 'Uszkodzenie', lost: 'Zgubienie', other: 'Inne' };
+  function loadReports() {
+    const wrap = $('[data-skrzynka-reports-wrap]'); const list = $('[data-skrzynka-reports]');
+    if (!wrap || !list) return;
+    const isAdmin = state.user && state.user.role === 'admin';
+    if (!isAdmin) { wrap.hidden = true; return; }
+    const render = (items) => {
+      wrap.hidden = false;
+      if (!items.length) { list.innerHTML = emptyBlock('Brak zgłoszeń', 'Usterki i transfery pojawią się tutaj.'); return; }
+      list.innerHTML = items.map((n) => {
+        const resolved = n.status === 'resolved';
+        const title = n.kind === 'transfer' ? `🔄 Transfer: ${esc(n.itemName || n.itemCode || '')}` : `⚠️ ${esc(ISSUE_LABELS[n.issueType] || 'Zgłoszenie')}: ${esc(n.itemName || n.itemCode || '')}`;
+        const meta = n.kind === 'transfer'
+          ? `Z: ${esc(n.fromName || n.fromEmail || 'magazynu')} → na: ${esc(n.toName || n.toEmail || '—')} · wykonał: ${esc(n.createdByName || n.createdByEmail || '—')} · ${esc(fmtDate(n.createdAt))}`
+          : `Zgłosił: ${esc(n.createdByName || n.createdByEmail || '—')} · ${esc(fmtDate(n.createdAt))}`;
+        return `<div class="inbox-card${resolved ? ' report-resolved' : ''}">
+          <div class="h"><span class="title">${title}</span><span class="chip ${resolved ? 'chip-grey' : n.kind === 'transfer' ? 'chip-blue' : 'chip-orange'}" style="margin-left:auto;">${resolved ? 'Załatwione' : 'Otwarte'}</span></div>
+          <div class="meta">${meta}</div>
+          ${n.message ? `<div class="meta">📝 ${esc(n.message)}</div>` : ''}
+          ${resolved ? `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Załatwione przez ${esc(n.resolvedByEmail || '—')}</div>`
+            : `<div class="row-actions"><button class="btn btn-primary btn-sm" data-notif-resolve="${esc(n._id)}">Oznacz jako załatwione</button></div>`}
+        </div>`;
+      }).join('');
+    };
+    if (state.cache.reports) { render(state.cache.reports); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/admin/notifications').then((items) => { state.cache.reports = items; render(items); })
+      .catch(() => { wrap.hidden = false; list.innerHTML = emptyBlock('Nie udało się wczytać zgłoszeń', ''); });
+  }
+  function resolveNotif(id) {
+    api('/admin/notifications/' + encodeURIComponent(id) + '/resolve', { method: 'POST', body: JSON.stringify({}) })
+      .then(() => { toast('Oznaczono jako załatwione.'); delete state.cache.reports; loadReports(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
   // ---- Komentarze pod wnioskiem (lazy-load przy rozwinięciu)
@@ -1628,6 +1665,72 @@
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
+  // -------------------------------------------------------------- Rejestry (admin)
+  const AUDIT_ACTION_LABELS = {
+    loan_request_created: 'Złożył wniosek o wypożyczenie', purchase_request_created: 'Złożył wniosek o zakup',
+    loan_request_cancelled: 'Anulował swój wniosek', loan_request_manager_approved: 'Zaakceptował (kierownik)',
+    loan_request_manager_rejected: 'Odrzucił (kierownik)', loan_request_approved: 'Zatwierdził i wydał sprzęt',
+    loan_request_rejected: 'Odrzucił wniosek', purchase_request_approved: 'Zatwierdził zakup (do zamówienia)',
+    purchase_request_ordered: 'Oznaczył zakup jako zamówiony', purchase_request_stocked: 'Dodał zakup do magazynu',
+    purchase_request_cancelled: 'Anulował zakup', loan_request_auto_rejected: 'Odrzucił (sprzęt wycofany)',
+    request_comment_added: 'Dodał komentarz', loan_created: 'Utworzył wypożyczenie', loan_returned: 'Przyjął zwrot',
+    item_created: 'Dodał sprzęt', item_updated: 'Zaktualizował sprzęt', item_deactivated: 'Wycofał sprzęt',
+    item_discarded: 'Wyrzucił sprzęt', item_transferred: 'Przeniósł sprzęt', issue_reported: 'Zgłosił problem',
+    user_created: 'Dodał użytkownika', user_updated: 'Zmienił użytkownika', user_deleted: 'Usunął użytkownika',
+    warehouse_operation_done: 'Zatwierdził operację', warehouse_operation_reversed: 'Cofnął operację',
+    reorder_rule_created: 'Dodał regułę min-max'
+  };
+  const REJ_DEFS = {
+    loans: { url: '/admin/loans', sub: (n) => `${n} ${plural(n, 'wypożyczenie', 'wypożyczenia', 'wypożyczeń')}`,
+      cols: [
+        { t: 'Kod', f: (r) => r.itemCode || '—', cls: 'mono-cell' }, { t: 'Nazwa', f: (r) => r.itemName || '—' },
+        { t: 'Osoba', f: (r) => r.userDisplayName || r.userEmail || '—' }, { t: 'Ilość', f: (r) => r.quantity || 1, num: true },
+        { t: 'Status', f: (r) => r.status === 'active' ? 'Aktywne' : r.status === 'returned' ? 'Zwrócone' : (r.status || '—') },
+        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' }
+      ] },
+    requests: { url: '/admin/loan-requests', sub: (n) => `${n} ${plural(n, 'wniosek', 'wnioski', 'wniosków')}`,
+      cols: [
+        { t: 'Rodzaj', f: (r) => r.kind === 'purchase' ? 'Zakup' : 'Wypożyczenie' }, { t: 'Pozycja', f: (r) => r.itemName || r.itemCode || '—' },
+        { t: 'Wnioskujący', f: (r) => r.requesterName || r.requesterEmail || '—' },
+        { t: 'Status', f: (r) => statusLabel(r.status) }, { t: 'Data', f: (r) => fmtDate(r.requestedAt) }
+      ] },
+    audit: { url: '/admin/audit-logs', sub: (n) => `${n} ${plural(n, 'wpis', 'wpisy', 'wpisów')}`,
+      cols: [
+        { t: 'Kiedy', f: (r) => fmtDate(r.createdAt) }, { t: 'Osoba', f: (r) => r.actorEmail || '—' },
+        { t: 'Akcja', f: (r) => AUDIT_ACTION_LABELS[r.actionType] || r.actionType || '—' },
+        { t: 'Czego dotyczy', f: (r) => (r.payload && (r.payload.itemCode || r.payload.itemName || r.payload.email)) || r.entityId || '—' }
+      ] }
+  };
+  function loadRejestry() { setRejTab(state.rejTab || 'loans'); }
+  function setRejTab(tab) {
+    state.rejTab = tab;
+    $$('[data-rej-tab]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-rej-tab') === tab));
+    renderRejTab(tab);
+  }
+  async function renderRejTab(tab) {
+    const body = $('[data-rej-body]'); const sub = $('[data-rej-sub]'); const def = REJ_DEFS[tab]; if (!body || !def) return;
+    body.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const rows = await api(def.url);
+      state.rej = state.rej || {}; state.rej[tab] = rows;
+      if (sub) sub.textContent = def.sub(rows.length);
+      if (!rows.length) { body.innerHTML = emptyBlock('Brak danych', ''); return; }
+      body.innerHTML = tableHTML(
+        def.cols.map((c) => ({ t: c.t, num: c.num })),
+        rows.map((r) => ({ cells: def.cols.map((c) => ({ v: c.f(r), cls: (c.num ? 'num ' : '') + (c.cls || '') })) }))
+      );
+    } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+  function exportRejCSV() {
+    const tab = state.rejTab || 'loans'; const def = REJ_DEFS[tab]; const rows = (state.rej && state.rej[tab]) || [];
+    if (!rows.length) { toast('Brak danych do eksportu.'); return; }
+    const escC = (v) => { const s = String(v == null ? '' : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const csv = [def.cols.map((c) => c.t).join(',')].concat(rows.map((r) => def.cols.map((c) => escC(c.f(r))).join(','))).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = 'rejestr-' + tab + '.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
   // -------------------------------------------------------------- Zapotrzebowanie (min-max)
   async function renderZapotrzebowanie() {
     const el = $('[data-mag-panel="zapotrzebowanie"]'); if (!el) return;
@@ -2007,7 +2110,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2088,6 +2191,9 @@
     }
     if (t.hasAttribute('data-req-cancel')) { cancelOwnRequest(t.getAttribute('data-req-cancel')); return; }
     if (t.hasAttribute('data-cmt-send')) { const d = t.closest('details.cmt'); sendComment(t.getAttribute('data-cmt-send'), d); return; }
+    if (t.hasAttribute('data-notif-resolve')) { resolveNotif(t.getAttribute('data-notif-resolve')); return; }
+    if (t.hasAttribute('data-rej-tab')) { setRejTab(t.getAttribute('data-rej-tab')); return; }
+    if (t.hasAttribute('data-rej-csv')) { exportRejCSV(); return; }
   });
 
   document.addEventListener('keydown', (e) => {

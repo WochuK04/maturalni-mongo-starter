@@ -143,6 +143,7 @@
           <button class="rail-link" data-view="skrzynka"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span>Skrzynka</span><span class="count hidden" data-inbox-count>0</span></button>
           <button class="rail-link" data-view="zespol" data-manager-only><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg><span>Mój zespół</span></button>
           <button class="rail-link" data-view="stats" data-admin-only><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="12" y="6" width="3" height="11"/><rect x="17" y="13" width="3" height="4"/></svg><span>Statystyki</span></button>
+          <button class="rail-link" data-view="rejestry" data-admin-only><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg><span>Rejestry</span></button>
           <button class="rail-link" data-view="admin" data-admin-only><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span>Zarządzanie</span></button>
         </nav>
         <div class="rail-foot">
@@ -224,6 +225,20 @@
           <div class="stack" data-skrzynka-mine><div class="loading">Ładowanie…</div></div>
           <div class="hist-sec-title">Historia aktywności</div>
           <div class="hist-list" data-skrzynka-history><div class="loading">Ładowanie…</div></div>
+        </div>
+
+        <!-- REJESTRY (admin) -->
+        <div class="page page-wide" data-panel="rejestry" hidden>
+          <div class="page-head-row">
+            <div><h1 style="font-size:clamp(26px,3vw,34px);font-weight:600;letter-spacing:-1.4px;margin:0 0 6px;color:var(--heading);">Rejestry</h1><p style="margin:0;font-size:15px;color:var(--muted);" data-rej-sub>&nbsp;</p></div>
+            <button class="btn btn-ghost btn-sm" data-rej-csv>Eksport CSV</button>
+          </div>
+          <div class="subnav" data-rej-subnav>
+            <button data-rej-tab="loans" class="active">Wypożyczenia</button>
+            <button data-rej-tab="requests">Wnioski</button>
+            <button data-rej-tab="audit">Dziennik audytu</button>
+          </div>
+          <div data-rej-body><div class="loading">Ładowanie…</div></div>
         </div>
 
         <!-- STATYSTYKI (dashboard admina) -->
