@@ -351,6 +351,12 @@ app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });
 
+// Nowy interfejs „Zaplecze v2" (Login + Launcher + Sprzęt). Współdzieli backend
+// z widokiem klasycznym; pliki żyją w public/v2/ (serwowane też przez static).
+app.get('/v2', (_req, res) => {
+  res.sendFile(new URL('../public/v2/index.html', import.meta.url).pathname);
+});
+
 app.get(
   '/auth/google',
   passport.authenticate('google', {
@@ -377,6 +383,18 @@ app.get('/auth/logout', (req, res, next) => {
   });
 });
 
+// Preferencje interfejsu (Zaplecze v2): motyw + powiadomienia. Domyślne wartości
+// stosowane, gdy użytkownik nic jeszcze nie zapisał.
+const THEME_VALUES = ['light', 'dark', 'system'];
+function normalizePreferences(raw) {
+  const p = raw && typeof raw === 'object' ? raw : {};
+  return {
+    theme: THEME_VALUES.includes(p.theme) ? p.theme : 'system',
+    notifyEmail: p.notifyEmail !== false,
+    notifyInbox: p.notifyInbox !== false
+  };
+}
+
 app.get('/me', (req, res) => {
   if (!req.isAuthenticated || !req.isAuthenticated()) {
     return res.status(401).json({ authenticated: false });
@@ -387,9 +405,28 @@ app.get('/me', (req, res) => {
     user: {
       email: req.user.email,
       fullName: req.user.fullName,
-      role: req.user.role
+      role: req.user.role,
+      preferences: normalizePreferences(req.user.preferences)
     }
   });
+});
+
+// Zapis preferencji interfejsu na dokumencie użytkownika (trwałość między
+// urządzeniami). Przyjmuje pola częściowo — scala z bieżącymi.
+app.put('/me/preferences', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const current = normalizePreferences(req.user.preferences);
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const merged = normalizePreferences({
+    theme: body.theme !== undefined ? body.theme : current.theme,
+    notifyEmail: body.notifyEmail !== undefined ? body.notifyEmail : current.notifyEmail,
+    notifyInbox: body.notifyInbox !== undefined ? body.notifyInbox : current.notifyInbox
+  });
+  await db.collection(collections.users).updateOne(
+    { email: req.user.email },
+    { $set: { preferences: merged, updatedAt: new Date() } }
+  );
+  res.json({ message: 'Zapisano', preferences: merged });
 });
 
 app.get('/items/available', requireAuth, async (_req, res) => {
@@ -2184,6 +2221,68 @@ app.get('/my/action-items', requireAuth, async (req, res) => {
     .toArray();
 
   res.json(requests);
+});
+
+// Historia aktywności zalogowanego użytkownika — łączy dane, które i tak
+// powstają: zgłoszenia problemów i transfery (kolekcja notifications, gdzie
+// użytkownik jest autorem lub odbiorcą) oraz jego wnioski (loanRequests).
+// Zwraca ujednoliconą, posortowaną malejąco listę zdarzeń (read-only).
+app.get('/my/history', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const me = req.user.email;
+
+  const [notes, requests] = await Promise.all([
+    db.collection(collections.notifications)
+      .find({ $or: [{ createdByEmail: me }, { toEmail: me }, { fromEmail: me }] })
+      .sort({ createdAt: -1 }).limit(100).toArray(),
+    db.collection(collections.loanRequests)
+      .find({ requesterEmail: me })
+      .sort({ requestedAt: -1 }).limit(100).toArray()
+  ]);
+
+  const events = [];
+
+  for (const n of notes) {
+    if (n.kind === 'issue') {
+      events.push({
+        type: 'issue',
+        title: 'Zgłoszenie problemu',
+        itemCode: n.itemCode || null,
+        itemName: n.itemName || '',
+        message: n.message || '',
+        status: n.status || null,
+        at: n.createdAt
+      });
+    } else if (n.kind === 'transfer') {
+      const outgoing = n.fromEmail === me;
+      events.push({
+        type: 'transfer',
+        title: outgoing ? 'Przekazano sprzęt' : 'Otrzymano sprzęt',
+        itemCode: n.itemCode || null,
+        itemName: n.itemName || '',
+        message: outgoing
+          ? ('Do: ' + (n.toName || n.toEmail || '—'))
+          : ('Od: ' + (n.fromName || n.fromEmail || '—')),
+        status: n.status || null,
+        at: n.createdAt
+      });
+    }
+  }
+
+  for (const r of requests) {
+    events.push({
+      type: r.kind === 'purchase' ? 'purchase' : 'loan',
+      title: r.kind === 'purchase' ? 'Wniosek o zakup' : 'Wniosek o wypożyczenie',
+      itemCode: r.itemCode || null,
+      itemName: r.itemName || r.itemCode || (r.purpose || ''),
+      message: r.purpose || r.note || '',
+      status: r.status || null,
+      at: r.requestedAt || r.createdAt
+    });
+  }
+
+  events.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+  res.json(events.slice(0, 100));
 });
 
 app.post('/loan-requests', requireAuth, async (req, res) => {
@@ -4387,6 +4486,241 @@ function normalizePackingBody(body) {
   };
   return doc;
 }
+
+// ===================== LICENCJE / SUBSKRYPCJE =====================
+// Rekord licencji: koszty (mies./rok), stanowiska, odnowienia, dostępy.
+// UWAGA bezpieczeństwo: NIE przechowujemy haseł — tylko login, URL panelu i
+// notatkę „gdzie jest hasło" (np. 1Password). Odczyt: kierownik/admin. Zapis: admin.
+const LICENSE_STATUSES = ['active', 'trial', 'cancelled'];
+const DAY_MS_LIC = 24 * 60 * 60 * 1000;
+
+function normalizeAssigned(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(',');
+  return arr.map(x => String(x || '').trim()).filter(Boolean).slice(0, 100);
+}
+
+function licenseView(l, now = new Date()) {
+  const amount = Math.max(0, Number(l.costAmount) || 0);
+  const cycle = l.costCycle === 'yearly' ? 'yearly' : 'monthly';
+  const monthlyCost = cycle === 'yearly' ? Math.round((amount / 12) * 100) / 100 : amount;
+  const yearlyCost = cycle === 'yearly' ? amount : Math.round(amount * 12 * 100) / 100;
+  const renewal = l.renewalDate ? new Date(l.renewalDate) : null;
+  const daysToRenewal = renewal && !Number.isNaN(renewal.getTime())
+    ? Math.floor((renewal.getTime() - now.getTime()) / DAY_MS_LIC) : null;
+  return {
+    id: String(l._id),
+    name: l.name || '',
+    vendor: l.vendor || '',
+    category: l.category || '',
+    costAmount: amount,
+    costCycle: cycle,
+    monthlyCost,
+    yearlyCost,
+    seats: l.seats == null ? null : Math.max(0, Number(l.seats) || 0),
+    renewalDate: l.renewalDate || null,
+    daysToRenewal,
+    status: LICENSE_STATUSES.includes(l.status) ? l.status : 'active',
+    ownerEmail: l.ownerEmail || null,
+    ownerName: l.ownerName || '',
+    assignedTo: Array.isArray(l.assignedTo) ? l.assignedTo : [],
+    loginUsername: l.loginUsername || '',
+    panelUrl: l.panelUrl || '',
+    passwordLocation: l.passwordLocation || '',
+    notes: l.notes || ''
+  };
+}
+
+// Buduje dokument licencji z body (create/patch współdzielą walidację pól).
+async function licenseDocFromBody(db, body, base = {}) {
+  const doc = { ...base };
+  if (body.name !== undefined) doc.name = String(body.name || '').trim();
+  if (body.vendor !== undefined) doc.vendor = String(body.vendor || '').trim();
+  if (body.category !== undefined) doc.category = String(body.category || '').trim();
+  if (body.costAmount !== undefined) doc.costAmount = Math.max(0, Number(body.costAmount) || 0);
+  if (body.costCycle !== undefined) doc.costCycle = body.costCycle === 'yearly' ? 'yearly' : 'monthly';
+  if (body.seats !== undefined) doc.seats = body.seats === '' || body.seats == null ? null : Math.max(0, Number(body.seats) || 0);
+  if (body.renewalDate !== undefined) doc.renewalDate = body.renewalDate ? String(body.renewalDate) : null;
+  if (body.status !== undefined) doc.status = LICENSE_STATUSES.includes(body.status) ? body.status : 'active';
+  if (body.ownerEmail !== undefined) {
+    const email = String(body.ownerEmail || '').trim().toLowerCase();
+    doc.ownerEmail = email || null;
+    if (email) {
+      const u = await db.collection(collections.users).findOne({ email }, { projection: { fullName: 1 } });
+      doc.ownerName = u?.fullName || email;
+    } else doc.ownerName = '';
+  }
+  if (body.assignedTo !== undefined) doc.assignedTo = normalizeAssigned(body.assignedTo);
+  if (body.loginUsername !== undefined) doc.loginUsername = String(body.loginUsername || '').trim();
+  if (body.panelUrl !== undefined) doc.panelUrl = String(body.panelUrl || '').trim();
+  if (body.passwordLocation !== undefined) doc.passwordLocation = String(body.passwordLocation || '').trim();
+  if (body.notes !== undefined) doc.notes = String(body.notes || '').trim();
+  return doc;
+}
+
+app.get('/licenses', requireAuth, requireManager, async (_req, res) => {
+  const db = await getDb();
+  const now = new Date();
+  const list = await db.collection(collections.licenses)
+    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
+  res.json(list.map(l => licenseView(l, now)));
+});
+
+app.get('/licenses/summary', requireAuth, requireManager, async (_req, res) => {
+  const db = await getDb();
+  const now = new Date();
+  const list = await db.collection(collections.licenses)
+    .find({ isActive: { $ne: false } }).toArray();
+  const views = list.map(l => licenseView(l, now));
+  const live = views.filter(v => v.status !== 'cancelled');
+  const monthlyTotal = Math.round(live.reduce((s, v) => s + v.monthlyCost, 0) * 100) / 100;
+  const upcoming = live.filter(v => v.daysToRenewal != null && v.daysToRenewal >= 0 && v.daysToRenewal <= 30).length;
+  const overdue = live.filter(v => v.daysToRenewal != null && v.daysToRenewal < 0).length;
+  res.json({
+    count: views.length,
+    activeCount: live.length,
+    monthlyTotal,
+    yearlyTotal: Math.round(monthlyTotal * 12 * 100) / 100,
+    upcomingCount: upcoming,
+    overdueCount: overdue
+  });
+});
+
+app.post('/licenses', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'Podaj nazwę licencji' });
+  const now = new Date();
+  const doc = await licenseDocFromBody(db, req.body, {
+    name, costAmount: 0, costCycle: 'monthly', status: 'active', assignedTo: [],
+    isActive: true, createdByEmail: req.user.email, createdAt: now, updatedAt: now
+  });
+  const { insertedId } = await db.collection(collections.licenses).insertOne(doc);
+  res.status(201).json({ id: String(insertedId), ...licenseView({ ...doc, _id: insertedId }) });
+});
+
+app.patch('/licenses/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  if (req.body.name !== undefined && !String(req.body.name).trim()) {
+    return res.status(400).json({ message: 'Nazwa nie może być pusta' });
+  }
+  const update = await licenseDocFromBody(db, req.body, { updatedAt: new Date() });
+  const r = await db.collection(collections.licenses).updateOne({ _id: id }, { $set: update });
+  if (!r.matchedCount) return res.status(404).json({ message: 'Licencja nie istnieje' });
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/licenses/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  await db.collection(collections.licenses).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
+  res.json({ message: 'Usunięto' });
+});
+
+// ===================== ONBOARDING =====================
+// Osobisty checklist: globalna lista kroków (admin edytuje) + postęp per
+// użytkownik (kolekcja onboardingProgress). Każdy zalogowany widzi swoją listę
+// i odhacza kroki; edycja listy kroków — tylko admin.
+function onboardingStepView(s) {
+  return {
+    id: String(s._id),
+    title: s.title || '',
+    description: s.description || '',
+    category: s.category || 'Ogólne',
+    url: s.url || '',
+    sortOrder: Number(s.sortOrder) || 0
+  };
+}
+
+app.get('/onboarding', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const steps = await db.collection(collections.onboardingSteps)
+    .find({ isActive: { $ne: false } }).sort({ sortOrder: 1, createdAt: 1 }).toArray();
+  const progress = await db.collection(collections.onboardingProgress)
+    .find({ userEmail: req.user.email }).toArray();
+  const byStep = new Map(progress.map(p => [String(p.stepId), p]));
+  res.json(steps.map(s => {
+    const p = byStep.get(String(s._id));
+    return { ...onboardingStepView(s), done: !!(p && p.done), completedAt: (p && p.completedAt) || null };
+  }));
+});
+
+app.get('/onboarding/summary', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const steps = await db.collection(collections.onboardingSteps)
+    .find({ isActive: { $ne: false } }, { projection: { _id: 1 } }).toArray();
+  const stepIds = new Set(steps.map(s => String(s._id)));
+  const total = stepIds.size;
+  const progress = await db.collection(collections.onboardingProgress)
+    .find({ userEmail: req.user.email, done: true }).toArray();
+  const done = progress.filter(p => stepIds.has(String(p.stepId))).length;
+  res.json({ total, done, pct: total ? Math.round((done / total) * 100) : 0 });
+});
+
+app.post('/onboarding/:stepId/toggle', requireAuth, async (req, res) => {
+  const db = await getDb();
+  let stepId;
+  try { stepId = new ObjectId(req.params.stepId); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const step = await db.collection(collections.onboardingSteps).findOne({ _id: stepId });
+  if (!step) return res.status(404).json({ message: 'Krok nie istnieje' });
+  const done = req.body.done !== false;
+  await db.collection(collections.onboardingProgress).updateOne(
+    { userEmail: req.user.email, stepId: String(stepId) },
+    { $set: { done, completedAt: done ? new Date() : null, updatedAt: new Date() } },
+    { upsert: true }
+  );
+  res.json({ message: done ? 'Odhaczono' : 'Cofnięto', done });
+});
+
+// --- Admin: zarządzanie krokami onboardingu ---
+app.post('/onboarding/steps', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const title = String(req.body.title || '').trim();
+  if (!title) return res.status(400).json({ message: 'Podaj tytuł kroku' });
+  const now = new Date();
+  const doc = {
+    title,
+    description: String(req.body.description || '').trim(),
+    category: String(req.body.category || 'Ogólne').trim() || 'Ogólne',
+    url: String(req.body.url || '').trim(),
+    sortOrder: Number(req.body.sortOrder) || 0,
+    isActive: true,
+    createdByEmail: req.user.email,
+    createdAt: now,
+    updatedAt: now
+  };
+  const { insertedId } = await db.collection(collections.onboardingSteps).insertOne(doc);
+  res.status(201).json({ id: String(insertedId), ...onboardingStepView({ ...doc, _id: insertedId }) });
+});
+
+app.patch('/onboarding/steps/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  const update = { updatedAt: new Date() };
+  if (req.body.title !== undefined) {
+    const t = String(req.body.title || '').trim();
+    if (!t) return res.status(400).json({ message: 'Tytuł nie może być pusty' });
+    update.title = t;
+  }
+  if (req.body.description !== undefined) update.description = String(req.body.description || '').trim();
+  if (req.body.category !== undefined) update.category = String(req.body.category || 'Ogólne').trim() || 'Ogólne';
+  if (req.body.url !== undefined) update.url = String(req.body.url || '').trim();
+  if (req.body.sortOrder !== undefined) update.sortOrder = Number(req.body.sortOrder) || 0;
+  const r = await db.collection(collections.onboardingSteps).updateOne({ _id: id }, { $set: update });
+  if (!r.matchedCount) return res.status(404).json({ message: 'Krok nie istnieje' });
+  res.json({ message: 'Zapisano' });
+});
+
+app.delete('/onboarding/steps/:id', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  let id;
+  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
+  await db.collection(collections.onboardingSteps).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
+  res.json({ message: 'Usunięto' });
+});
 
 // Lista eventów TW (dla mapy i listy busów).
 app.get('/tw', requireAuth, async (_req, res) => {
