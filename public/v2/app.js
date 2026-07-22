@@ -203,6 +203,7 @@
     if (view === 'skrzynka') { loadInbox(); loadReports(); loadMyRequests(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
     if (view === 'stats') return loadStats();
+    if (view === 'users') return loadUsers();
     if (view === 'rejestry') return loadRejestry();
     if (view === 'admin') return loadAdminItems();
   }
@@ -914,6 +915,27 @@
           await api('/warehouse/reorder-rules', { method: 'POST', body: JSON.stringify(data) });
         }
         toast('Zapisano regułę.'); renderZapotrzebowanie(); if (state.magTab === 'przeglad') renderPrzeglad();
+      }
+    },
+    newUser: {
+      eyebrow: 'Użytkownicy', title: 'Dodaj użytkownika',
+      hint: 'Konto zostanie utworzone; osoba dokończy je przy pierwszym logowaniu Google.', cta: 'Dodaj',
+      fields: () => {
+        const managers = (state.userAdmin || []).filter((u) => u.role === 'manager' || u.role === 'admin');
+        const mgrOpts = '<option value="">— bezpośrednio do administracji —</option>' + managers.map((m) => `<option value="${esc(m.email)}">${esc(m.fullName || m.email)}</option>`).join('');
+        const roleOpts = Object.keys(ROLE_LABELS).map((r) => `<option value="${r}"${r === 'user' ? ' selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('');
+        return `
+        <label class="field"><span>E-mail *</span><input name="email" type="email" placeholder="imie.nazwisko@maturalni.com"></label>
+        <label class="field"><span>Imię i nazwisko</span><input name="fullName" placeholder="np. Jan Kowalski"></label>
+        <div class="field-2">
+          <label class="field"><span>Rola</span><select name="role">${roleOpts}</select></label>
+          <label class="field"><span>Wnioski trafiają do</span><select name="managerEmail">${mgrOpts}</select></label>
+        </div>`;
+      },
+      submit: async (data) => {
+        if (!data.email) throw new Error('Podaj e-mail.');
+        await api('/admin/users', { method: 'POST', body: JSON.stringify(data) });
+        toast('Dodano użytkownika.'); loadUsers();
       }
     }
   };
@@ -1665,6 +1687,46 @@
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
+  // -------------------------------------------------------------- Użytkownicy (admin)
+  const ROLE_LABELS = { user: 'Użytkownik', viewer: 'Podgląd (read-only)', manager: 'Kierownik', admin: 'Administrator' };
+  function loadUsers() {
+    const list = $('[data-users-list]'); const sub = $('[data-users-sub]'); if (!list) return;
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/admin/users').then((users) => {
+      state.userAdmin = users;
+      state.users = users.map((u) => ({ email: u.email, fullName: u.fullName || u.email })); // odśwież cache selecta transferu
+      if (sub) sub.textContent = `${users.length} ${plural(users.length, 'osoba', 'osoby', 'osób')}`;
+      const managers = users.filter((u) => u.role === 'manager' || u.role === 'admin');
+      const me = state.user && state.user.email;
+      const roleSel = (u) => `<select class="usel" data-user-role="${esc(u.email)}">${Object.keys(ROLE_LABELS).map((r) => `<option value="${r}"${(u.role || 'user') === r ? ' selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select>`;
+      const mgrSel = (u) => `<select class="usel" data-user-mgr="${esc(u.email)}"><option value="">— bezpośrednio do administracji —</option>${managers.filter((m) => m.email !== u.email).map((m) => `<option value="${esc(m.email)}"${u.managerEmail === m.email ? ' selected' : ''}>${esc(m.fullName || m.email)} (${esc(ROLE_LABELS[m.role] || m.role)})</option>`).join('')}</select>`;
+      list.innerHTML = tableHTML(
+        [{ t: 'Użytkownik' }, { t: 'E-mail' }, { t: 'Rola' }, { t: 'Wnioski trafiają do' }, { t: '', num: true }],
+        users.map((u) => ({ cells: [
+          { html: `${esc(u.fullName || u.email)}${u.pendingFirstLogin ? ' <span class="chip chip-orange">oczekuje na logowanie</span>' : ''}` },
+          { v: u.email, cls: 'mut' }, { html: roleSel(u) }, { html: mgrSel(u) },
+          { html: u.email === me ? '<span class="eq-sub">to Ty</span>' : `<button class="btn btn-danger-ghost btn-sm" data-user-del="${esc(u.email)}">Usuń</button>`, cls: 'num' }
+        ] }))
+      );
+      bindUserSelects(list);
+    }).catch((e) => { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); });
+  }
+  function bindUserSelects(root) {
+    $$('[data-user-role]', root).forEach((s) => s.addEventListener('change', () => patchUser(s.getAttribute('data-user-role'), { role: s.value })));
+    $$('[data-user-mgr]', root).forEach((s) => s.addEventListener('change', () => patchUser(s.getAttribute('data-user-mgr'), { managerEmail: s.value })));
+  }
+  function patchUser(email, body) {
+    api('/admin/users/' + encodeURIComponent(email), { method: 'PATCH', body: JSON.stringify(body) })
+      .then(() => { toast('Zapisano.'); loadUsers(); })
+      .catch((e) => { toast(e.message || 'Nie udało się.', true); loadUsers(); });
+  }
+  function delUser(email) {
+    if (!confirm('Usunąć użytkownika ' + email + '?')) return;
+    api('/admin/users/' + encodeURIComponent(email), { method: 'DELETE' })
+      .then(() => { toast('Usunięto użytkownika.'); loadUsers(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
   // -------------------------------------------------------------- Rejestry (admin)
   const AUDIT_ACTION_LABELS = {
     loan_request_created: 'Złożył wniosek o wypożyczenie', purchase_request_created: 'Złożył wniosek o zakup',
@@ -2110,7 +2172,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2194,6 +2256,8 @@
     if (t.hasAttribute('data-notif-resolve')) { resolveNotif(t.getAttribute('data-notif-resolve')); return; }
     if (t.hasAttribute('data-rej-tab')) { setRejTab(t.getAttribute('data-rej-tab')); return; }
     if (t.hasAttribute('data-rej-csv')) { exportRejCSV(); return; }
+    if (t.hasAttribute('data-user-new')) { openSheet('newUser', {}); return; }
+    if (t.hasAttribute('data-user-del')) { delUser(t.getAttribute('data-user-del')); return; }
   });
 
   document.addEventListener('keydown', (e) => {
