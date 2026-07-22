@@ -9,6 +9,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/v2/styles.css">
+<script>
+  /* Ustaw motyw jak najwcześniej (przed pierwszym malowaniem), by uniknąć
+     migotania. „system” mapujemy na aktualny motyw systemowy. */
+  (function () {
+    try {
+      var pref = localStorage.getItem('zaplecze.theme') || 'system';
+      var dark = pref === 'dark' || (pref === 'system' &&
+        window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    } catch (e) { /* localStorage niedostępny — zostań przy jasnym */ }
+  })();
+</script>
 </head>
 <body>
 
@@ -68,7 +80,7 @@
             <div class="mod-desc">Wypożyczenia, wnioski, zwroty i zespół.</div>
             <div class="mod-stats">
               <div><div class="num" style="color:#3F5FBE;" data-stat="available">—</div><div class="lbl">dostępnych</div></div>
-              <div><div class="num" style="color:#0C1C44;" data-stat="mine">—</div><div class="lbl">u Ciebie</div></div>
+              <div><div class="num" style="color:var(--heading);" data-stat="mine">—</div><div class="lbl">u Ciebie</div></div>
             </div>
           </button>
           <!-- Magazyn -->
@@ -81,7 +93,7 @@
             <div class="mod-desc">Stany, operacje, produkty i raporty.</div>
             <div class="mod-stats">
               <div><div class="num" style="color:#5F4B8B;" data-stat="whQty">—</div><div class="lbl">szt.</div></div>
-              <div><div class="num" style="color:#0C1C44;" data-stat="whProducts">—</div><div class="lbl">pozycji</div></div>
+              <div><div class="num" style="color:var(--heading);" data-stat="whProducts">—</div><div class="lbl">pozycji</div></div>
             </div>
           </button>
           <!-- Licencje -->
@@ -94,7 +106,7 @@
             <div class="mod-desc">Subskrypcje, koszty, loginy i odnowienia.</div>
             <div class="mod-stats">
               <div><div class="num" style="color:#1B7A4F;" data-stat="licMonthly">—</div><div class="lbl">/ mies.</div></div>
-              <div><div class="num" style="color:#0C1C44;" data-stat="licActive">—</div><div class="lbl">aktywnych</div></div>
+              <div><div class="num" style="color:var(--heading);" data-stat="licActive">—</div><div class="lbl">aktywnych</div></div>
             </div>
           </button>
           <!-- Onboarding -->
@@ -107,7 +119,7 @@
             <div class="mod-desc">Zasady, narzędzia, instrukcje i dostępy.</div>
             <div class="mod-stats">
               <div><div class="num" style="color:#E57200;" data-stat="onbPct">—</div><div class="lbl">ukończone</div></div>
-              <div><div class="num" style="color:#0C1C44;" data-stat="onbSteps">—</div><div class="lbl">kroków</div></div>
+              <div><div class="num" style="color:var(--heading);" data-stat="onbSteps">—</div><div class="lbl">kroków</div></div>
             </div>
           </button>
         </div>
@@ -185,7 +197,7 @@
         <!-- DOSTĘPNY -->
         <div class="page" data-panel="available" hidden>
           <div class="page-head-row">
-            <div><h1 style="font-size:clamp(26px,3vw,34px);font-weight:600;letter-spacing:-1.4px;margin:0 0 6px;color:#0C1C44;">Dostępny sprzęt</h1><p style="margin:0;font-size:15px;color:#737980;" data-available-sub>&nbsp;</p></div>
+            <div><h1 style="font-size:clamp(26px,3vw,34px);font-weight:600;letter-spacing:-1.4px;margin:0 0 6px;color:var(--heading);">Dostępny sprzęt</h1><p style="margin:0;font-size:15px;color:var(--muted);" data-available-sub>&nbsp;</p></div>
             <button class="btn btn-primary" data-sheet="purchase"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Poproś o nowy</button>
           </div>
           <div class="search">
@@ -205,6 +217,8 @@
         <div class="page page-narrow" data-panel="skrzynka" hidden>
           <div class="page-head"><h1>Skrzynka</h1><p>Zgłoszenia o sprzęcie i wnioski wymagające Twojej decyzji.</p></div>
           <div class="stack" data-skrzynka-list><div class="loading">Ładowanie…</div></div>
+          <div class="hist-sec-title">Historia aktywności</div>
+          <div class="hist-list" data-skrzynka-history><div class="loading">Ładowanie…</div></div>
         </div>
 
         <!-- ZESPÓŁ -->
@@ -311,12 +325,29 @@
         </div>
         <div class="card">
           <h3>Wygląd</h3>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button style="all:unset;box-sizing:border-box;cursor:pointer;flex:1;min-width:120px;text-align:center;padding:14px;border-radius:12px;border:2px solid #3F5FBE;background:#EEF1FB;color:#3F5FBE;font-size:14px;font-weight:600;">☀️ Jasny</button>
-            <button style="all:unset;box-sizing:border-box;cursor:pointer;flex:1;min-width:120px;text-align:center;padding:14px;border-radius:12px;border:1px solid #E5E9ED;background:#fff;color:#474C51;font-size:14px;font-weight:500;">🌙 Ciemny</button>
-            <button style="all:unset;box-sizing:border-box;cursor:pointer;flex:1;min-width:120px;text-align:center;padding:14px;border-radius:12px;border:1px solid #E5E9ED;background:#fff;color:#474C51;font-size:14px;font-weight:500;">💻 System</button>
+          <div class="seg" data-theme-seg>
+            <button class="seg-opt" data-theme-opt="light">☀️ Jasny</button>
+            <button class="seg-opt" data-theme-opt="dark">🌙 Ciemny</button>
+            <button class="seg-opt" data-theme-opt="system">💻 System</button>
           </div>
-          <p style="margin:14px 0 0;font-size:12.5px;color:#A2AEB9;">Tryb ciemny pojawi się w kolejnej wersji zaplecza.</p>
+          <p class="settings-hint">Tryb „System” dopasowuje się do ustawień Twojego urządzenia.</p>
+        </div>
+        <div class="card">
+          <h3>Powiadomienia</h3>
+          <div class="pref-row">
+            <div>
+              <div class="n">Powiadomienia e-mail</div>
+              <div class="d">O zgłoszeniach i decyzjach dotyczących Twojego sprzętu.</div>
+            </div>
+            <button class="switch" data-pref-toggle="notifyEmail" aria-label="Powiadomienia e-mail"></button>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div class="n">Podsumowania w skrzynce</div>
+              <div class="d">Zbieraj wnioski i zadania w skrzynce zaplecza.</div>
+            </div>
+            <button class="switch" data-pref-toggle="notifyInbox" aria-label="Podsumowania w skrzynce"></button>
+          </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
           <a class="btn btn-danger-ghost" href="/auth/logout">Wyloguj się</a>

@@ -108,6 +108,57 @@
     if (p) p.textContent = 'Dzień dobry, ' + first + ' 👋';
   }
 
+  // -------------------------------------------------------------- theme & prefs
+  const THEME_KEY = 'zaplecze.theme';
+  const DEFAULT_PREFS = { theme: 'system', notifyEmail: true, notifyInbox: true };
+  let mqlDark = null;
+
+  function effectiveTheme(pref) {
+    if (pref === 'dark' || pref === 'light') return pref;
+    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  function applyThemeAttr(pref) {
+    document.documentElement.setAttribute('data-theme', effectiveTheme(pref));
+  }
+  function watchSystemTheme() {
+    if (!window.matchMedia) return;
+    if (!mqlDark) mqlDark = window.matchMedia('(prefers-color-scheme: dark)');
+    // pojedynczy listener — reaguje tylko gdy użytkownik trzyma tryb „system”
+    mqlDark.onchange = () => {
+      if ((state.prefs && state.prefs.theme) === 'system') applyThemeAttr('system');
+    };
+  }
+  function renderPrefsUI() {
+    const p = state.prefs || DEFAULT_PREFS;
+    $$('[data-theme-opt]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-theme-opt') === p.theme));
+    $$('[data-pref-toggle]').forEach((b) => b.classList.toggle('on', p[b.getAttribute('data-pref-toggle')] !== false));
+  }
+  function initPrefs(prefs) {
+    state.prefs = Object.assign({}, DEFAULT_PREFS, prefs || {});
+    try { localStorage.setItem(THEME_KEY, state.prefs.theme); } catch (_) { /* ignore */ }
+    applyThemeAttr(state.prefs.theme);
+    watchSystemTheme();
+    renderPrefsUI();
+  }
+  function savePrefs(patch) {
+    api('/me/preferences', { method: 'PUT', body: JSON.stringify(patch) })
+      .catch(() => toast('Nie udało się zapisać preferencji.', true));
+  }
+  function setTheme(pref) {
+    if (!['light', 'dark', 'system'].includes(pref)) return;
+    state.prefs = Object.assign({}, state.prefs || DEFAULT_PREFS, { theme: pref });
+    try { localStorage.setItem(THEME_KEY, pref); } catch (_) { /* ignore */ }
+    applyThemeAttr(pref);
+    renderPrefsUI();
+    savePrefs({ theme: pref });
+  }
+  function togglePref(key) {
+    const next = !((state.prefs && state.prefs[key]) !== false);
+    state.prefs = Object.assign({}, state.prefs || DEFAULT_PREFS, { [key]: next });
+    renderPrefsUI();
+    savePrefs({ [key]: next });
+  }
+
   async function refreshWarehouseCounts() {
     if (!state.user || !['viewer', 'manager', 'admin'].includes(state.user.role)) return;
     try {
@@ -149,7 +200,7 @@
     if (view === 'pulpit') return loadPulpit();
     if (view === 'available') return loadAvailable();
     if (view === 'mojsprzet') return loadMine();
-    if (view === 'skrzynka') return loadInbox();
+    if (view === 'skrzynka') { loadInbox(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
   }
 
@@ -308,6 +359,39 @@
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
   }
 
+  // ---- Historia (read-only): zgłoszenia, transfery i wnioski użytkownika
+  function histIcon(type) {
+    if (type === 'issue') return '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/>';
+    if (type === 'transfer') return '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>';
+    if (type === 'purchase') return '<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/>';
+    return '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>';
+  }
+  function loadHistory() {
+    const box = $('[data-skrzynka-history]');
+    if (!box) return;
+    const render = (events) => {
+      if (!events.length) { box.innerHTML = emptyBlock('Brak historii', 'Twoje zgłoszenia, transfery i wnioski pojawią się tutaj.'); return; }
+      box.innerHTML = events.map((ev) => {
+        const name = ev.itemName || ev.itemCode || '';
+        const bits = [];
+        if (ev.message) bits.push(esc(ev.message));
+        if (ev.status) bits.push(esc(statusLabel(ev.status)));
+        return `<div class="hist-item">
+          <span class="hist-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${histIcon(ev.type)}</svg></span>
+          <div class="hist-body">
+            <div class="hist-title">${esc(ev.title)}${name ? ' · ' + esc(name) : ''}</div>
+            ${bits.length ? `<div class="hist-meta">${bits.join(' · ')}</div>` : ''}
+          </div>
+          <span class="hist-when">${esc(fmtDate(ev.at))}</span>
+        </div>`;
+      }).join('');
+    };
+    if (state.cache.history) { render(state.cache.history); return; }
+    box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/my/history').then((ev) => { state.cache.history = ev; render(ev); })
+      .catch(() => { box.innerHTML = emptyBlock('Nie udało się wczytać historii', ''); });
+  }
+
   // ---- Zespół
   function loadTeam() {
     const list = $('[data-zespol-list]');
@@ -357,7 +441,7 @@
             <div class="kv"><div class="k">Stan</div><div class="v">${esc(it.conditionStatus || '—')}</div></div>
             <div class="kv"><div class="k">Przypisanie</div><div class="v">${esc(assign)}</div></div>
           </div>
-          <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Tagi</div>
+          <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Tagi</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">${tags}</div>
         </div>
         <div class="drawer-foot">
@@ -380,7 +464,7 @@
       submit: async (data) => {
         if (!data.itemName || !data.shopUrl || !data.justification) throw new Error('Uzupełnij wymagane pola.');
         await api('/purchase-requests', { method: 'POST', body: JSON.stringify(data) });
-        invalidate(['inbox']); toast('Wniosek o zakup wysłany.');
+        invalidate(['inbox', 'history']); toast('Wniosek o zakup wysłany.');
       }
     },
     request: {
@@ -394,7 +478,7 @@
       submit: async (data, ctx) => {
         if (!data.requestedReturnDate) throw new Error('Podaj planowaną datę zwrotu.');
         await api('/loan-requests', { method: 'POST', body: JSON.stringify(Object.assign({ itemCode: ctx.itemCode }, data)) });
-        invalidate(['inbox']); toast('Wniosek o wypożyczenie wysłany.');
+        invalidate(['inbox', 'history']); toast('Wniosek o wypożyczenie wysłany.');
       }
     },
     transfer: {
@@ -412,7 +496,7 @@
       submit: async (data, ctx) => {
         if (!data.toEmail) throw new Error('Wskaż osobę.');
         await api('/my/items/' + encodeURIComponent(ctx.itemCode) + '/transfer', { method: 'POST', body: JSON.stringify(data) });
-        invalidate(['mine', 'available']); toast('Sprzęt przeniesiony.'); if (state.view === 'mojsprzet') loadMine();
+        invalidate(['mine', 'available', 'history']); toast('Sprzęt przeniesiony.'); if (state.view === 'mojsprzet') loadMine();
       }
     },
     report: {
@@ -424,7 +508,7 @@
       submit: async (data, ctx) => {
         if (!data.message) throw new Error('Opisz zgłoszenie.');
         await api('/my/items/' + encodeURIComponent(ctx.itemCode) + '/report-issue', { method: 'POST', body: JSON.stringify(data) });
-        toast('Zgłoszenie wysłane.');
+        invalidate(['history']); toast('Zgłoszenie wysłane.');
       }
     },
     newOp: {
@@ -588,7 +672,7 @@
           <span class="row-mono" style="background:#E7F6EF;color:#1B7A4F;">${esc(initials(l.name))}</span>
           <div class="row-main"><div class="n">${esc(l.name)}</div><div class="s">${esc(sub2 || '—')}</div></div>
           <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:120px;">
-            <span style="font-size:14px;font-weight:600;color:#1F2225;">${esc(cost)}</span>
+            <span style="font-size:14px;font-weight:600;color:var(--ink);">${esc(cost)}</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;"><span class="${licStatusChip(l.status)}">${esc(LIC_STATUS[l.status] || l.status)}</span>${renewalChip(l.daysToRenewal)}</div>
           </div>
           <div class="row-actions">
@@ -623,15 +707,15 @@
           <div class="kv"><div class="k">Odnowienie</div><div class="v">${esc(fmtDay(l.renewalDate) || '—')}</div></div>
         </div>
         ${renewalChip(l.daysToRenewal) ? `<div style="margin-bottom:18px;">${renewalChip(l.daysToRenewal)}</div>` : ''}
-        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Dostęp</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Dostęp</div>
         <div class="kv" style="margin-bottom:10px;"><div class="k">Login</div><div class="v" style="font-family:ui-monospace,monospace;">${esc(l.loginUsername || '—')}</div></div>
         <div class="kv" style="margin-bottom:10px;"><div class="k">Panel</div><div class="v">${link}</div></div>
         <div class="kv" style="margin-bottom:18px;"><div class="k">Gdzie hasło</div><div class="v">${esc(l.passwordLocation || '—')}</div></div>
-        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Właściciel</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Właściciel</div>
         <p class="sub" style="margin-bottom:14px;">${esc(l.ownerName || l.ownerEmail || '—')}</p>
-        <div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:8px;">Używają</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Używają</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">${assigned}</div>
-        ${l.notes ? `<div style="font-size:13px;font-weight:600;color:#1F2225;margin-bottom:6px;">Notatka</div><p class="sub">${esc(l.notes)}</p>` : ''}
+        ${l.notes ? `<div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:6px;">Notatka</div><p class="sub">${esc(l.notes)}</p>` : ''}
       </div>
       <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-lic-edit="${esc(l.id)}">Edytuj</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
   }
@@ -774,7 +858,8 @@
     return ({
       pending_manager: 'Czeka na kierownika', pending_admin: 'Czeka na admina', pending: 'Oczekuje',
       approved: 'Zatwierdzony', rejected: 'Odrzucony', fulfilled: 'Zrealizowany',
-      to_order: 'Do zamówienia', ordered: 'Zamówiony', cancelled: 'Anulowany', completed: 'Zakończony'
+      to_order: 'Do zamówienia', ordered: 'Zamówiony', cancelled: 'Anulowany', completed: 'Zakończony',
+      open: 'Otwarte', resolved: 'Zamknięte'
     })[s] || s || '—';
   }
   function statusColor(s) {
@@ -892,7 +977,7 @@
         <div class="h"><span class="emoji" style="background:#FBEDE0;">🛒</span><span class="title">Zapotrzebowanie</span></div>
         <div class="nums"><div><div class="n">${fmtInt(repl.below)}</div><div class="l">poniżej minimum</div></div><div><div class="n">${fmtInt(repl.rules)}</div><div class="l">reguł</div></div></div>
       </div>`;
-      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:#1F2225;">Operacje</h3><div class="op-cards">${cards}${replCard}</div></div>`;
+      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:var(--ink);">Operacje</h3><div class="op-cards">${cards}${replCard}</div></div>`;
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
@@ -964,7 +1049,7 @@
           <div class="kv"><div class="k">Utworzono</div><div class="v">${esc(fmtDay(op.createdAt) || '—')}</div></div>
           <div class="kv"><div class="k">Zatwierdzono</div><div class="v">${esc(fmtDay(op.doneAt) || '—')}</div></div>
         </div>
-        <div style="font-size:13px;font-weight:600;color:#1F2225;margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
         ${lines}
       </div>
       <div class="drawer-foot">${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
@@ -995,7 +1080,7 @@
           <label class="field"><span>Kontakt</span><input data-op-h="contact" value="${esc(op.contact || '')}" placeholder="np. dostawca / pracownik"></label>
           <label class="field"><span>Dokument źródłowy</span><input data-op-h="sourceDocument" value="${esc(op.sourceDocument || '')}" placeholder="np. nr faktury"></label>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:13px;font-weight:600;color:#1F2225;">Pozycje</div><button class="btn btn-ghost btn-sm" data-op-addline>+ Dodaj</button></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:13px;font-weight:600;color:var(--ink);">Pozycje</div><button class="btn btn-ghost btn-sm" data-op-addline>+ Dodaj</button></div>
         <div data-op-lines></div>
       </div>
       <div class="drawer-foot" style="flex-wrap:wrap;gap:8px;">
@@ -1177,7 +1262,7 @@
         const tiles = `<div class="mini-tiles">
           <div class="mini-tile"><div class="k">Przyjęcia</div><div class="v" style="color:#1B7A4F;">${fmtInt(cnt('receipt'))}</div></div>
           <div class="mini-tile"><div class="k">Wydania</div><div class="v" style="color:#BF1932;">${fmtInt(cnt('delivery') + cnt('scrap'))}</div></div>
-          <div class="mini-tile"><div class="k">Ruchów</div><div class="v" style="color:#0C1C44;">${fmtInt(rows.length)}</div></div>
+          <div class="mini-tile"><div class="k">Ruchów</div><div class="v" style="color:var(--heading);">${fmtInt(rows.length)}</div></div>
         </div>`;
         body.innerHTML = tiles + (rows.length ? tableHTML(
           [{ t: 'Kiedy' }, { t: 'Kod' }, { t: 'Ruch' }, { t: 'Ilość', num: true }],
@@ -1188,7 +1273,7 @@
       } else if (id === 'gift') {
         const rep = await api('/warehouse/gift-threshold');
         const rows = rep.items || [];
-        const note = `<p style="margin:0 0 16px;font-size:13.5px;color:#737980;">Pozycje z konwersji, których jednostkowy koszt przekracza próg ${fmtMoney(rep.threshold)} — rodzą obowiązek VAT przy wydaniu jako prezent.</p>`;
+        const note = `<p style="margin:0 0 16px;font-size:13.5px;color:var(--muted);">Pozycje z konwersji, których jednostkowy koszt przekracza próg ${fmtMoney(rep.threshold)} — rodzą obowiązek VAT przy wydaniu jako prezent.</p>`;
         body.innerHTML = note + (rows.length ? tableHTML(
           [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Maks. cena', num: true }, { t: 'Ilość', num: true }],
           rows.map((g) => ({ cells: [
@@ -1258,8 +1343,11 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle]');
     if (!t) return;
+
+    if (t.hasAttribute('data-theme-opt')) { setTheme(t.getAttribute('data-theme-opt')); return; }
+    if (t.hasAttribute('data-pref-toggle')) { togglePref(t.getAttribute('data-pref-toggle')); return; }
 
     if (t.hasAttribute('data-lic-new')) { openSheet('license', {}); return; }
     if (t.hasAttribute('data-lic-detail')) { openLicenseDetail(t.getAttribute('data-lic-detail')); return; }
@@ -1325,6 +1413,7 @@
       if (me && me.authenticated) {
         state.user = me.user;
         applyUser();
+        initPrefs(me.user.preferences);
         showScreen('launcher');
         refreshCounts();
         refreshWarehouseCounts();

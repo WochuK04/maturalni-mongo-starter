@@ -383,6 +383,18 @@ app.get('/auth/logout', (req, res, next) => {
   });
 });
 
+// Preferencje interfejsu (Zaplecze v2): motyw + powiadomienia. Domyślne wartości
+// stosowane, gdy użytkownik nic jeszcze nie zapisał.
+const THEME_VALUES = ['light', 'dark', 'system'];
+function normalizePreferences(raw) {
+  const p = raw && typeof raw === 'object' ? raw : {};
+  return {
+    theme: THEME_VALUES.includes(p.theme) ? p.theme : 'system',
+    notifyEmail: p.notifyEmail !== false,
+    notifyInbox: p.notifyInbox !== false
+  };
+}
+
 app.get('/me', (req, res) => {
   if (!req.isAuthenticated || !req.isAuthenticated()) {
     return res.status(401).json({ authenticated: false });
@@ -393,9 +405,28 @@ app.get('/me', (req, res) => {
     user: {
       email: req.user.email,
       fullName: req.user.fullName,
-      role: req.user.role
+      role: req.user.role,
+      preferences: normalizePreferences(req.user.preferences)
     }
   });
+});
+
+// Zapis preferencji interfejsu na dokumencie użytkownika (trwałość między
+// urządzeniami). Przyjmuje pola częściowo — scala z bieżącymi.
+app.put('/me/preferences', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const current = normalizePreferences(req.user.preferences);
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const merged = normalizePreferences({
+    theme: body.theme !== undefined ? body.theme : current.theme,
+    notifyEmail: body.notifyEmail !== undefined ? body.notifyEmail : current.notifyEmail,
+    notifyInbox: body.notifyInbox !== undefined ? body.notifyInbox : current.notifyInbox
+  });
+  await db.collection(collections.users).updateOne(
+    { email: req.user.email },
+    { $set: { preferences: merged, updatedAt: new Date() } }
+  );
+  res.json({ message: 'Zapisano', preferences: merged });
 });
 
 app.get('/items/available', requireAuth, async (_req, res) => {
@@ -2190,6 +2221,68 @@ app.get('/my/action-items', requireAuth, async (req, res) => {
     .toArray();
 
   res.json(requests);
+});
+
+// Historia aktywności zalogowanego użytkownika — łączy dane, które i tak
+// powstają: zgłoszenia problemów i transfery (kolekcja notifications, gdzie
+// użytkownik jest autorem lub odbiorcą) oraz jego wnioski (loanRequests).
+// Zwraca ujednoliconą, posortowaną malejąco listę zdarzeń (read-only).
+app.get('/my/history', requireAuth, async (req, res) => {
+  const db = await getDb();
+  const me = req.user.email;
+
+  const [notes, requests] = await Promise.all([
+    db.collection(collections.notifications)
+      .find({ $or: [{ createdByEmail: me }, { toEmail: me }, { fromEmail: me }] })
+      .sort({ createdAt: -1 }).limit(100).toArray(),
+    db.collection(collections.loanRequests)
+      .find({ requesterEmail: me })
+      .sort({ requestedAt: -1 }).limit(100).toArray()
+  ]);
+
+  const events = [];
+
+  for (const n of notes) {
+    if (n.kind === 'issue') {
+      events.push({
+        type: 'issue',
+        title: 'Zgłoszenie problemu',
+        itemCode: n.itemCode || null,
+        itemName: n.itemName || '',
+        message: n.message || '',
+        status: n.status || null,
+        at: n.createdAt
+      });
+    } else if (n.kind === 'transfer') {
+      const outgoing = n.fromEmail === me;
+      events.push({
+        type: 'transfer',
+        title: outgoing ? 'Przekazano sprzęt' : 'Otrzymano sprzęt',
+        itemCode: n.itemCode || null,
+        itemName: n.itemName || '',
+        message: outgoing
+          ? ('Do: ' + (n.toName || n.toEmail || '—'))
+          : ('Od: ' + (n.fromName || n.fromEmail || '—')),
+        status: n.status || null,
+        at: n.createdAt
+      });
+    }
+  }
+
+  for (const r of requests) {
+    events.push({
+      type: r.kind === 'purchase' ? 'purchase' : 'loan',
+      title: r.kind === 'purchase' ? 'Wniosek o zakup' : 'Wniosek o wypożyczenie',
+      itemCode: r.itemCode || null,
+      itemName: r.itemName || r.itemCode || (r.purpose || ''),
+      message: r.purpose || r.note || '',
+      status: r.status || null,
+      at: r.requestedAt || r.createdAt
+    });
+  }
+
+  events.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+  res.json(events.slice(0, 100));
 });
 
 app.post('/loan-requests', requireAuth, async (req, res) => {
