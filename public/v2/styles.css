@@ -311,6 +311,7 @@ details.cmt[open]>summary{margin-bottom:8px;}
 .drawer-body{flex:1;overflow:auto;padding:26px;}
 .drawer-hero{display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:16px;height:190px;margin-bottom:22px;}
 .drawer-hero .mono{width:72px;height:72px;border-radius:18px;font-size:26px;letter-spacing:-1px;}
+.drawer-img{width:100%;height:100%;object-fit:cover;border-radius:16px;}
 .drawer-body h2{margin:0 0 4px;font-size:25px;font-weight:600;letter-spacing:-1px;color:var(--heading);}
 .drawer-body .sub{margin:0 0 22px;font-size:14px;color:var(--muted);}
 .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px;}

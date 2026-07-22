@@ -543,15 +543,22 @@
           <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
         <div class="drawer-body">
-          <div class="drawer-hero"><span class="mono">${esc(initials(it.name))}</span></div>
+          <div class="drawer-hero">${(it.imageUrl || it.thumbnailUrl)
+            ? `<img class="drawer-img" src="${esc(it.imageUrl || it.thumbnailUrl)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="mono" style="display:none;">${esc(initials(it.name))}</span>`
+            : `<span class="mono">${esc(initials(it.name))}</span>`}</div>
           <h2>${esc(it.name || it.itemCode)}</h2>
           <p class="sub">${esc([it.category, it.details].filter(Boolean).join(' · ') || it.itemCode)}</p>
           <div class="kv-grid">
             <div class="kv"><div class="k">Marka / model</div><div class="v">${esc([it.brand, it.model].filter(Boolean).join(' / ') || '—')}</div></div>
             <div class="kv"><div class="k">Lokalizacja</div><div class="v">${esc(it.currentLocation || '—')}</div></div>
-            <div class="kv"><div class="k">Stan</div><div class="v">${esc(it.conditionStatus || '—')}</div></div>
+            <div class="kv"><div class="k">Stan</div><div class="v">${esc(condLabel(it.conditionStatus))}</div></div>
+            <div class="kv"><div class="k">Status</div><div class="v">${esc(ITEM_STATUS[it.operationalStatus] || it.operationalStatus || '—')}</div></div>
             <div class="kv"><div class="k">Przypisanie</div><div class="v">${esc(assign)}</div></div>
+            <div class="kv"><div class="k">Nr seryjny</div><div class="v">${esc(it.serialNumber || '—')}</div></div>
+            ${it.qrCodeValue ? `<div class="kv"><div class="k">Kod QR</div><div class="v mono-cell" style="font-size:13px;">${esc(it.qrCodeValue)}</div></div>` : ''}
+            ${it.warrantyUntil ? `<div class="kv"><div class="k">Gwarancja do</div><div class="v">${esc(it.warrantyUntil)}</div></div>` : ''}
           </div>
+          ${it.activeLoan ? `<div class="kv" style="margin-bottom:22px;"><div class="k">Aktywne wypożyczenie</div><div class="v" style="font-weight:500;font-size:13.5px;">od ${esc(fmtDate(it.activeLoan.borrowedAt))} · ${esc(it.activeLoan.userDisplayName || it.activeLoan.userEmail || '')}${it.activeLoan.targetUseLocation ? ' · ' + esc(it.activeLoan.targetUseLocation) : ''}</div></div>` : ''}
           <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Tagi</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">${tags}</div>
         </div>
@@ -937,6 +944,20 @@
         await api('/admin/users', { method: 'POST', body: JSON.stringify(data) });
         toast('Dodano użytkownika.'); loadUsers();
       }
+    },
+    returnItem: {
+      eyebrow: 'Mój sprzęt', title: 'Oddaj sprzęt',
+      hint: (ctx) => `Oddajesz „${ctx.name || 'sprzęt'}”. Wskaż miejsce zwrotu.`, cta: 'Oddaj',
+      onOpen: async (ctx) => { if (!state.locations) { try { state.locations = await api('/locations'); } catch (_) { state.locations = ['Magazyn', 'Studio', 'Biuro', 'Serwis']; } } },
+      fields: () => {
+        const opts = (state.locations || ['Magazyn']).map((l) => `<option value="${esc(l)}"${l === 'Magazyn' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+        return `<label class="field"><span>Miejsce zwrotu</span><select name="returnLocation">${opts}</select></label>
+        <label class="field"><span>Notatka</span><input name="returnNote" placeholder="np. stan, uwagi (opcjonalnie)"></label>`;
+      },
+      submit: async (data, ctx) => {
+        await api('/items/' + encodeURIComponent(ctx.itemCode) + '/return', { method: 'POST', body: JSON.stringify({ returnLocation: data.returnLocation || 'Magazyn', returnNote: data.returnNote || '' }) });
+        toast('Sprzęt oddany.'); invalidate(['mine', 'available', 'history']); loadMine();
+      }
     }
   };
 
@@ -1144,14 +1165,6 @@
   }
 
   // -------------------------------------------------------------- actions
-  async function doReturn(code, name) {
-    if (!confirm(`Oddać „${name}” do magazynu?`)) return;
-    try {
-      await api('/items/' + encodeURIComponent(code) + '/return', { method: 'POST', body: JSON.stringify({ returnLocation: 'Magazyn' }) });
-      toast('Sprzęt oddany.'); invalidate(['mine', 'available']); loadMine();
-    } catch (e) { toast(e.message || 'Nie udało się oddać.', true); }
-  }
-
   const REQ_ACTION_MAP = {
     'mgr-approve': ['/manager/loan-requests/', '/approve', 'Przekazano do administracji'],
     'mgr-reject': ['/manager/loan-requests/', '/reject', 'Wniosek odrzucony'],
@@ -2246,7 +2259,7 @@
     if (t.dataset.request) { openSheet('request', { itemCode: t.dataset.request, name: t.dataset.name }); return; }
     if (t.dataset.transfer) { openSheet('transfer', { itemCode: t.dataset.transfer, name: t.dataset.name }); return; }
     if (t.dataset.report) { openSheet('report', { itemCode: t.dataset.report, name: t.dataset.name }); return; }
-    if (t.dataset.return) { doReturn(t.dataset.return, t.dataset.name); return; }
+    if (t.dataset.return) { openSheet('returnItem', { itemCode: t.dataset.return, name: t.dataset.name }); return; }
     if (t.hasAttribute('data-req-act')) {
       const card = t.closest('[data-req-card]'); const noteEl = card && $('[data-decision-note]', card);
       requestAction(t.getAttribute('data-req-id'), t.getAttribute('data-req-act'), noteEl ? noteEl.value : ''); return;
