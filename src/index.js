@@ -351,6 +351,12 @@ app.get('/', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });
 
+// Nowy interfejs „Zaplecze v2" (Login + Launcher + Sprzęt). Współdzieli backend
+// z widokiem klasycznym; pliki żyją w public/v2/ (serwowane też przez static).
+app.get('/v2', (_req, res) => {
+  res.sendFile(new URL('../public/v2/index.html', import.meta.url).pathname);
+});
+
 app.get(
   '/auth/google',
   passport.authenticate('google', {
