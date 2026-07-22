@@ -202,6 +202,7 @@
     if (view === 'mojsprzet') return loadMine();
     if (view === 'skrzynka') { loadInbox(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
+    if (view === 'stats') return loadStats();
     if (view === 'admin') return loadAdminItems();
   }
 
@@ -771,6 +772,41 @@
         toast(`Import: dodano ${ins}${errs ? `, błędów ${errs}` : ''}.`, errs > 0);
         invalidate(['available', 'mine']); loadAdminItems();
       }
+    },
+    reorderRule: {
+      eyebrow: 'Magazyn · Zapotrzebowanie', title: (ctx) => ctx.id ? 'Edytuj regułę' : 'Nowa reguła min-max',
+      hint: 'Gdy dostępny stan spadnie poniżej minimum, pozycja trafi do braków. Dla reguły „Sprzęt” można od razu uzupełnić.', cta: 'Zapisz',
+      onOpen: async (ctx) => { if (!ctx.id && !state.mag.products) { try { state.mag.products = await api('/warehouse/products'); } catch (_) { state.mag.products = []; } } },
+      fields: (ctx) => {
+        const edit = !!ctx.id;
+        const prodOpts = (state.mag.products || []).map((p) => `<option value="${esc(p.itemCode)}">${esc(p.name || '')}</option>`).join('');
+        const scopeSel = edit
+          ? `<input value="${ctx.scope === 'item' ? 'Sprzęt' : 'Kategoria'}" disabled>`
+          : `<select name="scope"><option value="category">Kategoria</option><option value="item">Sprzęt (kod)</option></select>`;
+        const targetField = edit
+          ? `<input value="${esc(ctx.label || ctx.target || '')}" disabled>`
+          : `<input name="target" list="rrProdList" placeholder="kategoria lub kod sprzętu">`;
+        return `
+        <datalist id="rrProdList">${prodOpts}</datalist>
+        <div class="field-2">
+          <label class="field"><span>Poziom</span>${scopeSel}</label>
+          <label class="field"><span>Cel${edit ? '' : ' *'}</span>${targetField}</label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Minimum *</span><input name="minQty" type="number" min="0" step="1" value="${ctx.minQty != null ? ctx.minQty : ''}" placeholder="np. 3"></label>
+          <label class="field"><span>Maksimum *</span><input name="maxQty" type="number" min="1" step="1" value="${ctx.maxQty != null ? ctx.maxQty : ''}" placeholder="np. 6"></label>
+        </div>
+        <label class="field"><span>Notatka</span><input name="note" value="${esc(ctx.note || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (ctx.id) {
+          await api('/warehouse/reorder-rules/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify({ minQty: data.minQty, maxQty: data.maxQty, note: data.note }) });
+        } else {
+          if (!data.target) throw new Error('Podaj kategorię lub kod sprzętu.');
+          await api('/warehouse/reorder-rules', { method: 'POST', body: JSON.stringify(data) });
+        }
+        toast('Zapisano regułę.'); renderZapotrzebowanie(); if (state.magTab === 'przeglad') renderPrzeglad();
+      }
     }
   };
 
@@ -1091,6 +1127,7 @@
     if (tab === 'przeglad') return renderPrzeglad();
     if (tab === 'operacje') return renderOperacje();
     if (tab === 'produkty') return renderProdukty();
+    if (tab === 'zapotrzebowanie') return renderZapotrzebowanie();
     if (tab === 'wyjazdy') return renderWyjazdy();
     if (tab === 'raportowanie') return renderRaportowanie();
     if (tab === 'konfiguracja') return renderKonfiguracja();
@@ -1127,7 +1164,21 @@
         <div class="h"><span class="emoji" style="background:#FBEDE0;">🛒</span><span class="title">Zapotrzebowanie</span></div>
         <div class="nums"><div><div class="n">${fmtInt(repl.below)}</div><div class="l">poniżej minimum</div></div><div><div class="n">${fmtInt(repl.rules)}</div><div class="l">reguł</div></div></div>
       </div>`;
-      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:var(--ink);">Operacje</h3><div class="op-cards">${cards}${replCard}</div></div>`;
+      const shortageItems = (repl.items || []);
+      const shortage = shortageItems.length ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 12px;">
+          <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--ink);">Braki (poniżej minimum)</h3>
+          <button class="btn btn-ghost btn-sm" data-mag-tab="zapotrzebowanie">Zobacz reguły</button>
+        </div>
+        ${tableHTML(
+          [{ t: 'Cel' }, { t: 'Poziom' }, { t: 'Dostępne', num: true }, { t: 'Minimum', num: true }, { t: 'Do zamówienia', num: true }],
+          shortageItems.map((r) => ({ cells: [
+            { v: r.label }, { v: r.scope === 'item' ? 'Sprzęt' : 'Kategoria', cls: 'mut' },
+            { v: fmtInt(r.available), cls: 'num' }, { v: fmtInt(r.minQty), cls: 'num' },
+            { html: `<strong>${fmtInt(r.toOrder)}</strong>`, cls: 'num' }
+          ] }))
+        )}` : '';
+      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:var(--ink);">Operacje</h3><div class="op-cards">${cards}${replCard}</div>${shortage}</div>`;
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
@@ -1491,6 +1542,52 @@
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
+  // -------------------------------------------------------------- Zapotrzebowanie (min-max)
+  async function renderZapotrzebowanie() {
+    const el = $('[data-mag-panel="zapotrzebowanie"]'); if (!el) return;
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const rules = await api('/warehouse/reorder-rules');
+      state.mag.reorder = rules;
+      const isAdmin = state.user && state.user.role === 'admin';
+      const below = rules.filter((r) => r.below).length;
+      const head = `<div class="page-head-row" style="margin-bottom:16px;">
+        <div><h3 style="margin:0 0 4px;font-size:18px;font-weight:600;color:var(--heading);">Zapotrzebowanie</h3>
+        <p style="margin:0;font-size:13.5px;color:var(--muted);">${rules.length} ${plural(rules.length, 'reguła', 'reguły', 'reguł')} min-max · ${below} poniżej minimum</p></div>
+        ${isAdmin ? '<button class="btn btn-primary btn-sm" data-rr-new><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nowa reguła</button>' : ''}</div>`;
+      if (!rules.length) { el.innerHTML = `<div class="anim-fadeup">${head}${emptyBlock('Brak reguł zapotrzebowania', isAdmin ? 'Dodaj regułę min-max dla kategorii lub konkretnego sprzętu.' : '')}</div>`; return; }
+      const rows = rules.map((r) => {
+        const statusChip = !r.isActive ? '<span class="chip chip-grey">Nieaktywna</span>'
+          : r.below ? '<span class="chip chip-red">Poniżej minimum</span>' : '<span class="chip chip-new">OK</span>';
+        const acts = isAdmin ? `<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
+          ${r.below && r.scope === 'item' && r.toOrder > 0 ? `<button class="btn btn-ghost btn-sm" data-rr-replenish="${esc(r.id)}">Uzupełnij</button>` : ''}
+          <button class="btn btn-ghost btn-sm" data-rr-edit="${esc(r.id)}">Edytuj</button>
+          <button class="btn btn-danger-ghost btn-sm" data-rr-del="${esc(r.id)}">Usuń</button></div>` : '';
+        return { cells: [
+          { v: r.label }, { v: r.scope === 'item' ? 'Sprzęt' : 'Kategoria', cls: 'mut' },
+          { v: fmtInt(r.minQty), cls: 'num' }, { v: fmtInt(r.maxQty), cls: 'num' },
+          { v: fmtInt(r.available), cls: 'num' }, { html: `<strong>${r.toOrder > 0 ? fmtInt(r.toOrder) : '—'}</strong>`, cls: 'num' },
+          { html: statusChip }, { html: acts, cls: 'num' }
+        ] };
+      });
+      el.innerHTML = `<div class="anim-fadeup">${head}${tableHTML(
+        [{ t: 'Cel' }, { t: 'Poziom' }, { t: 'Min', num: true }, { t: 'Max', num: true }, { t: 'Dostępne', num: true }, { t: 'Do zamówienia', num: true }, { t: 'Status' }, { t: '', num: true }],
+        rows
+      )}</div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+  function delReorderRule(id) {
+    if (!confirm('Usunąć regułę zapotrzebowania?')) return;
+    api('/warehouse/reorder-rules/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto regułę.'); renderZapotrzebowanie(); if (state.magTab === 'przeglad') renderPrzeglad(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  async function replenishRule(id) {
+    try {
+      const r = await api('/warehouse/reorder-rules/' + encodeURIComponent(id) + '/replenish', { method: 'POST', body: JSON.stringify({}) });
+      toast(r.message || 'Utworzono roboczą operację przyjęcia.');
+      renderZapotrzebowanie();
+    } catch (e) { toast(e.message || 'Nie udało się uzupełnić.', true); }
+  }
+
   // -------------------------------------------------------------- Wyjazdy (Turbo Weekend)
   const TW_CITIES = {
     'Warszawa': [21.01, 52.23], 'Kraków': [19.94, 50.06], 'Łódź': [19.46, 51.76],
@@ -1774,12 +1871,63 @@
     openSheet('adminDiscard', { _id: id, name: it ? it.name : '' });
   }
 
+  // -------------------------------------------------------------- Statystyki (dashboard admina)
+  function barChart(rows, colorFn) {
+    const max = Math.max(1, ...rows.map((r) => r.count || 0));
+    const bars = rows.map((r) => {
+      const pct = Math.round(((r.count || 0) / max) * 100);
+      const col = colorFn ? colorFn(r) : 'var(--blue)';
+      return `<div class="bar-row"><span class="bar-lbl">${esc(r.label)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%;background:${col};"></span></span><span class="bar-val">${fmtInt(r.count || 0)}</span></div>`;
+    }).join('');
+    return `<div class="bar-chart">${bars || '<div class="tw-empty">Brak danych</div>'}</div>`;
+  }
+  const STATUS_COLOR = { available: 'var(--green)', loaned: 'var(--blue)', unavailable: 'var(--orange)', inactive: 'var(--muted-2)', discarded: 'var(--red)' };
+
+  async function loadStats() {
+    const el = $('[data-stats-body]'); if (!el) return;
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const s = await api('/admin/stats');
+      const warn = s.warranty && s.warranty.expired > 0;
+      const kpis = `<div class="stat-row">
+        <div class="stat"><div class="k">Sprzęt łącznie</div><div class="v">${fmtInt(s.itemsTotal)}</div></div>
+        <div class="stat"><div class="k">Aktywne wypożyczenia</div><div class="v" style="color:var(--blue);">${fmtInt(s.activeLoans)}</div></div>
+        <div class="stat"><div class="k">Oczekujące wnioski</div><div class="v" style="color:var(--orange);">${fmtInt(s.pendingRequests && s.pendingRequests.total)}</div></div>
+        <div class="stat"><div class="k">Gwarancje ≤30 dni</div><div class="v" style="color:${warn ? 'var(--red)' : 'var(--ink)'};">${fmtInt(s.warranty && s.warranty.total)}</div>${warn ? `<div class="s" style="color:var(--red);">${fmtInt(s.warranty.expired)} po terminie</div>` : ''}</div>
+      </div>`;
+      const statusRows = Object.entries(s.itemsByStatus || {}).map(([k, v]) => ({ label: ITEM_STATUS[k] || k, count: v, key: k }));
+      const condRows = (s.itemsByCondition || []).map((r) => ({ label: condLabel(r.condition), count: r.count }));
+      const catRows = (s.itemsByCategory || []).map((r) => ({ label: r.category, count: r.count }));
+      const charts = `<div class="grid-2" style="margin-top:16px;">
+        <div class="card"><h3>Sprzęt wg statusu</h3>${barChart(statusRows, (r) => STATUS_COLOR[r.key] || 'var(--blue)')}</div>
+        <div class="card"><h3>Sprzęt wg stanu technicznego</h3>${barChart(condRows)}</div>
+      </div>
+      <div class="card" style="margin-top:16px;"><h3>Sprzęt wg kategorii</h3>${barChart(catRows, () => 'var(--purple)')}</div>`;
+      const wItems = (s.warranty && s.warranty.items) || [];
+      const warrantyTable = `<div class="card" style="margin-top:16px;"><h3>Gwarancje kończące się w 30 dni</h3>${
+        wItems.length ? tableHTML(
+          [{ t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Gwarancja do' }, { t: 'Status', num: true }],
+          wItems.map((w) => ({ cells: [
+            { v: w.name }, { v: w.category || '—', cls: 'mut' }, { v: w.warrantyUntil, cls: 'mut' },
+            { html: `<span class="chip ${w.expired ? 'chip-red' : w.daysLeft <= 7 ? 'chip-orange' : 'chip-grey'}">${w.expired ? 'Po terminie' : w.daysLeft === 0 ? 'dziś' : 'za ' + w.daysLeft + ' dni'}</span>`, cls: 'num' }
+          ] }))
+        ) : '<div class="tw-empty">Brak gwarancji kończących się w 30 dni.</div>'
+      }</div>`;
+      el.innerHTML = `<div class="anim-fadeup">${kpis}${charts}${warrantyTable}</div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać statystyk', e.message || ''); }
+  }
+
   // -------------------------------------------------------------- global events
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
     if (!t) return;
+
+    if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
+    if (t.hasAttribute('data-rr-edit')) { const r = (state.mag.reorder || []).find((x) => x.id === t.getAttribute('data-rr-edit')); openSheet('reorderRule', r || {}); return; }
+    if (t.hasAttribute('data-rr-del')) { delReorderRule(t.getAttribute('data-rr-del')); return; }
+    if (t.hasAttribute('data-rr-replenish')) { replenishRule(t.getAttribute('data-rr-replenish')); return; }
 
     if (t.hasAttribute('data-ai-new')) { openSheet('adminItem', {}); return; }
     if (t.hasAttribute('data-ai-edit')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-edit')); openSheet('adminItem', it || {}); return; }
