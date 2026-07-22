@@ -407,8 +407,75 @@
         await api('/my/items/' + encodeURIComponent(ctx.itemCode) + '/report-issue', { method: 'POST', body: JSON.stringify(data) });
         toast('Zgłoszenie wysłane.');
       }
+    },
+    newOp: {
+      eyebrow: 'Magazyn · Operacje', title: (ctx) => 'Nowa operacja: ' + (ctx.typeLabel || ''),
+      hint: 'Utwórz wersję roboczą — pozycje dodasz w następnym kroku.', cta: 'Utwórz wersję roboczą',
+      fields: (ctx) => {
+        const f = ctx.form || {};
+        const locOpts = (sel) => optList(f.locations || [], (l) => l.id, (l) => l.name, sel);
+        const party = ctx.type === 'receipt'
+          ? `<label class="field"><span>Dostawca</span><select name="supplierId"><option value="">— brak —</option>${optList(f.suppliers || [], (s) => s.id, (s) => s.name)}</select></label>`
+          : ctx.type === 'delivery'
+            ? `<label class="field"><span>Miejsce dostawy</span><select name="destinationId"><option value="">— brak —</option>${optList(f.deliveryDestinations || [], (d) => d.id, (d) => d.name)}</select></label>`
+            : '';
+        return `<div class="field-2">
+            <label class="field"><span>Z lokalizacji</span><select name="fromLocationId"><option value="">— domyślna —</option>${locOpts()}</select></label>
+            <label class="field"><span>Do lokalizacji</span><select name="toLocationId"><option value="">— domyślna —</option>${locOpts()}</select></label>
+          </div>
+          ${party}
+          <label class="field"><span>Kontakt</span><input name="contact" placeholder="np. dostawca / pracownik"></label>
+          <label class="field"><span>Dokument źródłowy</span><input name="sourceDocument" placeholder="np. nr faktury / zamówienia"></label>`;
+      },
+      submit: async (data, ctx) => {
+        const r = await api('/warehouse/operations', { method: 'POST', body: JSON.stringify(Object.assign({ type: ctx.type }, data)) });
+        state.mag.formData = null;
+        toast('Utworzono ' + (r.reference || 'wersję roboczą') + '.');
+        setTimeout(() => openOpEditor(r.id), 60);
+      }
+    },
+    supplier: {
+      eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj dostawcę' : 'Nowy dostawca',
+      hint: 'Dostawca będzie dostępny przy przyjęciach.', cta: 'Zapisz',
+      fields: (ctx) => `
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Rafael Sp. z o.o."></label>
+        <label class="field"><span>Kontakt</span><input name="contact" value="${esc(ctx.contact || '')}" placeholder="e-mail / telefon"></label>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę dostawcy.');
+        if (ctx.id) await api('/warehouse/suppliers/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/warehouse/suppliers', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano dostawcę.'); afterConfigChange();
+      }
+    },
+    location: {
+      eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj lokalizację' : 'Nowa lokalizacja',
+      hint: 'Zdefiniuj lokalizację magazynową i jej typ.', cta: 'Zapisz',
+      fields: (ctx) => `
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Serwis"></label>
+        <label class="field"><span>Typ</span><select name="kind"><option value="internal"${ctx.kind === 'internal' ? ' selected' : ''}>Magazyn</option><option value="employee"${ctx.kind === 'employee' ? ' selected' : ''}>U pracownika</option></select></label>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę lokalizacji.');
+        if (ctx.id) await api('/warehouse/locations/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/warehouse/locations', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano lokalizację.'); afterConfigChange();
+      }
     }
   };
+
+  function afterConfigChange() {
+    state.mag.formData = null; state.mag.locations = null;
+    if (state.magTab === 'konfiguracja') renderKonfiguracja();
+    const sub = $('[data-mag-subtitle]'); if (sub) loadMagazyn();
+  }
+  function delSupplier(id) {
+    if (!confirm('Usunąć dostawcę?')) return;
+    api('/warehouse/suppliers/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function delLocation(id) {
+    if (!confirm('Usunąć lokalizację?')) return;
+    api('/warehouse/locations/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
 
   let currentSheet = null;
   async function openSheet(type, ctx) {
@@ -421,10 +488,11 @@
     wrap.classList.remove('hidden');
     if (def.onOpen) { box.innerHTML = '<div class="loading">Ładowanie…</div>'; try { await def.onOpen(ctx); } catch (_) {} }
     const hint = typeof def.hint === 'function' ? def.hint(ctx) : def.hint;
+    const title = typeof def.title === 'function' ? def.title(ctx) : def.title;
     box.innerHTML = `
       <div class="sheet-top"><div class="sheet-eyebrow">${esc(def.eyebrow)}</div>
         <button class="x-btn" data-close-sheet><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
-      <h3>${esc(def.title)}</h3>
+      <h3>${esc(title)}</h3>
       <p class="hint">${esc(hint)}</p>
       <form class="sheet-fields" id="sheetForm">${def.fields(ctx)}</form>
       <div class="sheet-actions">
@@ -630,32 +698,163 @@
     } catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
-  async function openOpDetail(id) {
+  async function magForm() {
+    if (!state.mag.formData) state.mag.formData = await api('/warehouse/form-data');
+    return state.mag.formData;
+  }
+  function optList(items, valOf, labelOf, selected) {
+    return items.map((x) => { const v = valOf(x); return `<option value="${esc(v)}"${String(v) === String(selected || '') ? ' selected' : ''}>${esc(labelOf(x))}</option>`; }).join('');
+  }
+
+  // Operation editor: read-only for done/cancelled, editable for draft/ready.
+  const opEdit = { id: null, type: null, lines: [] };
+
+  async function openOpEditor(id) {
     const wrap = $('#drawer-wrap'); const box = $('#drawer');
     wrap.classList.remove('hidden');
     box.innerHTML = '<div class="loading">Ładowanie…</div>';
     try {
-      const op = await api('/warehouse/operations/' + encodeURIComponent(id));
-      const lines = (op.lines || []).map((l) =>
-        `<div class="team-eq"><div class="item"><span class="n">${esc(l.itemName || l.itemCode)}</span><span class="l">${fmtInt(l.quantity)} szt.${l.unitPrice != null ? ' · ' + fmtMoney(l.unitPrice) : ''}</span></div></div>`).join('')
-        || '<p class="sub">Brak pozycji.</p>';
-      box.innerHTML = `
-        <div class="drawer-head"><div class="tags"><span class="chip chip-blue">${esc(op.typeLabel)}</span><span class="chip chip-grey">${esc(OP_STATE[op.state] || op.state)}</span></div>
-          <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
-        <div class="drawer-body">
-          <h2>${esc(op.reference)}</h2>
-          <p class="sub">${esc([op.fromName, op.toName].filter(Boolean).join(' → ') || '—')}</p>
-          <div class="kv-grid">
-            <div class="kv"><div class="k">Kontakt</div><div class="v">${esc(op.supplierName || op.contact || '—')}</div></div>
-            <div class="kv"><div class="k">Dokument</div><div class="v">${esc(op.sourceDocument || '—')}</div></div>
-            <div class="kv"><div class="k">Utworzono</div><div class="v">${esc(fmtDay(op.createdAt) || '—')}</div></div>
-            <div class="kv"><div class="k">Zatwierdzono</div><div class="v">${esc(fmtDay(op.doneAt) || '—')}</div></div>
-          </div>
-          <div style="font-size:13px;font-weight:600;color:#1F2225;margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
-          ${lines}
-        </div>
-        <div class="drawer-foot"><button class="btn btn-ghost" style="flex:1;" data-close-drawer>Zamknij</button></div>`;
+      const [op, form] = await Promise.all([api('/warehouse/operations/' + encodeURIComponent(id)), magForm()]);
+      if (op.state === 'done' || op.state === 'cancelled') return renderOpReadonly(box, op);
+      opEdit.id = op.id; opEdit.type = op.type;
+      opEdit.lines = (op.lines || []).map((l) => ({ itemCode: l.itemCode, quantity: l.quantity, unitPrice: l.unitPrice, targetItemCode: l.targetItemCode, countedQty: l.countedQty }));
+      renderOpEditor(box, op, form);
     } catch (e) { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; }
+  }
+
+  function renderOpReadonly(box, op) {
+    const lines = (op.lines || []).map((l) =>
+      `<div class="team-eq"><div class="item"><span class="n">${esc(l.itemName || l.itemCode)}${l.targetName ? ' → ' + esc(l.targetName) : ''}</span><span class="l">${fmtInt(l.quantity != null ? l.quantity : l.countedQty)} szt.${l.unitPrice != null ? ' · ' + fmtMoney(l.unitPrice) : ''}</span></div></div>`).join('')
+      || '<p class="sub">Brak pozycji.</p>';
+    const canReverse = op.state === 'done';
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags"><span class="chip chip-blue">${esc(op.typeLabel)}</span><span class="chip chip-grey">${esc(OP_STATE[op.state] || op.state)}</span></div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>${esc(op.reference)}</h2>
+        <p class="sub">${esc([op.fromName, op.toName].filter(Boolean).join(' → ') || '—')}</p>
+        <div class="kv-grid">
+          <div class="kv"><div class="k">Kontakt</div><div class="v">${esc(op.supplierName || op.contact || '—')}</div></div>
+          <div class="kv"><div class="k">Dokument</div><div class="v">${esc(op.sourceDocument || '—')}</div></div>
+          <div class="kv"><div class="k">Utworzono</div><div class="v">${esc(fmtDay(op.createdAt) || '—')}</div></div>
+          <div class="kv"><div class="k">Zatwierdzono</div><div class="v">${esc(fmtDay(op.doneAt) || '—')}</div></div>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:#1F2225;margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
+        ${lines}
+      </div>
+      <div class="drawer-foot">${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
+  }
+
+  function renderOpEditor(box, op, form) {
+    const t = op.type;
+    const locOpts = (sel) => optList(form.locations, (l) => l.id, (l) => l.name, sel);
+    const supOpts = (sel) => '<option value="">— brak —</option>' + optList(form.suppliers, (s) => s.id, (s) => s.name, sel);
+    const dstOpts = (sel) => '<option value="">— brak —</option>' + optList(form.deliveryDestinations, (d) => d.id, (d) => d.name, sel);
+    const partyField = t === 'receipt'
+      ? `<label class="field"><span>Dostawca</span><select data-op-h="supplierId">${supOpts(op.supplierId)}</select></label>`
+      : t === 'delivery'
+        ? `<label class="field"><span>Miejsce dostawy</span><select data-op-h="destinationId">${dstOpts(op.destinationId)}</select></label>`
+        : '';
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags"><span class="chip chip-blue">${esc(op.typeLabel)}</span><span class="chip chip-orange">${esc(OP_STATE[op.state] || op.state)}</span></div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>${esc(op.reference)}</h2>
+        <p class="sub">Wersja robocza — uzupełnij pozycje i zatwierdź.</p>
+        <div class="sheet-fields" style="margin-bottom:18px;">
+          <div class="field-2">
+            <label class="field"><span>Z lokalizacji</span><select data-op-h="fromLocationId">${locOpts(op.fromLocationId)}</select></label>
+            <label class="field"><span>Do lokalizacji</span><select data-op-h="toLocationId">${locOpts(op.toLocationId)}</select></label>
+          </div>
+          ${partyField}
+          <label class="field"><span>Kontakt</span><input data-op-h="contact" value="${esc(op.contact || '')}" placeholder="np. dostawca / pracownik"></label>
+          <label class="field"><span>Dokument źródłowy</span><input data-op-h="sourceDocument" value="${esc(op.sourceDocument || '')}" placeholder="np. nr faktury"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><div style="font-size:13px;font-weight:600;color:#1F2225;">Pozycje</div><button class="btn btn-ghost btn-sm" data-op-addline>+ Dodaj</button></div>
+        <div data-op-lines></div>
+      </div>
+      <div class="drawer-foot" style="flex-wrap:wrap;gap:8px;">
+        <button class="btn btn-primary" style="flex:1;min-width:120px;" data-op-validate>Zatwierdź operację</button>
+        <button class="btn btn-ghost" data-op-save>Zapisz</button>
+        <button class="btn btn-danger-ghost" data-op-cancel>Anuluj</button>
+      </div>`;
+    renderOpLines();
+  }
+
+  function renderOpLines() {
+    const wrap = $('[data-op-lines]'); if (!wrap) return;
+    const t = opEdit.type; const items = (state.mag.formData || {}).items || [];
+    if (!opEdit.lines.length) { wrap.innerHTML = '<p class="sub" style="margin:0 0 4px;">Brak pozycji — dodaj przyciskiem „+ Dodaj”.</p>'; return; }
+    const itemOpts = (sel) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => `${i.name} (dostępne: ${i.available})`, sel);
+    wrap.innerHTML = opEdit.lines.map((l, i) => {
+      let extra = '';
+      if (t === 'receipt') extra = `<input data-line-field="unitPrice" data-idx="${i}" type="number" min="0" step="0.01" value="${l.unitPrice != null ? l.unitPrice : ''}" placeholder="cena" style="width:80px;">`;
+      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode)}</select>`;
+      const qtyField = t === 'adjustment'
+        ? `<input data-line-field="countedQty" data-idx="${i}" type="number" min="0" step="1" value="${l.countedQty != null ? l.countedQty : ''}" placeholder="policzono" style="width:90px;">`
+        : `<input data-line-field="quantity" data-idx="${i}" type="number" min="1" step="1" value="${l.quantity != null ? l.quantity : ''}" placeholder="ilość" style="width:80px;">`;
+      return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <select data-line-field="itemCode" data-idx="${i}" style="flex:1;min-width:140px;">${itemOpts(l.itemCode)}</select>
+        ${t === 'conversion' ? extra : ''}${qtyField}${t === 'receipt' ? extra : ''}
+        <button class="x-btn" data-op-delline="${i}" style="width:32px;height:32px;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>`;
+    }).join('');
+    // style line inputs
+    $$('[data-line-field]').forEach((el) => { el.style.border = '1px solid var(--line-2)'; el.style.borderRadius = '9px'; el.style.padding = '9px 11px'; el.style.fontSize = '13.5px'; el.style.background = '#fff'; el.style.outline = 'none'; });
+  }
+
+  function readOpLinesFromDOM() {
+    $$('[data-line-field]').forEach((el) => {
+      const i = Number(el.dataset.idx); const f = el.dataset.lineField;
+      if (!opEdit.lines[i]) return;
+      opEdit.lines[i][f] = f === 'itemCode' || f === 'targetItemCode' ? el.value : (el.value === '' ? null : Number(el.value));
+    });
+  }
+  function readOpHeaderFromDOM() {
+    const h = {};
+    $$('[data-op-h]').forEach((el) => { h[el.dataset.opH] = el.value; });
+    return h;
+  }
+
+  async function saveOp(silent) {
+    readOpLinesFromDOM();
+    const h = readOpHeaderFromDOM();
+    const body = Object.assign({ lines: opEdit.lines }, h);
+    await api('/warehouse/operations/' + encodeURIComponent(opEdit.id), { method: 'PATCH', body: JSON.stringify(body) });
+    if (!silent) toast('Zapisano.');
+  }
+  async function validateOp() {
+    const btn = $('[data-op-validate]'); if (btn) { btn.disabled = true; btn.textContent = 'Zatwierdzanie…'; }
+    try {
+      await saveOp(true);
+      const r = await api('/warehouse/operations/' + encodeURIComponent(opEdit.id) + '/validate', { method: 'POST', body: JSON.stringify({}) });
+      toast(r.message || 'Wykonano operację.');
+      closeDrawer(); afterOpChange();
+    } catch (e) { toast(e.message || 'Nie udało się zatwierdzić.', true); if (btn) { btn.disabled = false; btn.textContent = 'Zatwierdź operację'; } }
+  }
+  async function cancelOp() {
+    if (!confirm('Anulować tę operację?')) return;
+    try { await api('/warehouse/operations/' + encodeURIComponent(opEdit.id) + '/cancel', { method: 'POST', body: JSON.stringify({}) }); toast('Anulowano.'); closeDrawer(); afterOpChange(); }
+    catch (e) { toast(e.message || 'Nie udało się.', true); }
+  }
+  async function reverseOp(id) {
+    if (!confirm('Cofnąć wykonaną operację do wersji roboczej?')) return;
+    try { const r = await api('/warehouse/operations/' + encodeURIComponent(id) + '/reverse', { method: 'POST', body: JSON.stringify({}) }); toast(r.message || 'Cofnięto.'); closeDrawer(); afterOpChange(); }
+    catch (e) { toast(e.message || 'Nie udało się.', true); }
+  }
+  function afterOpChange() {
+    state.mag.formData = null; state.mag.valuation = null; state.mag.products = null;
+    if (state.magTab === 'operacje') renderOperacje();
+    if (state.magTab === 'przeglad') renderPrzeglad();
+    loadMagazyn();
+  }
+
+  async function openNewOp(type) {
+    try {
+      const form = await magForm();
+      const cfg = (form.types || {})[type] || {};
+      openSheet('newOp', { type, typeLabel: cfg.label || 'Operacja', form });
+    } catch (e) { toast(e.message || 'Nie udało się otworzyć formularza.', true); }
   }
 
   // ---- Produkty
@@ -808,16 +1007,21 @@
         api('/warehouse/suppliers'),
         state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
       ]);
-      state.mag.locations = locs;
+      state.mag.locations = locs; state.mag.suppliers = suppliers;
+      const acts = (edit, del, id) => `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn btn-ghost btn-sm" data-${edit}="${esc(id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-${del}="${esc(id)}">Usuń</button></div>`;
       const supTable = suppliers.length ? tableHTML(
-        [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }],
-        suppliers.map((s) => ({ cells: [{ v: s.name }, { v: s.contact || '—', cls: 'mut' }, { v: s.notes || '—', cls: 'mut' }] }))
+        [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }, { t: '', num: true }],
+        suppliers.map((s) => ({ cells: [
+          { v: s.name }, { v: s.contact || '—', cls: 'mut' }, { v: s.notes || '—', cls: 'mut' },
+          { html: acts('sup-edit', 'sup-del', s.id), cls: 'num' }
+        ] }))
       ) : emptyBlock('Brak dostawców', '');
       const locTable = locs.length ? tableHTML(
-        [{ t: 'Lokalizacja' }, { t: 'Kod' }, { t: 'Typ' }, { t: 'Na stanie', num: true }],
+        [{ t: 'Lokalizacja' }, { t: 'Kod' }, { t: 'Typ' }, { t: 'Na stanie', num: true }, { t: '', num: true }],
         locs.map((l) => ({ cells: [
           { v: l.name }, { v: l.code || '—', cls: 'mono-cell' }, { v: LOC_KIND[l.kind] || l.kind || '—', cls: 'mut' },
-          { v: l.onHand ? fmtInt(l.onHand) : '—', cls: 'num' }
+          { v: l.onHand ? fmtInt(l.onHand) : '—', cls: 'num' },
+          { html: l.editable ? acts('loc-edit', 'loc-del', l.id) : '<span class="eq-sub">systemowa</span>', cls: 'num' }
         ] }))
       ) : emptyBlock('Brak lokalizacji', '');
       el.innerHTML = `<div class="anim-fadeup">
@@ -829,16 +1033,26 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del]');
     if (!t) return;
 
     if (t.dataset.magTab) { setMagTab(t.dataset.magTab); return; }
     if (t.dataset.magOptab) { state.magOpType = t.dataset.magOptab; renderOperacje(); return; }
     if (t.dataset.magReport) { state.magReport = t.dataset.magReport; $$('[data-mag-report]').forEach((b) => b.classList.toggle('active', b === t)); renderReport(t.dataset.magReport); return; }
-    if (t.hasAttribute('data-mag-op')) { openOpDetail(t.getAttribute('data-mag-op')); return; }
+    if (t.hasAttribute('data-mag-op')) { openOpEditor(t.getAttribute('data-mag-op')); return; }
     if (t.hasAttribute('data-mag-csv')) { exportProductsCSV(); return; }
-    if (t.hasAttribute('data-mag-new-op')) { toast('Tworzenie operacji dostępne w klasycznym widoku (/). W v2 — wkrótce.'); return; }
-    if (t.hasAttribute('data-mag-config-add')) { toast('Edycja konfiguracji magazynu — wkrótce w v2. Użyj klasycznego widoku.'); return; }
+    if (t.hasAttribute('data-mag-new-op')) { openNewOp(state.magOpType); return; }
+    if (t.hasAttribute('data-mag-config-add')) { openSheet(t.getAttribute('data-mag-config-add') === 'dostawca' ? 'supplier' : 'location', {}); return; }
+    if (t.hasAttribute('data-op-addline')) { readOpLinesFromDOM(); opEdit.lines.push({}); renderOpLines(); return; }
+    if (t.hasAttribute('data-op-delline')) { readOpLinesFromDOM(); opEdit.lines.splice(Number(t.getAttribute('data-op-delline')), 1); renderOpLines(); return; }
+    if (t.hasAttribute('data-op-save')) { saveOp().catch((err) => toast(err.message || 'Nie udało się zapisać.', true)); return; }
+    if (t.hasAttribute('data-op-validate')) { validateOp(); return; }
+    if (t.hasAttribute('data-op-cancel')) { cancelOp(); return; }
+    if (t.hasAttribute('data-op-reverse')) { reverseOp(t.getAttribute('data-op-reverse')); return; }
+    if (t.hasAttribute('data-sup-edit')) { const s = (state.mag.suppliers || []).find((x) => x.id === t.getAttribute('data-sup-edit')); openSheet('supplier', s || {}); return; }
+    if (t.hasAttribute('data-sup-del')) { delSupplier(t.getAttribute('data-sup-del')); return; }
+    if (t.hasAttribute('data-loc-edit')) { const l = (state.mag.locations || []).find((x) => x.id === t.getAttribute('data-loc-edit')); openSheet('location', l || {}); return; }
+    if (t.hasAttribute('data-loc-del')) { delLocation(t.getAttribute('data-loc-del')); return; }
 
     if (t.hasAttribute('data-stop')) { e.stopPropagation(); return; }
     if (t.id === 'sheetSubmit') { e.preventDefault(); submitSheet(); return; }
