@@ -435,11 +435,12 @@ export async function validateOperation(db, operationId, actorEmail) {
     });
   }
 
-  // Konwersja: zapamiętaj partie i ilość źródeł SPRZED ruchów — koszt zdejmujemy
-  // z tego stanu (po ruchach quanty/ilości już są obniżone), patrz applyConversionBatches.
+  // Konwersja: zapamiętaj partie i ilość źródeł ORAZ celów SPRZED ruchów. Koszt źródła
+  // zdejmujemy z tego stanu; celowi dobudowujemy partie na bazie jego stanu sprzed ruchu
+  // (po ruchach quanty/ilości już są zmienione), patrz applyConversionBatches.
   const preConv = new Map();
   if (op.type === 'conversion') {
-    const codes = [...new Set(lines.map(l => String(l.itemCode)))];
+    const codes = [...new Set(lines.flatMap(l => [String(l.itemCode), String(l.targetItemCode)]).filter(Boolean))];
     const its = codes.length
       ? await db.collection(collections.items)
           .find({ itemCode: { $in: codes } }, { projection: { itemCode: 1, quantity: 1, priceBatches: 1 } })
@@ -729,7 +730,7 @@ export function fifoConsume(batches, qty) {
 async function applyConversionBatches(db, op, lines, preConv, now) {
   const items = db.collection(collections.items);
   const detail = [];
-  // Robocza kopia partii towaru — współdzielona między pozycjami tego samego źródła.
+  // Robocza kopia partii źródła — współdzielona między pozycjami tego samego źródła.
   const work = new Map();
   const sourceBatches = (code) => {
     if (!work.has(code)) {
@@ -740,6 +741,21 @@ async function applyConversionBatches(db, op, lines, preConv, now) {
       work.set(code, b);
     }
     return work.get(code);
+  };
+  // Robocza kopia partii CELU — startuje od stanu sprzed konwersji. Jeśli cel miał stan
+  // bez pokrycia w partiach (np. import z Odoo: quantity>0, priceBatches=[]), dobudowujemy
+  // „Stan początkowy" (0 zł) na brakującą ilość — inaczej nadpisanie quantity samą sumą
+  // dopisanej partii SKASOWAŁOBY istniejący stan celu (#konwersja gadżet→towar).
+  const targetWork = new Map();
+  const targetBatches = (code) => {
+    if (!targetWork.has(code)) {
+      const pre = preConv.get(code) || { quantity: 0, priceBatches: [] };
+      const b = pre.priceBatches.map(x => ({ ...x }));
+      const sum = b.reduce((s, x) => s + (Number(x.qty) || 0), 0);
+      if (pre.quantity > sum) b.unshift({ qty: pre.quantity - sum, unitPrice: 0, note: 'Stan początkowy', addedAt: now });
+      targetWork.set(code, b);
+    }
+    return targetWork.get(code);
   };
 
   for (const ln of lines) {
@@ -756,16 +772,13 @@ async function applyConversionBatches(db, op, lines, preConv, now) {
     const srcTotal = kept.reduce((s, b) => s + (Number(b.qty) || 0), 0);
     await items.updateOne({ itemCode: sourceCode }, { $set: { priceBatches: kept, quantity: srcTotal, updatedAt: now } });
 
-    // Cena jednostkowa gadżetu = średnia zdjętego kosztu (gdy brak kosztu → 0 zł).
+    // Cena jednostkowa celu = średnia zdjętego kosztu (gdy brak kosztu → 0 zł).
     const producedUnit = qty > 0 ? Math.round((cost / qty) * 100) / 100 : 0;
     const note = `${op.reference} · konwersja z ${sourceCode}`;
-    const tgt = await items.findOne({ itemCode: targetCode }, { projection: { priceBatches: 1 } });
-    if (tgt) {
-      const tBatches = Array.isArray(tgt.priceBatches) ? tgt.priceBatches.slice() : [];
-      tBatches.push({ qty, unitPrice: producedUnit, note, addedAt: now });
-      const tTotal = tBatches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
-      await items.updateOne({ itemCode: targetCode }, { $set: { priceBatches: tBatches, quantity: tTotal, updatedAt: now } });
-    }
+    const tBatches = targetBatches(targetCode);
+    tBatches.push({ qty, unitPrice: producedUnit, note, addedAt: now });
+    const tTotal = tBatches.reduce((s, b) => s + (Number(b.qty) || 0), 0);
+    await items.updateOne({ itemCode: targetCode }, { $set: { priceBatches: tBatches, quantity: tTotal, updatedAt: now } });
 
     detail.push({ sourceCode, targetCode, qty, consumed, producedUnit, note });
   }
