@@ -202,6 +202,7 @@
     if (view === 'mojsprzet') return loadMine();
     if (view === 'skrzynka') { loadInbox(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
+    if (view === 'admin') return loadAdminItems();
   }
 
   async function refreshCounts() {
@@ -622,6 +623,154 @@
         else await api('/onboarding/steps', { method: 'POST', body: JSON.stringify(data) });
         toast('Zapisano krok.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts();
       }
+    },
+    twEvent: {
+      eyebrow: 'Wyjazdy', title: (ctx) => ctx._id ? 'Edytuj wyjazd' : 'Nowy wyjazd',
+      hint: 'Współrzędne uzupełnią się z listy miast, jeśli je zostawisz puste.', cta: 'Zapisz',
+      fields: (ctx) => {
+        const cityOpts = Object.keys(TW_CITIES).sort((a, b) => a.localeCompare(b)).map((c) => `<option value="${esc(c)}"></option>`).join('');
+        return `
+        <datalist id="twCityList">${cityOpts}</datalist>
+        <div class="field-2">
+          <label class="field"><span>Typ wyjazdu</span><input name="eventType" value="${esc(ctx.eventType || '')}" placeholder="np. Turbo Weekend"></label>
+          <label class="field"><span>Miasto *</span><input name="city" list="twCityList" value="${esc(ctx.city || '')}" placeholder="np. Kraków"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Region</span><input name="region" value="${esc(ctx.region || '')}" placeholder="np. Małopolska"></label>
+          <label class="field"><span>Data</span><input name="eventDate" value="${esc(ctx.eventDate || '')}" placeholder="np. 12–14.09"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Uczestnicy</span><input name="participants" type="number" min="0" step="1" value="${ctx.participants != null ? ctx.participants : ''}" placeholder="np. 48"></label>
+          <label class="field"><span>Bus</span><input name="bus" value="${esc(ctx.bus || '')}" placeholder="np. Bus A"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Szer. geogr. (lat)</span><input name="lat" type="number" step="any" value="${ctx.lat != null ? ctx.lat : ''}" placeholder="auto"></label>
+          <label class="field"><span>Dł. geogr. (lng)</span><input name="lng" type="number" step="any" value="${ctx.lng != null ? ctx.lng : ''}" placeholder="auto"></label>
+        </div>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.city) throw new Error('Podaj miasto.');
+        if ((!data.lat || !data.lng) && TW_CITIES[data.city]) { data.lng = TW_CITIES[data.city][0]; data.lat = TW_CITIES[data.city][1]; }
+        if (ctx._id) await api('/admin/tw/' + encodeURIComponent(ctx._id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/admin/tw', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano wyjazd.'); await loadTwEvents();
+      }
+    },
+    twPacking: {
+      eyebrow: 'Wyjazdy · lista pakowania', title: (ctx) => ctx._id ? 'Edytuj pozycję' : 'Nowa pozycja',
+      hint: 'Tryb „na osobę” liczy wg uczestników; „stała” to zawsze ta sama ilość. Podepnij produkt z magazynu, by odejmować stan.', cta: 'Zapisz',
+      onOpen: async (ctx) => { if (!state.tw || !state.tw.products) { try { (state.tw = state.tw || {}).products = await api('/packing-products'); } catch (_) { (state.tw = state.tw || {}).products = []; } } },
+      fields: (ctx) => {
+        const mode = ctx.mode || 'per_person';
+        const prodOpts = (state.tw.products || []).map((p) => `<option value="${esc(p.itemCode)}">${esc(p.name || '')}${p.quantity != null ? ' (stan ' + p.quantity + ')' : ''}</option>`).join('');
+        return `
+        <datalist id="twProdList">${prodOpts}</datalist>
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Koszulki"></label>
+        <div class="field-2">
+          <label class="field"><span>Jednostka</span><input name="unit" value="${esc(ctx.unit || 'szt.')}" placeholder="szt."></label>
+          <label class="field"><span>Tryb</span><select name="mode"><option value="per_person"${mode === 'per_person' ? ' selected' : ''}>Na osobę</option><option value="fixed"${mode === 'fixed' ? ' selected' : ''}>Stała ilość</option></select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Na osobę</span><input name="perPerson" type="number" min="0" step="any" value="${ctx.perPerson != null ? ctx.perPerson : 1}"></label>
+          <label class="field"><span>Stała ilość</span><input name="fixed" type="number" min="0" step="1" value="${ctx.fixed != null ? ctx.fixed : 1}"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Zaokrąglaj do (paczki)</span><input name="roundUpTo" type="number" min="1" step="1" value="${ctx.roundUpTo || 1}"></label>
+          <label class="field"><span>Kategoria</span><input name="category" value="${esc(ctx.category || '')}" placeholder="np. Materiały"></label>
+        </div>
+        <label class="field"><span>Produkt z magazynu (kod)</span><input name="itemCode" list="twProdList" value="${esc(ctx.itemCode || '')}" placeholder="opcjonalnie — odejmuje stan"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę pozycji.');
+        if (ctx._id) await api('/admin/packing-items/' + encodeURIComponent(ctx._id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/admin/packing-items', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano pozycję.'); state.tw.packingItems = null; await renderWyjazdy(); if (state.tw.selectedId) selectTw(state.tw.selectedId);
+      }
+    },
+    adminItem: {
+      eyebrow: 'Zarządzanie sprzętem', title: (ctx) => ctx._id ? 'Edytuj sprzęt' : 'Dodaj sprzęt',
+      hint: 'Kod nadaje się automatycznie z kategorii, jeśli zostawisz puste.', cta: 'Zapisz',
+      onOpen: async (ctx) => { if (!state.adminOpts) { try { state.adminOpts = await api('/admin/form-options'); } catch (_) { state.adminOpts = { locations: [], categories: [], conditions: [], users: [] }; } } },
+      fields: (ctx) => {
+        const o = state.adminOpts || {};
+        const condOpts = (o.conditions || Object.keys(CONDITION_LABELS)).map((c) => `<option value="${esc(c)}"${(ctx.conditionStatus || 'ok') === c ? ' selected' : ''}>${esc(condLabel(c))}</option>`).join('');
+        const locList = [...new Set([...(o.locations || []), ctx.currentLocation].filter(Boolean))];
+        const locOpts = locList.map((l) => `<option value="${esc(l)}"${(ctx.currentLocation || 'Magazyn') === l ? ' selected' : ''}>${esc(l)}</option>`).join('');
+        const catOpts = (o.categories || []).map((c) => `<option value="${esc(c)}"></option>`).join('');
+        const userOpts = '<option value="">— nikt —</option>' + (o.users || []).map((u) => `<option value="${esc(u.email)}"${ctx.assignedToEmail === u.email ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        return `
+        <datalist id="aiCatList">${catOpts}</datalist>
+        <div class="field-2">
+          <label class="field"><span>Kategoria *</span><input name="category" list="aiCatList" value="${esc(ctx.category || '')}" placeholder="np. Lampy"></label>
+          <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Streamplify Light 10"></label>
+        </div>
+        <label class="field"><span>Opis / szczegóły</span><input name="details" value="${esc(ctx.details || '')}" placeholder="opcjonalnie"></label>
+        <div class="field-2">
+          <label class="field"><span>Ilość</span><input name="quantity" type="number" min="1" step="1" value="${ctx.quantity != null ? ctx.quantity : 1}"></label>
+          <label class="field"><span>Stan techniczny</span><select name="conditionStatus">${condOpts}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Lokalizacja</span><select name="currentLocation">${locOpts}</select></label>
+          <label class="field"><span>Kod (opcjonalnie)</span><input name="itemCode" value="${esc(ctx.itemCode || '')}" placeholder="auto"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Marka</span><input name="brand" value="${esc(ctx.brand || '')}" placeholder="np. Sony"></label>
+          <label class="field"><span>Model</span><input name="model" value="${esc(ctx.model || '')}" placeholder="np. A7 IV"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Nr seryjny</span><input name="serialNumber" value="${esc(ctx.serialNumber || '')}" placeholder="opcjonalnie"></label>
+          <label class="field"><span>Tagi (po przecinku)</span><input name="tags" value="${esc((ctx.tags || []).join(', '))}" placeholder="np. studio, foto"></label>
+        </div>
+        ${ctx._id ? '' : `<label class="field"><span>Przypisz od razu do</span><select name="assignedToEmail">${userOpts}</select></label>`}
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.category || !data.name) throw new Error('Podaj kategorię i nazwę.');
+        data.tags = String(data.tags || '').split(',').map((s) => s.trim()).filter(Boolean);
+        if (!data.itemCode) delete data.itemCode;
+        if (ctx._id) await api('/admin/items/' + encodeURIComponent(ctx._id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/admin/items', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano sprzęt.'); invalidate(['available', 'mine']); loadAdminItems();
+      }
+    },
+    adminDiscard: {
+      eyebrow: 'Zarządzanie sprzętem', title: 'Wycofaj sprzęt',
+      hint: (ctx) => `„${ctx.name || 'sprzęt'}” zostanie oznaczony jako wycofany i zniknie z list.`, cta: 'Wycofaj',
+      fields: () => `<label class="field"><span>Powód</span><input name="reason" placeholder="np. uszkodzony, sprzedany"></label>`,
+      submit: async (data, ctx) => {
+        await api('/admin/items/' + encodeURIComponent(ctx._id) + '/discard', { method: 'POST', body: JSON.stringify(data) });
+        toast('Sprzęt wycofany.'); invalidate(['available', 'mine']); loadAdminItems();
+      }
+    },
+    adminTransfer: {
+      eyebrow: 'Zarządzanie sprzętem', title: 'Przenieś sprzęt',
+      hint: (ctx) => `Przypisz „${ctx.name || 'sprzęt'}” do wybranej osoby.`, cta: 'Przenieś',
+      onOpen: async (ctx) => { if (!state.adminOpts) { try { state.adminOpts = await api('/admin/form-options'); } catch (_) { state.adminOpts = { users: [] }; } } },
+      fields: (ctx) => {
+        const userOpts = '<option value="">— wybierz osobę —</option>' + ((state.adminOpts || {}).users || []).map((u) => `<option value="${esc(u.email)}">${esc(u.fullName)}</option>`).join('');
+        return `<label class="field"><span>Przenieś na *</span><select name="toEmail">${userOpts}</select></label>
+        <label class="field"><span>Notatka</span><input name="note" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.toEmail) throw new Error('Wskaż osobę.');
+        await api('/admin/items/' + encodeURIComponent(ctx._id) + '/transfer', { method: 'POST', body: JSON.stringify(data) });
+        toast('Sprzęt przeniesiony.'); invalidate(['available', 'mine']); loadAdminItems();
+      }
+    },
+    adminImport: {
+      eyebrow: 'Zarządzanie sprzętem', title: 'Import CSV',
+      hint: 'Wklej CSV z nagłówkiem. Wymagane kolumny: itemCode, name, category. Opcjonalne: quantity, conditionStatus, currentLocation, brand, model, serialNumber.', cta: 'Importuj',
+      fields: () => `<label class="field"><span>Dane CSV *</span><textarea name="csv" rows="8" placeholder="itemCode,name,category,quantity&#10;L100,Lampa LED,Lampy,2"></textarea></label>`,
+      submit: async (data) => {
+        const rows = parseCSV(data.csv || '');
+        if (!rows.length) throw new Error('Brak wierszy do importu.');
+        const items = rows.map((r) => ({ ...r, quantity: r.quantity ? Number(r.quantity) : undefined }));
+        const res = await api('/admin/items/bulk', { method: 'POST', body: JSON.stringify({ items }) });
+        const ins = res.insertedCount != null ? res.insertedCount : (res.inserted || 0);
+        const errs = (res.errors || []).length;
+        toast(`Import: dodano ${ins}${errs ? `, błędów ${errs}` : ''}.`, errs > 0);
+        invalidate(['available', 'mine']); loadAdminItems();
+      }
     }
   };
 
@@ -942,6 +1091,7 @@
     if (tab === 'przeglad') return renderPrzeglad();
     if (tab === 'operacje') return renderOperacje();
     if (tab === 'produkty') return renderProdukty();
+    if (tab === 'wyjazdy') return renderWyjazdy();
     if (tab === 'raportowanie') return renderRaportowanie();
     if (tab === 'konfiguracja') return renderKonfiguracja();
   }
@@ -1341,13 +1491,313 @@
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
+  // -------------------------------------------------------------- Wyjazdy (Turbo Weekend)
+  const TW_CITIES = {
+    'Warszawa': [21.01, 52.23], 'Kraków': [19.94, 50.06], 'Łódź': [19.46, 51.76],
+    'Wrocław': [17.04, 51.11], 'Poznań': [16.93, 52.41], 'Gdańsk': [18.65, 54.35],
+    'Szczecin': [14.55, 53.43], 'Bydgoszcz': [18.0, 53.12], 'Lublin': [22.57, 51.25],
+    'Białystok': [23.16, 53.13], 'Katowice': [19.02, 50.26], 'Rzeszów': [22.0, 50.04],
+    'Kielce': [20.63, 50.87], 'Olsztyn': [20.49, 53.78], 'Opole': [17.93, 50.67],
+    'Toruń': [18.6, 53.01], 'Zielona Góra': [15.5, 51.94], 'Gorzów Wielkopolski': [15.24, 52.74],
+    'Częstochowa': [19.12, 50.81], 'Radom': [21.15, 51.4], 'Płock': [19.71, 52.55],
+    'Koszalin': [16.18, 54.19], 'Słupsk': [17.03, 54.46], 'Elbląg': [19.4, 54.16],
+    'Tarnów': [20.98, 50.01], 'Nowy Sącz': [20.7, 49.62], 'Przemyśl': [22.77, 49.78],
+    'Suwałki': [22.93, 54.1], 'Chełm': [23.47, 51.13], 'Gniezno': [17.6, 52.53]
+  };
+  const TW_BORDER = [
+    [14.27,53.91],[15.0,54.05],[16.2,54.28],[17.0,54.62],[18.35,54.75],[18.65,54.42],
+    [19.3,54.36],[19.65,54.45],[20.6,54.38],[21.5,54.35],[22.7,54.36],[23.0,54.38],
+    [23.48,54.15],[23.52,53.95],[23.92,53.19],[23.6,52.6],[23.18,52.28],[23.63,52.0],
+    [23.2,51.58],[23.68,50.88],[24.14,50.85],[23.7,50.4],[22.9,49.98],[22.65,49.55],
+    [22.55,49.09],[21.85,49.4],[21.0,49.35],[20.08,49.18],[19.63,49.2],[19.2,49.4],
+    [18.85,49.52],[18.55,49.92],[18.03,50.0],[17.72,50.2],[16.9,50.44],[16.45,50.65],
+    [15.38,50.78],[14.98,50.86],[14.6,51.55],[14.72,51.9],[14.6,52.5],[14.13,52.85],
+    [14.44,53.25],[14.27,53.72]
+  ];
+  const TW_BOUNDS = { latMin: 48.9, latMax: 55.0, lngMin: 13.9, lngMax: 24.25 };
+  const TW_VIEW = { w: 640, h: 620, pad: 26 };
+  function twProject(lng, lat) {
+    const { latMin, latMax, lngMin, lngMax } = TW_BOUNDS;
+    const cos = Math.cos(((latMin + latMax) / 2) * Math.PI / 180);
+    const lngSpan = (lngMax - lngMin) * cos;
+    const latSpan = latMax - latMin;
+    const scale = Math.min((TW_VIEW.w - 2 * TW_VIEW.pad) / lngSpan, (TW_VIEW.h - 2 * TW_VIEW.pad) / latSpan);
+    const offX = (TW_VIEW.w - lngSpan * scale) / 2;
+    const offY = (TW_VIEW.h - latSpan * scale) / 2;
+    return [offX + (lng - lngMin) * cos * scale, offY + (latMax - lat) * scale];
+  }
+  function twCoords(ev) {
+    if (ev.lat != null && ev.lng != null && ev.lat !== '' && ev.lng !== '') return [Number(ev.lng), Number(ev.lat)];
+    return TW_CITIES[ev.city] || TW_CITIES[String(ev.city || '').trim()] || null;
+  }
+  function twRuleText(it) {
+    if (it.mode === 'fixed') return `stała: ${it.fixed} ${it.unit}`;
+    const per = Number(it.perPerson) || 0; const round = Number(it.roundUpTo) || 1;
+    return `${per}/os.${round > 1 ? ` · paczki po ${round}` : ''}`;
+  }
+
+  async function renderWyjazdy() {
+    const el = $('[data-mag-panel="wyjazdy"]');
+    state.tw = state.tw || {};
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      state.tw.events = await api('/tw');
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać wyjazdów', e.message || ''); return; }
+    const isAdmin = state.user && state.user.role === 'admin';
+    const n = state.tw.events.length;
+    el.innerHTML = `<div class="anim-fadeup">
+      <div class="tw-head">
+        <div class="tw-head-title"><h3>Wyjazdy</h3><p>${n} ${plural(n, 'wyjazd', 'wyjazdy', 'wyjazdów')} · kliknij bus lub pinezkę, aby policzyć listę pakowania.</p></div>
+        <div class="tw-head-actions">
+          <button class="btn btn-ghost btn-sm hidden" data-tw-return-mode>Powrót busa</button>
+          ${isAdmin ? '<button class="btn btn-ghost btn-sm" data-tw-new>+ Nowy wyjazd</button>' : ''}
+        </div>
+      </div>
+      <div class="tw-layout">
+        <div class="tw-map card" data-tw-map></div>
+        <div class="tw-side">
+          <div class="card"><h3 style="margin:0 0 12px;font-size:15px;">Busy</h3><div class="tw-bus-list" data-tw-buses></div></div>
+          <div class="card tw-panel" data-tw-panel><div class="tw-empty">Wybierz bus, aby policzyć listę pakowania.</div></div>
+        </div>
+      </div>
+      ${isAdmin ? '<div class="tw-admin-wrap" data-tw-admin></div>' : ''}
+    </div>`;
+    renderTwMap(); renderTwBuses();
+    if (state.tw.selectedId && state.tw.events.some((e) => String(e._id) === String(state.tw.selectedId))) selectTw(state.tw.selectedId);
+    else { state.tw.selectedId = null; state.tw.packing = null; updateTwReturnBtn(); }
+    if (isAdmin) renderTwAdmin();
+  }
+
+  function renderTwMap() {
+    const wrap = $('[data-tw-map]'); if (!wrap) return;
+    const border = TW_BORDER.map(([lng, lat], i) => { const [x, y] = twProject(lng, lat); return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`; }).join(' ') + ' Z';
+    const pins = (state.tw.events || []).map((ev) => {
+      const c = twCoords(ev); if (!c) return '';
+      const [x, y] = twProject(c[0], c[1]);
+      const active = String(ev._id) === String(state.tw.selectedId);
+      const label = esc(`${ev.city}${ev.participants ? ` · ${ev.participants}` : ''}`);
+      return `<g class="tw-pin${active ? ' is-active' : ''}" data-tw-pin="${esc(ev._id)}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})" tabindex="0" role="button" aria-label="${esc(ev.city)}">
+        <circle class="tw-pin-halo" r="16"></circle><circle class="tw-pin-dot" r="6"></circle>
+        <text class="tw-pin-label" x="0" y="-20" text-anchor="middle">${label}</text></g>`;
+    }).join('');
+    wrap.innerHTML = `<svg viewBox="0 0 ${TW_VIEW.w} ${TW_VIEW.h}" class="tw-map-svg" preserveAspectRatio="xMidYMid meet" role="img"><path class="tw-map-land" d="${border}"></path>${pins}</svg>`;
+    wrap.querySelectorAll('.tw-pin').forEach((pin) => {
+      const id = pin.getAttribute('data-tw-pin');
+      pin.addEventListener('click', () => selectTw(id));
+      pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectTw(id); } });
+    });
+  }
+
+  function renderTwBuses() {
+    const list = $('[data-tw-buses]'); if (!list) return;
+    const evs = state.tw.events || [];
+    if (!evs.length) { list.innerHTML = `<div class="tw-empty">Brak wyjazdów.${state.user && state.user.role === 'admin' ? ' Dodaj je przyciskiem „Nowy wyjazd”.' : ''}</div>`; return; }
+    list.innerHTML = evs.map((ev) => {
+      const active = String(ev._id) === String(state.tw.selectedId);
+      return `<button class="tw-bus${active ? ' is-active' : ''}" data-tw-bus="${esc(ev._id)}">
+        <span class="tw-bus-icon">🚌</span>
+        <span class="tw-bus-main"><span class="tw-bus-title">${esc(ev.bus || 'Bus')} · ${esc(ev.city)}</span>
+        <span class="tw-bus-meta">${esc(ev.eventType || 'Wyjazd')}${ev.eventDate ? ' · ' + esc(ev.eventDate) : ''} · ${esc(String(ev.participants || 0))} os.</span></span>
+        <span class="tw-bus-count">${esc(String(ev.participants || 0))}</span></button>`;
+    }).join('');
+    list.querySelectorAll('[data-tw-bus]').forEach((b) => b.addEventListener('click', () => selectTw(b.getAttribute('data-tw-bus'))));
+  }
+
+  async function selectTw(id) {
+    state.tw.selectedId = String(id);
+    renderTwMap(); renderTwBuses();
+    const panel = $('[data-tw-panel]'); if (panel) panel.innerHTML = '<div class="tw-empty">Liczę listę pakowania…</div>';
+    try {
+      const data = await api(`/tw/${encodeURIComponent(id)}/packing`);
+      state.tw.packing = data; renderTwPanel(data); updateTwReturnBtn();
+    } catch (err) { if (panel) panel.innerHTML = `<div class="tw-empty">${esc(err.message)}</div>`; }
+  }
+
+  function updateTwReturnBtn() {
+    const btn = $('[data-tw-return-mode]'); if (!btn) return;
+    const hasPacked = !!state.tw.packing && (state.tw.packing.items || []).some((i) => (Number(i.packedQty) || 0) > 0);
+    btn.classList.toggle('hidden', !state.tw.selectedId || !hasPacked);
+    btn.textContent = state.tw.returnMode ? 'Zakończ powrót' : 'Powrót busa';
+    btn.classList.toggle('btn-primary', !!state.tw.returnMode);
+    btn.classList.toggle('btn-ghost', !state.tw.returnMode);
+  }
+
+  function twStockBadge(it) {
+    if (!it.itemCode) return '';
+    const n = it.stockOnHand == null ? '—' : it.stockOnHand;
+    return `<span class="tw-stock-badge" title="Stan magazynu: ${esc(String(n))}">📦 ${esc(String(n))}</span>`;
+  }
+  function twPackRow(it) {
+    const packed = (Number(it.packedQty) || 0) > 0;
+    return `<li class="tw-check${packed ? ' is-packed' : ''}">
+      <button class="tw-check-box" type="button" data-pack-toggle="${esc(it._id)}" data-packed="${packed ? '1' : '0'}" title="${packed ? 'Cofnij spakowanie' : 'Oznacz jako spakowane'}">${packed ? '✓' : ''}</button>
+      <div class="tw-check-main"><div class="tw-check-name">${esc(it.name)}</div><div class="tw-check-sub">${esc(twRuleText(it))}${it.itemCode ? ' · z magazynu' : ''}</div></div>
+      ${twStockBadge(it)}
+      <div class="tw-check-qty"><strong>${esc(String(it.quantity))}</strong> ${esc(it.unit)}</div></li>`;
+  }
+  function twReturnRow(it) {
+    const packed = Number(it.packedQty) || 0;
+    if (packed <= 0) return `<li class="tw-check is-dim"><div class="tw-check-main"><div class="tw-check-name">${esc(it.name)}</div><div class="tw-check-sub">nie spakowano</div></div></li>`;
+    const returned = Number(it.returnedQty) || 0; const consumed = Math.max(0, packed - returned);
+    return `<li class="tw-check is-return">
+      <div class="tw-check-main"><div class="tw-check-name">${esc(it.name)}</div><div class="tw-check-sub">spakowano ${esc(String(packed))} · zużyte ${esc(String(consumed))} ${esc(it.unit)}${it.itemCode ? ' · wraca na stan' : ''}</div></div>
+      <label class="tw-return-field">wróciło <input type="number" min="0" max="${packed}" value="${returned}" data-return-input="${esc(it._id)}"></label></li>`;
+  }
+  function renderTwPanel(data) {
+    const panel = $('[data-tw-panel]'); if (!panel) return;
+    const tw = data.turboWeekend || {}; const items = data.items || [];
+    const packedCount = items.filter((i) => (Number(i.packedQty) || 0) > 0).length;
+    const head = `<div class="tw-panel-head">
+      <div><div class="tw-panel-city">${esc(tw.city || '')} <span class="tw-muted">${esc(tw.eventType || 'Wyjazd')}</span></div>
+      <div class="tw-panel-meta">${tw.bus ? esc(tw.bus) + ' · ' : ''}${tw.eventDate ? esc(tw.eventDate) + ' · ' : ''}${esc(String(data.participants || 0))} uczestników · spakowano ${packedCount}/${items.length}</div></div>
+      <div class="tw-panel-people"><span class="tw-panel-people-num">${esc(String(data.participants || 0))}</span><span class="tw-muted">osób</span></div></div>`;
+    if (!items.length) { panel.innerHTML = head + '<div class="tw-empty">Lista pakowania jest pusta.</div>'; return; }
+    const rows = items.map((it) => state.tw.returnMode ? twReturnRow(it) : twPackRow(it)).join('');
+    panel.innerHTML = head + (state.tw.returnMode ? '<div class="tw-return-hint">Wpisz, ile każdej rzeczy wróciło — reszta zostaje odjęta jako zużyta, a zwrot wraca na stan magazynu.</div>' : '') + `<ul class="tw-checklist">${rows}</ul>`;
+    panel.querySelectorAll('[data-pack-toggle]').forEach((elx) => elx.addEventListener('click', () => togglePack(elx.getAttribute('data-pack-toggle'), elx.getAttribute('data-packed') === '1')));
+    panel.querySelectorAll('[data-return-input]').forEach((inp) => {
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+      inp.addEventListener('change', () => saveReturn(inp.getAttribute('data-return-input'), inp.value));
+    });
+  }
+  async function togglePack(itemId, isPacked) {
+    if (!state.tw.selectedId) return;
+    try { await api(`/tw/${encodeURIComponent(state.tw.selectedId)}/packing/${encodeURIComponent(itemId)}/${isPacked ? 'unpack' : 'pack'}`, { method: 'POST' }); await selectTw(state.tw.selectedId); }
+    catch (err) { toast(err.message || 'Nie udało się.', true); }
+  }
+  async function saveReturn(itemId, value) {
+    if (!state.tw.selectedId) return;
+    try { await api(`/tw/${encodeURIComponent(state.tw.selectedId)}/packing/${encodeURIComponent(itemId)}/return`, { method: 'POST', body: JSON.stringify({ returnedQty: Number(value) || 0 }) }); await selectTw(state.tw.selectedId); }
+    catch (err) { toast(err.message || 'Nie udało się.', true); }
+  }
+
+  // --- admin: listy wyjazdów i pozycji pakowania ---
+  async function renderTwAdmin() {
+    const wrap = $('[data-tw-admin]'); if (!wrap) return;
+    if (state.tw.packingItems == null) { try { state.tw.packingItems = await api('/packing-items'); } catch (_) { state.tw.packingItems = []; } }
+    const evRows = (state.tw.events || []).map((ev) => `<div class="tw-admin-row">
+      <div class="tw-admin-row-main"><strong>${esc(ev.bus || 'Bus')} · ${esc(ev.city)}</strong><span class="tw-muted">${esc(ev.eventType || 'Wyjazd')}${ev.eventDate ? ' · ' + esc(ev.eventDate) : ''} · ${esc(String(ev.participants || 0))} os.</span></div>
+      <div class="tw-admin-row-actions"><button class="btn btn-ghost btn-sm" data-tw-edit="${esc(ev._id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-tw-del="${esc(ev._id)}">Usuń</button></div></div>`).join('') || '<div class="tw-empty">Brak wyjazdów.</div>';
+    const pkRows = (state.tw.packingItems || []).map((it) => `<div class="tw-admin-row">
+      <div class="tw-admin-row-main"><strong>${esc(it.name)}</strong><span class="tw-muted">${esc(twRuleText(it))}${it.itemCode ? ' · 📦 ' + esc(it.itemCode) : ''}</span></div>
+      <div class="tw-admin-row-actions"><button class="btn btn-ghost btn-sm" data-twp-edit="${esc(it._id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-twp-del="${esc(it._id)}">Usuń</button></div></div>`).join('') || '<div class="tw-empty">Brak pozycji.</div>';
+    wrap.innerHTML = `
+      <div class="mag-config-section"><div class="mag-config-head"><h3>Zarządzaj wyjazdami</h3><button class="btn btn-ghost btn-sm" data-tw-new>+ Nowy wyjazd</button></div><div class="tw-admin-list">${evRows}</div></div>
+      <div class="mag-config-section"><div class="mag-config-head"><h3>Lista pakowania (szablon)</h3><button class="btn btn-ghost btn-sm" data-twp-new>+ Nowa pozycja</button></div><div class="tw-admin-list">${pkRows}</div></div>`;
+  }
+  function delTwEvent(id) {
+    if (!confirm('Usunąć ten wyjazd?')) return;
+    api('/admin/tw/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto wyjazd.'); if (String(state.tw.selectedId) === String(id)) { state.tw.selectedId = null; state.tw.packing = null; } renderWyjazdy(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function delTwPacking(id) {
+    if (!confirm('Usunąć tę pozycję listy pakowania?')) return;
+    api('/admin/packing-items/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto pozycję.'); state.tw.packingItems = null; renderTwAdmin(); if (state.tw.selectedId) selectTw(state.tw.selectedId); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Zarządzanie sprzętem (admin)
+  const CONDITION_LABELS = { new: 'Nowy', very_good: 'Bardzo dobry', good: 'Dobry', ok: 'Zadowalający', poor: 'Wymaga uwagi', damaged: 'Uszkodzony', for_repair: 'Do naprawy' };
+  const ITEM_STATUS = { available: 'Dostępny', loaned: 'Wypożyczony', inactive: 'Nieaktywny', unavailable: 'Niedostępny', discarded: 'Wyrzucony' };
+  function condLabel(v) { return v ? (CONDITION_LABELS[v] || v) : '—'; }
+  function itemStatusChip(s) {
+    const cls = s === 'available' ? 'chip chip-new' : s === 'loaned' ? 'chip chip-blue' : (s === 'discarded' || s === 'unavailable') ? 'chip chip-red' : 'chip chip-grey';
+    return `<span class="${cls}">${esc(ITEM_STATUS[s] || s || '—')}</span>`;
+  }
+
+  async function loadAdminItems() {
+    const el = $('[data-admin-list]'); if (!el) return;
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const [items, opts] = await Promise.all([
+        api('/admin/items'),
+        state.adminOpts ? Promise.resolve(state.adminOpts) : api('/admin/form-options')
+      ]);
+      state.adminItems = items; state.adminOpts = opts;
+      const search = $('[data-admin-search]');
+      if (search && !search._bound) { search._bound = true; search.addEventListener('input', () => { state.adminQuery = search.value; renderAdminItems(); }); }
+      renderAdminItems();
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  function renderAdminItems() {
+    const el = $('[data-admin-list]'); if (!el) return;
+    const q = ((state.adminQuery || '')).toLowerCase().trim();
+    let items = state.adminItems || [];
+    if (q) items = items.filter((it) => [it.name, it.itemCode, it.category, it.assignedToName, it.assignedToEmail, it.brand, it.model].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)));
+    const sub = $('[data-admin-sub]'); if (sub) sub.textContent = `${(state.adminItems || []).length} pozycji · ${items.length} widocznych`;
+    if (!items.length) { el.innerHTML = emptyBlock('Brak sprzętu', q ? 'Zmień zapytanie wyszukiwania.' : 'Dodaj pierwszą pozycję.'); return; }
+    const acts = (id) => `<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
+      <button class="btn btn-ghost btn-sm" data-ai-edit="${esc(id)}">Edytuj</button>
+      <button class="btn btn-ghost btn-sm" data-ai-transfer="${esc(id)}">Przenieś</button>
+      <button class="btn btn-danger-ghost btn-sm" data-ai-discard="${esc(id)}">Wycofaj</button></div>`;
+    el.innerHTML = tableHTML(
+      [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Stan' }, { t: 'Status' }, { t: 'Ilość', num: true }, { t: 'Lokalizacja' }, { t: 'Przypisanie' }, { t: '', num: true }],
+      items.map((it) => ({ cells: [
+        { v: it.itemCode, cls: 'mono-cell' }, { v: it.name }, { v: it.category || '—', cls: 'mut' },
+        { v: condLabel(it.conditionStatus), cls: 'mut' }, { html: itemStatusChip(it.operationalStatus) },
+        { v: fmtInt(it.quantity || 0), cls: 'num' }, { v: it.currentLocation || '—', cls: 'mut' },
+        { v: it.assignedToName || it.assignedToEmail || '—', cls: 'mut' }, { html: acts(it._id), cls: 'num' }
+      ] }))
+    );
+  }
+
+  function exportAdminCSV() {
+    const items = state.adminItems || [];
+    if (!items.length) { toast('Brak danych do eksportu.'); return; }
+    const cols = ['itemCode', 'name', 'category', 'brand', 'model', 'serialNumber', 'quantity', 'conditionStatus', 'operationalStatus', 'currentLocation', 'assignedToEmail'];
+    const escC = (v) => { const s = String(v == null ? '' : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const csv = [cols.join(',')].concat(items.map((it) => cols.map((c) => escC(it[c])).join(','))).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = 'sprzet.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  // Parser CSV: nagłówek → obiekty. Obsługuje cudzysłowy i separator , lub ;
+  function parseCSV(text) {
+    const rows = []; let row = [], cur = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+      else if (c === '"') q = true;
+      else if (c === ',' || c === ';') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; if (cur !== '' || row.length) { row.push(cur); rows.push(row); row = []; cur = ''; } }
+      else cur += c;
+    }
+    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+    if (!rows.length) return [];
+    const head = rows[0].map((h) => h.trim().replace(/^﻿/, ''));
+    return rows.slice(1).filter((r) => r.some((c) => c.trim() !== '')).map((r) => {
+      const o = {}; head.forEach((h, i) => (o[h] = (r[i] || '').trim())); return o;
+    });
+  }
+  async function discardAdminItem(id) {
+    const it = (state.adminItems || []).find((x) => String(x._id) === String(id));
+    openSheet('adminDiscard', { _id: id, name: it ? it.name : '' });
+  }
+
+  // -------------------------------------------------------------- global events
+
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export]');
     if (!t) return;
+
+    if (t.hasAttribute('data-ai-new')) { openSheet('adminItem', {}); return; }
+    if (t.hasAttribute('data-ai-edit')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-edit')); openSheet('adminItem', it || {}); return; }
+    if (t.hasAttribute('data-ai-transfer')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-transfer')); openSheet('adminTransfer', { _id: t.getAttribute('data-ai-transfer'), name: it ? it.name : '' }); return; }
+    if (t.hasAttribute('data-ai-discard')) { discardAdminItem(t.getAttribute('data-ai-discard')); return; }
+    if (t.hasAttribute('data-ai-import')) { openSheet('adminImport', {}); return; }
+    if (t.hasAttribute('data-ai-export')) { exportAdminCSV(); return; }
 
     if (t.hasAttribute('data-theme-opt')) { setTheme(t.getAttribute('data-theme-opt')); return; }
     if (t.hasAttribute('data-pref-toggle')) { togglePref(t.getAttribute('data-pref-toggle')); return; }
+
+    if (t.hasAttribute('data-tw-new')) { openSheet('twEvent', {}); return; }
+    if (t.hasAttribute('data-tw-edit')) { const ev = (state.tw && state.tw.events || []).find((x) => String(x._id) === t.getAttribute('data-tw-edit')); openSheet('twEvent', ev || {}); return; }
+    if (t.hasAttribute('data-tw-del')) { delTwEvent(t.getAttribute('data-tw-del')); return; }
+    if (t.hasAttribute('data-twp-new')) { openSheet('twPacking', {}); return; }
+    if (t.hasAttribute('data-twp-edit')) { const it = (state.tw && state.tw.packingItems || []).find((x) => String(x._id) === t.getAttribute('data-twp-edit')); openSheet('twPacking', it || {}); return; }
+    if (t.hasAttribute('data-twp-del')) { delTwPacking(t.getAttribute('data-twp-del')); return; }
+    if (t.hasAttribute('data-tw-return-mode')) { if (!state.tw.selectedId || !state.tw.packing) return; state.tw.returnMode = !state.tw.returnMode; renderTwPanel(state.tw.packing); updateTwReturnBtn(); return; }
 
     if (t.hasAttribute('data-lic-new')) { openSheet('license', {}); return; }
     if (t.hasAttribute('data-lic-detail')) { openLicenseDetail(t.getAttribute('data-lic-detail')); return; }
