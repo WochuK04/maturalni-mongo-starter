@@ -705,6 +705,23 @@
         setTimeout(() => openOpEditor(r.id), 60);
       }
     },
+    quickProduct: {
+      eyebrow: 'Magazyn · Konwersja', title: 'Nowy produkt (cel konwersji)',
+      hint: 'Utwórz produkt magazynowy, na który przetwarzasz. Koszt przeniesie sama konwersja.', cta: 'Utwórz',
+      fields: () => `<div class="field-2">
+        <label class="field"><span>Nazwa *</span><input name="name" placeholder="np. Zestaw powitalny"></label>
+        <label class="field"><span>Kategoria</span><input name="category" value="Gadżet" placeholder="np. Gadżet"></label>
+      </div>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę produktu.');
+        const res = await api('/warehouse/products', { method: 'POST', body: JSON.stringify({ name: data.name, category: data.category || 'Gadżet' }) });
+        state.mag.formData = state.mag.formData || { items: [] };
+        (state.mag.formData.items = state.mag.formData.items || []).push({ itemCode: res.itemCode, name: res.name, category: res.category, onHand: 0, reserved: 0, available: 0 });
+        if (opEdit.lines[ctx.idx]) opEdit.lines[ctx.idx].targetItemCode = res.itemCode;
+        renderOpLines();
+        toast('Utworzono produkt: ' + res.name);
+      }
+    },
     supplier: {
       eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj dostawcę' : 'Nowy dostawca',
       hint: 'Dostawca będzie dostępny przy przyjęciach.', cta: 'Zapisz',
@@ -1580,11 +1597,11 @@
     // „dostępne: N" (wolny stan na WH/Stock) pokazujemy TYLKO przy źródle konwersji —
     // jak w v1. W innych operacjach liczba ta myli (przyjęcie/cel konwersji nic nie
     // zdejmują, a wydanie/odpad mogą iść z innej lokalizacji niż WH/Stock).
-    const itemOpts = (sel, showStock) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => showStock ? `${i.name} (dostępne: ${i.available})` : i.name, sel);
+    const itemOpts = (sel, showStock, allowNew) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => showStock ? `${i.name} (dostępne: ${i.available})` : i.name, sel) + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
     wrap.innerHTML = opEdit.lines.map((l, i) => {
       let extra = '';
       if (t === 'receipt') extra = `<input data-line-field="unitPrice" data-idx="${i}" type="number" min="0" step="0.01" value="${l.unitPrice != null ? l.unitPrice : ''}" placeholder="cena" style="width:80px;">`;
-      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode, false)}</select>`;
+      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode, false, true)}</select>`;
       const qtyField = t === 'adjustment'
         ? `<input data-line-field="countedQty" data-idx="${i}" type="number" min="0" step="1" value="${l.countedQty != null ? l.countedQty : ''}" placeholder="policzono" style="width:90px;">`
         : `<input data-line-field="quantity" data-idx="${i}" type="number" min="1" step="1" value="${l.quantity != null ? l.quantity : ''}" placeholder="ilość" style="width:80px;">`;
@@ -1596,6 +1613,17 @@
     }).join('');
     // style line inputs
     $$('[data-line-field]').forEach((el) => { el.style.border = '1px solid var(--line-2)'; el.style.borderRadius = '9px'; el.style.padding = '9px 11px'; el.style.fontSize = '13.5px'; el.style.background = '#fff'; el.style.outline = 'none'; });
+    // Konwersja: wybór „＋ Nowy produkt…" w celu → szybkie utworzenie produktu.
+    $$('[data-line-field="targetItemCode"]', wrap).forEach((sel) => sel.addEventListener('change', () => {
+      if (sel.value === '__new__') { sel.value = ''; openQuickProduct(Number(sel.dataset.idx)); }
+    }));
+  }
+
+  // Szybkie utworzenie produktu-celu konwersji (POST /warehouse/products), po czym
+  // wpina go w tę pozycję i odświeża listy. Odpowiednik „__new__" z v1.
+  function openQuickProduct(idx) {
+    readOpLinesFromDOM(); // zachowaj bieżące pozycje przed re-renderem
+    openSheet('quickProduct', { idx });
   }
 
   function readOpLinesFromDOM() {
