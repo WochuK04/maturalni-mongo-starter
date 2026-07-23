@@ -7,7 +7,7 @@ import MongoStore from 'connect-mongo';
 import passport from 'passport';
 import { ObjectId } from 'mongodb';
 
-import { getDb, connectToDatabase } from './db.js';
+import { getDb, connectToDatabase, getMongoClient } from './db.js';
 import { collections, ensureIndexes } from './schema.js';
 import { setupPassport, requireAuth, requireAdmin, requireManager, requireWarehouseRead } from './auth.js';
 import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache, computeAging, applyMove } from './stock.js';
@@ -38,16 +38,28 @@ console.log('ENV CHECK', {
   nodeEnv: process.env.NODE_ENV
 });
 
+// Session store współdzieli klienta Mongo aplikacji (getMongoClient) — nie otwiera
+// osobnej puli. Na serverless (Vercel) to redukuje liczbę połączeń do Atlasa i
+// eliminuje wyścig przy cold-startach, przez który sesja bywała gubiona po logowaniu
+// (→ /me 401 → powrót na ekran logowania). connectToDatabase() jest awaited wyżej,
+// więc klient jest już połączony w tym miejscu.
+const sessionStore = MongoStore.create({
+  client: getMongoClient(),
+  dbName: MONGO_DB_NAME,
+  collectionName: 'sessions'
+});
+// Diagnostyka: błędy zapisu/odczytu sesji trafią do logów (Vercel), żeby złapać
+// ewentualne pozostałe przypadki gubionej sesji.
+sessionStore.on('error', (err) => {
+  console.error('[session-store] błąd:', err && err.message ? err.message : err);
+});
+
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'change-me',
     resave: false,
     saveUninitialized: false,
-    store: MongoStore.create({
-      mongoUrl: MONGO_URI,
-      dbName: MONGO_DB_NAME,
-      collectionName: 'sessions'
-    }),
+    store: sessionStore,
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -403,6 +415,9 @@ function normalizePreferences(raw) {
 
 app.get('/me', (req, res) => {
   if (!req.isAuthenticated || !req.isAuthenticated()) {
+    // Diagnostyka „wraca na ekran logowania": rozróżnia brak cookie (problem domeny/
+    // callbackURL) od „cookie jest, ale sesja pusta" (problem session store/Atlas).
+    console.warn('[auth] /me 401', { hasCookie: !!req.headers.cookie, sid: req.sessionID || null });
     return res.status(401).json({ authenticated: false });
   }
 
