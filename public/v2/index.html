@@ -354,8 +354,15 @@
         </div>
       </div>
       <div class="mag-body" style="max-width:820px;">
-        <div data-onb-progress></div>
-        <div data-onb-list><div class="loading">Ładowanie…</div></div>
+        <div class="op-subtabs hidden" data-onb-tabs data-admin-only style="margin-bottom:18px;">
+          <button class="op-subtab active" data-onb-tab="moje">Moje kroki</button>
+          <button class="op-subtab" data-onb-tab="osoby">Osoby w onboardingu</button>
+        </div>
+        <div data-onb-panel="moje">
+          <div data-onb-progress></div>
+          <div data-onb-list><div class="loading">Ładowanie…</div></div>
+        </div>
+        <div data-onb-panel="osoby" hidden><div class="loading">Ładowanie…</div></div>
       </div>
     </div>
   </section>

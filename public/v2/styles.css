@@ -470,6 +470,7 @@ table.wtable tbody tr.click:hover{background:var(--surface-hover);}
 .onb-item:hover{border-color:var(--line-hover);}
 .onb-check{width:26px;height:26px;border-radius:8px;border:2px solid var(--line-2);flex-shrink:0;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--surface);color:transparent;transition:all .15s;margin-top:1px;}
 .onb-item.done .onb-check{background:var(--green);border-color:var(--green);color:#fff;}
+.onb-check-static{cursor:default;}
 .onb-body{flex:1;min-width:0;}
 .onb-title{font-size:15px;font-weight:600;color:var(--ink);}
 .onb-item.done .onb-title{text-decoration:line-through;color:var(--muted-2);}

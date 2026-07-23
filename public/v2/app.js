@@ -814,12 +814,30 @@
           <label class="field"><span>Kategoria</span><input name="category" value="${esc(ctx.category || '')}" placeholder="np. Konta i dostępy"></label>
           <label class="field"><span>Kolejność</span><input name="sortOrder" type="number" step="1" value="${ctx.sortOrder != null ? ctx.sortOrder : ''}" placeholder="0"></label>
         </div>
+        <label class="field"><span>Kto wykonuje</span><select name="owner">
+          <option value="self"${(ctx.owner || 'self') === 'self' ? ' selected' : ''}>Pracownik odhacza sam</option>
+          <option value="til"${ctx.owner === 'til' ? ' selected' : ''}>TiL — dostęp/sprzęt (prośba → przyznanie → potwierdzenie)</option>
+        </select></label>
         <label class="field"><span>Link (opcjonalnie)</span><input name="url" value="${esc(ctx.url || '')}" placeholder="https://…"></label>`,
       submit: async (data, ctx) => {
         if (!data.title) throw new Error('Podaj tytuł kroku.');
         if (ctx.id) await api('/onboarding/steps/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
         else await api('/onboarding/steps', { method: 'POST', body: JSON.stringify(data) });
         toast('Zapisano krok.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts();
+      }
+    },
+    onbStart: {
+      eyebrow: 'Onboarding', title: 'Rozpocznij onboarding',
+      hint: 'Osoba pojawi się w panelu i zacznie przechodzić checklistę TiL.', cta: 'Rozpocznij',
+      onOpen: async () => { if (!state.onbUsers) { try { state.onbUsers = await api('/admin/users'); } catch (_) { state.onbUsers = []; } } },
+      fields: () => {
+        const opts = (state.onbUsers || []).map((u) => `<option value="${esc(u.email)}">${esc(u.fullName || u.email)} (${esc(u.email)})</option>`).join('');
+        return `<label class="field"><span>Osoba *</span><select name="email"><option value="">— wybierz —</option>${opts}</select></label>`;
+      },
+      submit: async (data) => {
+        if (!data.email) throw new Error('Wybierz osobę.');
+        await api('/admin/onboarding/start', { method: 'POST', body: JSON.stringify({ email: data.email }) });
+        toast('Rozpoczęto onboarding.'); renderOnbPeople();
       }
     },
     twEvent: {
@@ -1226,16 +1244,31 @@
         if (!idx.has(c)) { idx.set(c, groups.length); groups.push({ cat: c, items: [] }); }
         groups[idx.get(c)].items.push(s);
       });
-      list.innerHTML = groups.map((g) => `<div class="onb-cat">${esc(g.cat)}</div>` + g.items.map((s) => `
+      list.innerHTML = groups.map((g) => `<div class="onb-cat">${esc(g.cat)}</div>` + g.items.map((s) => {
+        const til = s.owner === 'til';
+        // Kółko: dla self klikalne (toggle); dla til tylko wskaźnik stanu (akcje niżej).
+        const check = til
+          ? `<div class="onb-check${s.done ? '' : ' onb-check-static'}">${CHECK_SVG}</div>`
+          : `<div class="onb-check" data-onb-toggle="${esc(s.id)}" data-done="${s.done ? '1' : '0'}">${CHECK_SVG}</div>`;
+        let action = '';
+        if (til) {
+          if (s.state === 'pending') action = `<button class="btn btn-ghost btn-sm" data-onb-request="${esc(s.id)}">Poproś o dostęp/sprzęt</button>`;
+          else if (s.state === 'requested') action = `<span class="chip chip-orange">Oczekuje na TiL</span>`;
+          else if (s.state === 'granted') action = `<button class="btn btn-primary btn-sm" data-onb-confirm="${esc(s.id)}">Potwierdź odbiór</button> <span class="chip chip-blue">TiL przyznał</span>`;
+          else if (s.state === 'confirmed') action = `<span class="chip chip-new">Potwierdzone</span> <button class="btn btn-danger-ghost btn-sm" data-onb-unconfirm="${esc(s.id)}">Cofnij</button>`;
+          action = `<div class="onb-actions" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${action}</div>`;
+        }
+        return `
         <div class="onb-item${s.done ? ' done' : ''}">
-          <div class="onb-check" data-onb-toggle="${esc(s.id)}" data-done="${s.done ? '1' : '0'}">${CHECK_SVG}</div>
+          ${check}
           <div class="onb-body">
-            <div class="onb-title">${esc(s.title)}</div>
+            <div class="onb-title">${esc(s.title)}${til ? ' <span class="chip chip-grey" style="font-size:11px;">TiL</span>' : ''}</div>
             ${s.description ? `<div class="onb-desc">${esc(s.description)}</div>` : ''}
             ${s.url ? `<a class="onb-link" href="${esc(s.url)}" target="_blank" rel="noopener">Otwórz odnośnik →</a>` : ''}
+            ${action}
           </div>
           ${isAdmin ? `<div class="onb-admin"><button class="btn btn-ghost btn-sm" data-onb-edit="${esc(s.id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-onb-del="${esc(s.id)}">Usuń</button></div>` : ''}
-        </div>`).join('')).join('');
+        </div>`; }).join('')).join('');
     };
     if (state.onb) { render(); return; }
     list.innerHTML = '<div class="loading">Ładowanie…</div>';
@@ -1260,6 +1293,70 @@
   function delStep(id) {
     if (!confirm('Usunąć ten krok onboardingu?')) return;
     api('/onboarding/steps/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // Akcja pracownika na kroku TiL (request/confirm/unconfirm).
+  function onbTilAction(id, action) {
+    api('/onboarding/' + encodeURIComponent(id) + '/toggle', { method: 'POST', body: JSON.stringify({ action }) })
+      .then(() => { state.onb = null; loadOnboarding(); refreshOnboardingCounts(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  function setOnbTab(tab) {
+    $$('[data-onb-tab]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-onb-tab') === tab));
+    $$('[data-onb-panel]').forEach((p) => (p.hidden = p.getAttribute('data-onb-panel') !== tab));
+    if (tab === 'osoby') renderOnbPeople();
+  }
+
+  // Panel admina/TiL: osoby w trakcie onboardingu + ich kroki; oznaczanie „przyznane".
+  async function renderOnbPeople() {
+    const box = $('[data-onb-panel="osoby"]'); if (!box) return;
+    box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const data = await api('/admin/onboarding');
+      const stepsById = new Map(data.steps.map((s) => [s.id, s]));
+      const head = `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+        <div class="eq-sub">${data.people.length} ${plural(data.people.length, 'osoba', 'osoby', 'osób')} w trakcie</div>
+        <button class="btn btn-primary btn-sm" data-onb-start><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Rozpocznij onboarding</button></div>`;
+      if (!data.people.length) { box.innerHTML = head + emptyBlock('Nikt nie jest w trakcie onboardingu', 'Kliknij „Rozpocznij onboarding”, aby dodać osobę.'); return; }
+      box.innerHTML = head + data.people.map((p) => {
+        const rows = p.steps.map((st) => {
+          const s = stepsById.get(st.stepId) || {};
+          let right;
+          if (st.owner === 'til') {
+            if (st.state === 'requested') right = `<button class="btn btn-primary btn-sm" data-onb-grant="${esc(p.email)}|${esc(st.stepId)}">Przyznane / Wydane</button>`;
+            else if (st.state === 'granted') right = `<span class="chip chip-blue">Przyznane — czeka na potwierdzenie</span> <button class="btn btn-danger-ghost btn-sm" data-onb-revoke="${esc(p.email)}|${esc(st.stepId)}">Cofnij</button>`;
+            else if (st.state === 'confirmed') right = `<span class="chip chip-new">Potwierdzone</span>`;
+            else right = `<span class="chip chip-grey">Oczekuje na prośbę</span> <button class="btn btn-ghost btn-sm" data-onb-grant="${esc(p.email)}|${esc(st.stepId)}">Przyznaj od razu</button>`;
+          } else {
+            right = st.done ? `<span class="chip chip-new">Zrobione</span>` : `<span class="chip chip-grey">Nie zrobione</span>`;
+          }
+          return `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line);">
+            <div>${esc(s.title || st.stepId)}${st.owner === 'til' ? ' <span class="chip chip-grey" style="font-size:10px;">TiL</span>' : ''}</div>
+            <div style="flex-shrink:0;">${right}</div></div>`;
+        }).join('');
+        return `<div class="op-card" style="border-top-color:var(--blue);margin-bottom:14px;padding:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+            <div><div style="font-weight:600;color:var(--heading);">${esc(p.fullName)}</div><div class="eq-sub">${esc(p.email)}${p.startedAt ? ' · od ' + esc(fmtDate(p.startedAt)) : ''}</div></div>
+            <div style="display:flex;gap:12px;align-items:center;"><span style="font-weight:700;color:${p.pct === 100 ? 'var(--green)' : 'var(--blue)'};">${p.pct}%</span><button class="btn btn-ghost btn-sm" data-onb-finish="${esc(p.email)}">Zakończ</button></div>
+          </div>
+          <div class="onb-bar" style="margin-bottom:6px;"><div class="fill" style="width:${p.pct}%;"></div></div>
+          ${rows}
+        </div>`;
+      }).join('');
+    } catch (e) { box.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  function onbGrant(pair, action) {
+    const [email, stepId] = String(pair).split('|');
+    api('/admin/onboarding/grant', { method: 'POST', body: JSON.stringify({ email, stepId, action }) })
+      .then(() => renderOnbPeople()).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  function onbFinish(email) {
+    if (!confirm('Zakończyć onboarding tej osoby? Zniknie z panelu.')) return;
+    api('/admin/onboarding/finish', { method: 'POST', body: JSON.stringify({ email }) })
+      .then(() => { toast('Zakończono onboarding.'); renderOnbPeople(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
   let currentSheet = null;
@@ -2526,7 +2623,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2560,6 +2657,14 @@
     if (t.hasAttribute('data-onb-toggle')) { toggleStep(t.getAttribute('data-onb-toggle'), t.getAttribute('data-done') === '1'); return; }
     if (t.hasAttribute('data-onb-edit')) { const s = (state.onb || []).find((x) => x.id === t.getAttribute('data-onb-edit')); openSheet('onbStep', s || {}); return; }
     if (t.hasAttribute('data-onb-del')) { delStep(t.getAttribute('data-onb-del')); return; }
+    if (t.hasAttribute('data-onb-tab')) { setOnbTab(t.getAttribute('data-onb-tab')); return; }
+    if (t.hasAttribute('data-onb-request')) { onbTilAction(t.getAttribute('data-onb-request'), 'request'); return; }
+    if (t.hasAttribute('data-onb-confirm')) { onbTilAction(t.getAttribute('data-onb-confirm'), 'confirm'); return; }
+    if (t.hasAttribute('data-onb-unconfirm')) { onbTilAction(t.getAttribute('data-onb-unconfirm'), 'unconfirm'); return; }
+    if (t.hasAttribute('data-onb-grant')) { onbGrant(t.getAttribute('data-onb-grant'), 'grant'); return; }
+    if (t.hasAttribute('data-onb-revoke')) { onbGrant(t.getAttribute('data-onb-revoke'), 'revoke'); return; }
+    if (t.hasAttribute('data-onb-start')) { openSheet('onbStart', {}); return; }
+    if (t.hasAttribute('data-onb-finish')) { onbFinish(t.getAttribute('data-onb-finish')); return; }
 
     if (t.dataset.magTab) { setMagTab(t.dataset.magTab); return; }
     if (t.dataset.magOptab) { state.magOpType = t.dataset.magOptab; renderOperacje(); return; }
