@@ -1577,16 +1577,19 @@
     const wrap = $('[data-op-lines]'); if (!wrap) return;
     const t = opEdit.type; const items = (state.mag.formData || {}).items || [];
     if (!opEdit.lines.length) { wrap.innerHTML = '<p class="sub" style="margin:0 0 4px;">Brak pozycji — dodaj przyciskiem „+ Dodaj”.</p>'; return; }
-    const itemOpts = (sel) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => `${i.name} (dostępne: ${i.available})`, sel);
+    // „dostępne: N" (wolny stan na WH/Stock) pokazujemy TYLKO przy źródle konwersji —
+    // jak w v1. W innych operacjach liczba ta myli (przyjęcie/cel konwersji nic nie
+    // zdejmują, a wydanie/odpad mogą iść z innej lokalizacji niż WH/Stock).
+    const itemOpts = (sel, showStock) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => showStock ? `${i.name} (dostępne: ${i.available})` : i.name, sel);
     wrap.innerHTML = opEdit.lines.map((l, i) => {
       let extra = '';
       if (t === 'receipt') extra = `<input data-line-field="unitPrice" data-idx="${i}" type="number" min="0" step="0.01" value="${l.unitPrice != null ? l.unitPrice : ''}" placeholder="cena" style="width:80px;">`;
-      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode)}</select>`;
+      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode, false)}</select>`;
       const qtyField = t === 'adjustment'
         ? `<input data-line-field="countedQty" data-idx="${i}" type="number" min="0" step="1" value="${l.countedQty != null ? l.countedQty : ''}" placeholder="policzono" style="width:90px;">`
         : `<input data-line-field="quantity" data-idx="${i}" type="number" min="1" step="1" value="${l.quantity != null ? l.quantity : ''}" placeholder="ilość" style="width:80px;">`;
       return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-        <select data-line-field="itemCode" data-idx="${i}" style="flex:1;min-width:140px;">${itemOpts(l.itemCode)}</select>
+        <select data-line-field="itemCode" data-idx="${i}" style="flex:1;min-width:140px;">${itemOpts(l.itemCode, t === 'conversion')}</select>
         ${t === 'conversion' ? extra : ''}${qtyField}${t === 'receipt' ? extra : ''}
         <button class="x-btn" data-op-delline="${i}" style="width:32px;height:32px;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
       </div>`;
@@ -1824,20 +1827,7 @@
           ] }))
         ) : emptyBlock('Brak ruchów', '');
       } else if (id === 'period') {
-        const rep = await api('/warehouse/moves-report');
-        const rows = rep.rows || [];
-        const cnt = (k) => rows.filter((m) => m.kind === k).length;
-        const tiles = `<div class="mini-tiles">
-          <div class="mini-tile"><div class="k">Przyjęcia</div><div class="v" style="color:#1B7A4F;">${fmtInt(cnt('receipt'))}</div></div>
-          <div class="mini-tile"><div class="k">Wydania</div><div class="v" style="color:#BF1932;">${fmtInt(cnt('delivery') + cnt('scrap'))}</div></div>
-          <div class="mini-tile"><div class="k">Ruchów</div><div class="v" style="color:var(--heading);">${fmtInt(rows.length)}</div></div>
-        </div>`;
-        body.innerHTML = tiles + (rows.length ? tableHTML(
-          [{ t: 'Kiedy' }, { t: 'Kod' }, { t: 'Ruch' }, { t: 'Ilość', num: true }],
-          rows.slice(0, 300).map((m) => ({ cells: [
-            { v: fmtDay(m.doneAt), cls: 'mut' }, { v: m.itemCode, cls: 'mono-cell' }, { v: MOVE_KIND[m.kind] || m.kind }, { v: fmtInt(m.quantity), cls: 'num' }
-          ] }))
-        ) : emptyBlock('Brak ruchów w okresie', 'Domyślnie ostatnie 30 dni.'));
+        await renderPeriodReport();
       } else if (id === 'gift') {
         const rep = await api('/warehouse/gift-threshold');
         const rows = rep.items || [];
@@ -1876,6 +1866,107 @@
         body.innerHTML = table + (isAdmin ? '<div style="margin-top:14px;"><button class="btn btn-ghost btn-sm" data-health-recompute>Przelicz kondycję wszystkich</button></div>' : '');
       }
     } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  // ---- Raport „Ruchy w okresie" (kategoria + zakres dat + ceny wg partii + eksport)
+  function periodState() {
+    if (!state.mag.period) state.mag.period = { from: '', to: '', category: '' };
+    return state.mag.period;
+  }
+  // Suma wartości ruchu z partii FIFO (qty × cena jednostkowa danej partii).
+  function batchesValue(pb) {
+    return (pb || []).reduce((s, b) => s + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+  }
+  // Komórka „Cena wg partii": jedna partia → cena; kilka partii → rozbicie linia po linii.
+  function batchesCell(pb) {
+    if (!pb || !pb.length) return { html: '<span class="mut">—</span>', cls: 'num' };
+    if (pb.length === 1) return { html: esc(fmtMoney(pb[0].unitPrice)), cls: 'num' };
+    const lines = pb.map((b) => `<div style="white-space:nowrap;">${fmtInt(b.qty)} × ${esc(fmtMoney(b.unitPrice))}</div>`).join('');
+    return { html: `<div style="display:flex;flex-direction:column;gap:2px;align-items:flex-end;" title="Ruch pokrywany z ${pb.length} partii cenowych">${lines}</div>`, cls: 'num' };
+  }
+
+  async function renderPeriodReport() {
+    const body = $('[data-mag-report-body]');
+    if (!body) return;
+    const p = periodState();
+    const qs = [];
+    if (p.from) qs.push('from=' + encodeURIComponent(p.from));
+    if (p.to) qs.push('to=' + encodeURIComponent(p.to));
+    if (p.category) qs.push('category=' + encodeURIComponent(p.category));
+    const rep = await api('/warehouse/moves-report' + (qs.length ? '?' + qs.join('&') : ''));
+    state.mag.periodRep = rep;
+    const rows = rep.rows || [];
+    // Lista kategorii do filtra (z backendu; utrzymaj bieżący wybór nawet gdy pusto).
+    const cats = rep.categories || [];
+    const catOpts = ['<option value="">Wszystkie kategorie</option>']
+      .concat(cats.map((c) => `<option value="${esc(c)}"${p.category === c ? ' selected' : ''}>${esc(c)}</option>`)).join('');
+    const cnt = (k) => rows.filter((m) => m.kind === k).length;
+    const tiles = `<div class="mini-tiles">
+      <div class="mini-tile"><div class="k">Przyjęcia</div><div class="v" style="color:#1B7A4F;">${fmtInt(cnt('receipt'))}</div></div>
+      <div class="mini-tile"><div class="k">Wydania</div><div class="v" style="color:#BF1932;">${fmtInt(cnt('delivery') + cnt('scrap'))}</div></div>
+      <div class="mini-tile"><div class="k">Ruchów</div><div class="v" style="color:var(--heading);">${fmtInt(rows.length)}</div></div>
+    </div>`;
+    const toolbar = `<div class="period-toolbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:4px 0 14px;">
+      <label class="field" style="margin:0;"><span>Od</span><input type="date" data-period-from value="${esc(p.from)}"></label>
+      <label class="field" style="margin:0;"><span>Do</span><input type="date" data-period-to value="${esc(p.to)}"></label>
+      <label class="field" style="margin:0;min-width:190px;"><span>Kategoria</span><select data-period-cat>${catOpts}</select></label>
+      <button class="btn btn-ghost btn-sm" data-period-apply>Zastosuj</button>
+      <button class="btn btn-ghost btn-sm" data-period-csv style="margin-left:auto;">Eksportuj CSV</button>
+    </div>`;
+    const table = rows.length ? tableHTML(
+      [{ t: 'Kiedy' }, { t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ruch' }, { t: 'Ilość', num: true }, { t: 'Cena wg partii', num: true }, { t: 'Wartość', num: true }],
+      rows.slice(0, 300).map((m) => ({ cells: [
+        { v: fmtDay(m.doneAt), cls: 'mut' },
+        { v: m.itemCode, cls: 'mono-cell' },
+        { v: m.itemName || '—' },
+        { v: m.itemCategory || '—', cls: 'mut' },
+        { v: MOVE_KIND[m.kind] || m.kind },
+        { v: fmtInt(m.quantity), cls: 'num' },
+        batchesCell(m.priceBatches),
+        { v: m.priceBatches && m.priceBatches.length ? fmtMoney(batchesValue(m.priceBatches)) : '—', cls: m.priceBatches && m.priceBatches.length ? 'num' : 'num mut' }
+      ] }))
+    ) + (rep.truncated || rows.length > 300 ? `<p class="sub" style="margin:10px 0 0;">Pokazano pierwsze 300 ruchów. Pełny zakres pobierz przez „Eksportuj CSV".</p>` : '')
+      : emptyBlock('Brak ruchów w okresie', p.from || p.to ? 'Zmień zakres dat lub kategorię.' : 'Domyślnie ostatnie 30 dni.');
+    body.innerHTML = tiles + toolbar + table;
+    // Auto-zastosuj po zmianie kategorii (bez klikania „Zastosuj").
+    const catSel = $('[data-period-cat]', body);
+    if (catSel) catSel.addEventListener('change', () => { periodState().category = catSel.value; renderPeriodReport(); });
+  }
+
+  function applyPeriodFilters() {
+    const p = periodState();
+    const f = $('[data-period-from]'); const t = $('[data-period-to]'); const c = $('[data-period-cat]');
+    if (f) p.from = f.value; if (t) p.to = t.value; if (c) p.category = c.value;
+    renderPeriodReport();
+  }
+
+  // Eksport CSV — rozbija ruchy z wielu partii na osobne wiersze (jeden wiersz = jedna partia cenowa).
+  function exportPeriodCSV() {
+    const rep = state.mag.periodRep || {}; const rows = rep.rows || [];
+    if (!rows.length) { toast('Brak ruchów do eksportu.', true); return; }
+    const header = ['Data', 'Kod', 'Nazwa', 'Kategoria', 'Ruch', 'Ilość', 'Cena jedn.', 'Wartość', 'Z lokalizacji', 'Do lokalizacji'];
+    const out = [header];
+    rows.forEach((m) => {
+      const base = [fmtDay(m.doneAt), m.itemCode, m.itemName || '', m.itemCategory || '', MOVE_KIND[m.kind] || m.kind];
+      const tail = [m.fromName || '', m.toName || ''];
+      const pb = m.priceBatches || [];
+      const money2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+      if (pb.length > 1) {
+        // Rozdzielenie: po jednym wierszu na partię cenową.
+        pb.forEach((b) => out.push(base.concat([b.qty, b.unitPrice, money2((Number(b.qty) || 0) * (Number(b.unitPrice) || 0))], tail)));
+      } else if (pb.length === 1) {
+        out.push(base.concat([m.quantity, pb[0].unitPrice, money2(batchesValue(pb))], tail));
+      } else {
+        out.push(base.concat([m.quantity, '', ''], tail));
+      }
+    });
+    const csv = out.map((r) => r.map((c) => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    const cat = periodState().category ? '-' + periodState().category.toLowerCase().replace(/[^a-z0-9]+/gi, '-') : '';
+    a.href = URL.createObjectURL(blob); a.download = 'ruchy-w-okresie' + cat + '.csv';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+    toast('Wyeksportowano ' + (out.length - 1) + ' wierszy.');
   }
 
   // ---- Konfiguracja
@@ -2407,7 +2498,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2445,6 +2536,8 @@
     if (t.dataset.magTab) { setMagTab(t.dataset.magTab); return; }
     if (t.dataset.magOptab) { state.magOpType = t.dataset.magOptab; renderOperacje(); return; }
     if (t.dataset.magReport) { state.magReport = t.dataset.magReport; $$('[data-mag-report]').forEach((b) => b.classList.toggle('active', b === t)); renderReport(t.dataset.magReport); return; }
+    if (t.hasAttribute('data-period-apply')) { applyPeriodFilters(); return; }
+    if (t.hasAttribute('data-period-csv')) { exportPeriodCSV(); return; }
     if (t.hasAttribute('data-mag-op')) { openOpEditor(t.getAttribute('data-mag-op')); return; }
     if (t.hasAttribute('data-mag-csv')) { exportProductsCSV(); return; }
     if (t.hasAttribute('data-mag-new-op')) { openNewOp(state.magOpType); return; }
