@@ -60,7 +60,9 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.use(express.static('public'));
+// index:false — nie serwuj automatycznie public/index.html pod „/”, bo domyślnym
+// interfejsem jest teraz v2 (patrz trasy „/”, „/v1”, „/v2” niżej).
+app.use(express.static('public', { index: false }));
 
 // Escape znaków specjalnych regexu — do bezpiecznego dopasowania tekstu z usera.
 function escapeRegex(value) {
@@ -347,12 +349,16 @@ async function regenerateItemCodeForCategory(db, oldCode, newCategory) {
 // Kaskadowa zmiana itemCode po kolekcjach żyje w stock.js (cascadeItemCodeRename) —
 // czysta operacja na db, jak reszta logiki stanu.
 
+// Domyślnym interfejsem jest „Zaplecze v2" (pełny parytet z klasycznym). Klasyczny
+// widok zostaje dostępny pod „/v1” (łatwy rollback). „/v2” działa nadal (zakładki).
 app.get('/', (_req, res) => {
+  res.sendFile(new URL('../public/v2/index.html', import.meta.url).pathname);
+});
+
+app.get('/v1', (_req, res) => {
   res.sendFile(new URL('../public/index.html', import.meta.url).pathname);
 });
 
-// Nowy interfejs „Zaplecze v2" (Login + Launcher + Sprzęt). Współdzieli backend
-// z widokiem klasycznym; pliki żyją w public/v2/ (serwowane też przez static).
 app.get('/v2', (_req, res) => {
   res.sendFile(new URL('../public/v2/index.html', import.meta.url).pathname);
 });

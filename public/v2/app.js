@@ -52,14 +52,27 @@
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
-  // Miniatura sprzętu: zdjęcie z bazy (imageUrl/thumbnailUrl) z fallbackiem do
-  // inicjałów, gdy brak URL lub obrazek się nie wczyta (onerror). Ten sam wzorzec
-  // co hero w szczegółach sprzętu.
-  function itemThumb(it, monoClass, imgClass) {
+  // Graficzny placeholder (brak zdjęcia) — inline SVG na tokenach (fill przez
+  // style=var(...), bo atrybuty fill nie czytają zmiennych CSS) → działa w dark.
+  // Ikona „obraz" + inicjały. `hidden` = startowo ukryty (fallback pod <img>).
+  function thumbPlaceholder(it, hidden) {
+    const init = esc(initials(it && it.name));
+    return `<span class="thumb-ph"${hidden ? ' style="display:none;"' : ''}><svg viewBox="0 0 120 90" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="90" style="fill:var(--blue-soft);"/>
+      <g style="fill:none;stroke:var(--blue-ink);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;"><rect x="40" y="24" width="40" height="32" rx="3"/><circle cx="51" cy="35" r="3.4"/><path d="m80 50-10-10-20 18"/></g>
+      <text x="60" y="80" text-anchor="middle" style="fill:var(--blue);font:600 11px 'Golos Text',system-ui,sans-serif;">${init}</text>
+    </svg></span>`;
+  }
+
+  // Miniatura sprzętu: zdjęcie z bazy (imageUrl/thumbnailUrl). Fallback (brak URL
+  // lub onerror): `big` → graficzny placeholder, w przeciwnym razie inicjały.
+  function itemThumb(it, monoClass, imgClass, big) {
     const url = String((it && (it.imageUrl || it.thumbnailUrl)) || '').trim();
     const init = esc(initials(it && it.name));
-    if (!url) return `<span class="${monoClass}">${init}</span>`;
-    return `<img class="${imgClass}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="${monoClass}" style="display:none;">${init}</span>`;
+    if (!url) return big ? thumbPlaceholder(it, false) : `<span class="${monoClass}">${init}</span>`;
+    const disp = big ? 'block' : 'flex';
+    const fb = big ? thumbPlaceholder(it, true) : `<span class="${monoClass}" style="display:none;">${init}</span>`;
+    return `<img class="${imgClass}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='${disp}';">${fb}`;
   }
 
   function fmtDate(v) {
@@ -291,7 +304,7 @@
       list.innerHTML = items.map((it) => {
         const sub2 = [it.category, it.model || it.brand].filter(Boolean).join(' · ');
         return `<div class="eq-card">
-          <div class="eq-thumb">${itemThumb(it, 'mono', 'eq-thumb-img')}
+          <div class="eq-thumb">${itemThumb(it, 'mono', 'eq-thumb-img', true)}
             <span class="eq-state"><span class="${conditionChip(it.conditionStatus)}">${esc(it.conditionStatus || 'Dostępny')}</span></span></div>
           <div class="eq-body">
             <div class="eq-name">${esc(it.name || it.itemCode)}</div>
@@ -544,6 +557,7 @@
     const box = $('#drawer');
     wrap.classList.remove('hidden');
     box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    const isAdmin = state.user && state.user.role === 'admin';
     api('/items/' + encodeURIComponent(code)).then((it) => {
       const tags = (it.tags || []).map((t) => `<span class="chip chip-blue">${esc(t)}</span>`).join('') || '<span class="eq-sub">Brak tagów</span>';
       const assign = it.assignedToName || it.assignedToEmail || 'Brak';
@@ -553,9 +567,7 @@
           <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
         <div class="drawer-body">
-          <div class="drawer-hero">${(it.imageUrl || it.thumbnailUrl)
-            ? `<img class="drawer-img" src="${esc(it.imageUrl || it.thumbnailUrl)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="mono" style="display:none;">${esc(initials(it.name))}</span>`
-            : `<span class="mono">${esc(initials(it.name))}</span>`}</div>
+          <div class="drawer-hero">${itemThumb(it, 'mono', 'drawer-img', true)}</div>
           <h2>${esc(it.name || it.itemCode)}</h2>
           <p class="sub">${esc([it.category, it.details].filter(Boolean).join(' · ') || it.itemCode)}</p>
           <div class="kv-grid">
@@ -571,12 +583,40 @@
           ${it.activeLoan ? `<div class="kv" style="margin-bottom:22px;"><div class="k">Aktywne wypożyczenie</div><div class="v" style="font-weight:500;font-size:13.5px;">od ${esc(fmtDate(it.activeLoan.borrowedAt))} · ${esc(it.activeLoan.userDisplayName || it.activeLoan.userEmail || '')}${it.activeLoan.targetUseLocation ? ' · ' + esc(it.activeLoan.targetUseLocation) : ''}</div></div>` : ''}
           <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Tagi</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">${tags}</div>
+          ${isAdmin ? `<div style="font-size:13px;font-weight:600;color:var(--ink);margin:22px 0 8px;">Historia sprzętu</div><div data-item-history><div class="loading">Ładowanie…</div></div>` : ''}
         </div>
         <div class="drawer-foot">
           <button class="btn btn-primary" style="flex:1;" data-request="${esc(it.itemCode)}" data-name="${esc(it.name || it.itemCode)}">Złóż wniosek</button>
           <button class="btn btn-ghost" data-close-drawer>Zamknij</button>
         </div>`;
+      if (isAdmin) loadItemHistory(it);
     }).catch((e) => { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; });
+  }
+
+  // Historia sprzętu (admin) — łączy audyt po entityId (zdarzenia samego sprzętu)
+  // i po itemCode (wypożyczenia/zwroty/wnioski); dokładne dopasowanie kodu po froncie.
+  function loadItemHistory(it) {
+    const box = $('[data-item-history]'); if (!box) return;
+    const code = String(it.itemCode || '').toUpperCase();
+    const byCode = code ? api('/admin/audit-logs?itemCode=' + encodeURIComponent(code) + '&limit=200').catch(() => []) : Promise.resolve([]);
+    const byEntity = it._id ? api('/admin/audit-logs?entityType=item&entityId=' + encodeURIComponent(it._id) + '&limit=200').catch(() => []) : Promise.resolve([]);
+    Promise.all([byEntity, byCode]).then(([ent, cod]) => {
+      const seen = new Set(); const logs = [];
+      (Array.isArray(ent) ? ent : []).forEach((l) => { const id = String(l._id); if (!seen.has(id)) { seen.add(id); logs.push(l); } });
+      (Array.isArray(cod) ? cod : []).forEach((l) => {
+        if (String((l.payload && l.payload.itemCode) || '').toUpperCase() !== code) return; // regex łapie podciągi — zawężamy
+        const id = String(l._id); if (!seen.has(id)) { seen.add(id); logs.push(l); }
+      });
+      logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      if (!logs.length) { box.innerHTML = '<div class="eq-sub">Brak zapisów w historii.</div>'; return; }
+      box.innerHTML = tableHTML(
+        [{ t: 'Kiedy' }, { t: 'Osoba' }, { t: 'Akcja' }],
+        logs.map((l) => ({ cells: [
+          { v: fmtDate(l.createdAt), cls: 'mut' }, { v: l.actorEmail || '—', cls: 'mut' },
+          { v: AUDIT_ACTION_LABELS[l.actionType] || l.actionType || '—' }
+        ] }))
+      );
+    }).catch(() => { box.innerHTML = '<div class="eq-sub">Nie udało się wczytać historii.</div>'; });
   }
   function closeDrawer() { $('#drawer-wrap').classList.add('hidden'); }
 
@@ -663,6 +703,23 @@
         state.mag.formData = null;
         toast('Utworzono ' + (r.reference || 'wersję roboczą') + '.');
         setTimeout(() => openOpEditor(r.id), 60);
+      }
+    },
+    quickProduct: {
+      eyebrow: 'Magazyn · Konwersja', title: 'Nowy produkt (cel konwersji)',
+      hint: 'Utwórz produkt magazynowy, na który przetwarzasz. Koszt przeniesie sama konwersja.', cta: 'Utwórz',
+      fields: () => `<div class="field-2">
+        <label class="field"><span>Nazwa *</span><input name="name" placeholder="np. Zestaw powitalny"></label>
+        <label class="field"><span>Kategoria</span><input name="category" value="Gadżet" placeholder="np. Gadżet"></label>
+      </div>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę produktu.');
+        const res = await api('/warehouse/products', { method: 'POST', body: JSON.stringify({ name: data.name, category: data.category || 'Gadżet' }) });
+        state.mag.formData = state.mag.formData || { items: [] };
+        (state.mag.formData.items = state.mag.formData.items || []).push({ itemCode: res.itemCode, name: res.name, category: res.category, onHand: 0, reserved: 0, available: 0 });
+        if (opEdit.lines[ctx.idx]) opEdit.lines[ctx.idx].targetItemCode = res.itemCode;
+        renderOpLines();
+        toast('Utworzono produkt: ' + res.name);
       }
     },
     supplier: {
@@ -839,6 +896,8 @@
         const locOpts = locList.map((l) => `<option value="${esc(l)}"${(ctx.currentLocation || 'Magazyn') === l ? ' selected' : ''}>${esc(l)}</option>`).join('');
         const catOpts = (o.categories || []).map((c) => `<option value="${esc(c)}"></option>`).join('');
         const userOpts = '<option value="">— nikt —</option>' + (o.users || []).map((u) => `<option value="${esc(u.email)}"${ctx.assignedToEmail === u.email ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const statusOpts = Object.keys(ITEM_STATUS).map((s) => `<option value="${esc(s)}"${(ctx.operationalStatus || 'available') === s ? ' selected' : ''}>${esc(ITEM_STATUS[s])}</option>`).join('');
+        const warrantyVal = ctx.warrantyUntil ? String(ctx.warrantyUntil).slice(0, 10) : '';
         return `
         <datalist id="aiCatList">${catOpts}</datalist>
         <div class="field-2">
@@ -861,6 +920,14 @@
         <div class="field-2">
           <label class="field"><span>Nr seryjny</span><input name="serialNumber" value="${esc(ctx.serialNumber || '')}" placeholder="opcjonalnie"></label>
           <label class="field"><span>Tagi (po przecinku)</span><input name="tags" value="${esc((ctx.tags || []).join(', '))}" placeholder="np. studio, foto"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Gwarancja do</span><input name="warrantyUntil" type="date" value="${esc(warrantyVal)}"></label>
+          <label class="field"><span>Lokalizacja szczegółowa</span><input name="detailedLocation" value="${esc(ctx.detailedLocation || '')}" placeholder="np. półka B3 / szafa 2"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Kod QR</span><input name="qrCodeValue" value="${esc(ctx.qrCodeValue || '')}" placeholder="opcjonalnie"></label>
+          ${ctx._id ? `<label class="field"><span>Status operacyjny</span><select name="operationalStatus">${statusOpts}</select></label>` : '<div></div>'}
         </div>
         <div class="field-2">
           <label class="field"><span>Zdjęcie (URL)</span><input name="imageUrl" value="${esc(ctx.imageUrl || '')}" placeholder="https://… — pokaże się na kafelku i w szczegółach"></label>
@@ -1530,11 +1597,11 @@
     // „dostępne: N" (wolny stan na WH/Stock) pokazujemy TYLKO przy źródle konwersji —
     // jak w v1. W innych operacjach liczba ta myli (przyjęcie/cel konwersji nic nie
     // zdejmują, a wydanie/odpad mogą iść z innej lokalizacji niż WH/Stock).
-    const itemOpts = (sel, showStock) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => showStock ? `${i.name} (dostępne: ${i.available})` : i.name, sel);
+    const itemOpts = (sel, showStock, allowNew) => '<option value="">— wybierz produkt —</option>' + optList(items, (i) => i.itemCode, (i) => showStock ? `${i.name} (dostępne: ${i.available})` : i.name, sel) + (allowNew ? '<option value="__new__">＋ Nowy produkt…</option>' : '');
     wrap.innerHTML = opEdit.lines.map((l, i) => {
       let extra = '';
       if (t === 'receipt') extra = `<input data-line-field="unitPrice" data-idx="${i}" type="number" min="0" step="0.01" value="${l.unitPrice != null ? l.unitPrice : ''}" placeholder="cena" style="width:80px;">`;
-      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode, false)}</select>`;
+      else if (t === 'conversion') extra = `<select data-line-field="targetItemCode" data-idx="${i}" style="flex:1;min-width:120px;">${itemOpts(l.targetItemCode, false, true)}</select>`;
       const qtyField = t === 'adjustment'
         ? `<input data-line-field="countedQty" data-idx="${i}" type="number" min="0" step="1" value="${l.countedQty != null ? l.countedQty : ''}" placeholder="policzono" style="width:90px;">`
         : `<input data-line-field="quantity" data-idx="${i}" type="number" min="1" step="1" value="${l.quantity != null ? l.quantity : ''}" placeholder="ilość" style="width:80px;">`;
@@ -1546,6 +1613,17 @@
     }).join('');
     // style line inputs
     $$('[data-line-field]').forEach((el) => { el.style.border = '1px solid var(--line-2)'; el.style.borderRadius = '9px'; el.style.padding = '9px 11px'; el.style.fontSize = '13.5px'; el.style.background = '#fff'; el.style.outline = 'none'; });
+    // Konwersja: wybór „＋ Nowy produkt…" w celu → szybkie utworzenie produktu.
+    $$('[data-line-field="targetItemCode"]', wrap).forEach((sel) => sel.addEventListener('change', () => {
+      if (sel.value === '__new__') { sel.value = ''; openQuickProduct(Number(sel.dataset.idx)); }
+    }));
+  }
+
+  // Szybkie utworzenie produktu-celu konwersji (POST /warehouse/products), po czym
+  // wpina go w tę pozycję i odświeża listy. Odpowiednik „__new__" z v1.
+  function openQuickProduct(idx) {
+    readOpLinesFromDOM(); // zachowaj bieżące pozycje przed re-renderem
+    openSheet('quickProduct', { idx });
   }
 
   function readOpLinesFromDOM() {
@@ -2022,7 +2100,9 @@
         { t: 'Kod', f: (r) => r.itemCode || '—', cls: 'mono-cell' }, { t: 'Nazwa', f: (r) => r.itemName || '—' },
         { t: 'Osoba', f: (r) => r.userDisplayName || r.userEmail || '—' }, { t: 'Ilość', f: (r) => r.quantity || 1, num: true },
         { t: 'Status', f: (r) => r.status === 'active' ? 'Aktywne' : r.status === 'returned' ? 'Zwrócone' : (r.status || '—') },
-        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' }
+        { t: 'Skąd', f: (r) => r.fromLocation || '—' }, { t: 'Gdzie używane', f: (r) => r.targetUseLocation || '—' },
+        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' },
+        { t: 'Zwrot do', f: (r) => r.returnLocation || '—' }, { t: 'Notatka zwrotu', f: (r) => r.returnNote || '—' }
       ] },
     requests: { url: '/admin/loan-requests', sub: (n) => `${n} ${plural(n, 'wniosek', 'wnioski', 'wniosków')}`,
       cols: [
