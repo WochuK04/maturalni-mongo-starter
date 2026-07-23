@@ -1295,11 +1295,21 @@
     api('/onboarding/steps/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
-  // Akcja pracownika na kroku TiL (request/confirm/unconfirm).
+  // Akcja pracownika na kroku TiL (request/confirm/unconfirm). Optymistycznie —
+  // aktualizujemy stan w cache i przerysowujemy listę BEZ ponownego pobierania
+  // (żeby nie było przeładowania/spinnera); w razie błędu cofamy.
   function onbTilAction(id, action) {
+    const step = (state.onb || []).find((s) => s.id === id);
+    if (!step) return;
+    const prev = { state: step.state, done: step.done };
+    if (action === 'request' && step.state === 'pending') step.state = 'requested';
+    else if (action === 'confirm' && step.state === 'granted') { step.state = 'confirmed'; step.done = true; }
+    else if (action === 'unconfirm' && step.state === 'confirmed') { step.state = 'granted'; step.done = false; }
+    else return;
+    loadOnboarding(); // re-render z cache
     api('/onboarding/' + encodeURIComponent(id) + '/toggle', { method: 'POST', body: JSON.stringify({ action }) })
-      .then(() => { state.onb = null; loadOnboarding(); refreshOnboardingCounts(); })
-      .catch((e) => toast(e.message || 'Nie udało się.', true));
+      .then(() => refreshOnboardingCounts())
+      .catch((e) => { step.state = prev.state; step.done = prev.done; loadOnboarding(); toast(e.message || 'Nie udało się.', true); });
   }
 
   function setOnbTab(tab) {
