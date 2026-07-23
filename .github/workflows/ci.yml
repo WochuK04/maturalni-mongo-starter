@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Testy integracyjne (warehouse.*.int) importują aplikację i uderzają w Mongo.
+      MONGO_URI: mongodb://127.0.0.1:27017
+      # UWAGA: NIE ustawiamy MONGO_DB_NAME — każdy plik testu integracyjnego ustawia
+      # własny DB_NAME (izolowana baza `_test`), a MONGO_DB_NAME miałby pierwszeństwo
+      # i złamałby izolację. Patrz src/db.js.
+      SESSION_SECRET: ci-test-secret
+      # Dummy — testy forge'ują req.user, realny OAuth nie jest wywoływany. Wartości
+      # muszą jednak istnieć, bo GoogleStrategy jest konstruowana przy imporcie app.
+      GOOGLE_CLIENT_ID: dummy
+      GOOGLE_CLIENT_SECRET: dummy
+      GOOGLE_CALLBACK_URL: http://localhost/auth/google/callback
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Testy (unit + integracyjne)
+        run: npm test
