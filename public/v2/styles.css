@@ -252,6 +252,12 @@ button{cursor:pointer;}
 .inbox-card .meta{font-size:13px;color:var(--muted);margin-bottom:8px;}
 .inbox-card .done{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--green);}
 
+/* ---------- partie cenowe (edytor produktu) ---------- */
+.prod-batch-row{display:grid;grid-template-columns:1fr 1fr 1.4fr auto;gap:8px;margin-bottom:8px;align-items:center;}
+.prod-batch-row input{border:1px solid var(--line-2);border-radius:9px;padding:8px 10px;font-size:13px;color:var(--ink);background:var(--surface);outline:none;width:100%;box-sizing:border-box;}
+.prod-batch-row input:focus{border-color:var(--blue);}
+.prod-batch-total{font-size:13px;font-weight:600;color:var(--ink);margin-top:4px;}
+
 /* ---------- inline select (użytkownicy) ---------- */
 .usel{border:1px solid var(--line-2);border-radius:9px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--ink);background:var(--surface);outline:none;max-width:100%;}
 .usel:focus{border-color:var(--blue);}

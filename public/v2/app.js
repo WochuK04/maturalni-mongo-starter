@@ -669,6 +669,20 @@
         toast('Zapisano dostawcę.'); afterConfigChange();
       }
     },
+    destination: {
+      eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj miejsce dostawy' : 'Nowe miejsce dostawy',
+      hint: 'Miejsce dostawy będzie dostępne przy wydaniach.', cta: 'Zapisz',
+      fields: (ctx) => `
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Biuro Kraków"></label>
+        <label class="field"><span>Kontakt</span><input name="contact" value="${esc(ctx.contact || '')}" placeholder="e-mail / telefon"></label>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę miejsca.');
+        if (ctx.id) await api('/warehouse/delivery-destinations/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/warehouse/delivery-destinations', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano miejsce dostawy.'); afterConfigChange();
+      }
+    },
     location: {
       eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj lokalizację' : 'Nowa lokalizacja',
       hint: 'Zdefiniuj lokalizację magazynową i jej typ.', cta: 'Zapisz',
@@ -958,17 +972,62 @@
         await api('/items/' + encodeURIComponent(ctx.itemCode) + '/return', { method: 'POST', body: JSON.stringify({ returnLocation: data.returnLocation || 'Magazyn', returnNote: data.returnNote || '' }) });
         toast('Sprzęt oddany.'); invalidate(['mine', 'available', 'history']); loadMine();
       }
+    },
+    newProduct: {
+      eyebrow: 'Magazyn · Produkty', title: 'Nowy produkt',
+      hint: 'Utwórz pozycję magazynową. Ilość i wartość ustawisz partiami cenowymi w edycji.', cta: 'Utwórz',
+      fields: () => `
+        <label class="field"><span>Nazwa *</span><input name="name" placeholder="np. Koszulka L"></label>
+        <div class="field-2">
+          <label class="field"><span>Kategoria</span><input name="category" placeholder="np. Gadżet" value="Towar"></label>
+          <label class="field"><span>Marka</span><input name="brand" placeholder="opcjonalnie"></label>
+        </div>
+        <label class="field"><span>Model</span><input name="model" placeholder="opcjonalnie"></label>
+        <label class="field"><span>Notatka</span><input name="notes" placeholder="opcjonalnie"></label>`,
+      submit: async (data) => {
+        if (!data.name) throw new Error('Podaj nazwę.');
+        await api('/warehouse/products', { method: 'POST', body: JSON.stringify(data) });
+        toast('Utworzono produkt.'); state.mag.products = null; renderProdukty();
+      }
+    },
+    prodImport: {
+      eyebrow: 'Magazyn · Produkty', title: 'Import CSV produktów',
+      hint: 'Nagłówek + wiersze. Wymagane: name, category. Opcjonalne: itemCode, quantity, unitPrice, brand, model, notes.', cta: 'Importuj',
+      fields: () => `<label class="field"><span>Dane CSV *</span><textarea name="csv" rows="8" placeholder="name,category,quantity,unitPrice&#10;Koszulka L,Gadżet,50,19.99"></textarea></label>`,
+      submit: async (data) => {
+        const rows = parseCSV(data.csv || '');
+        if (!rows.length) throw new Error('Brak wierszy do importu.');
+        const items = rows.map((r) => ({ ...r, quantity: r.quantity ? Number(r.quantity) : undefined, unitPrice: r.unitPrice ? Number(r.unitPrice) : undefined }));
+        const res = await api('/warehouse/products/bulk', { method: 'POST', body: JSON.stringify({ items }) });
+        const added = res.added != null ? res.added : (res.insertedCount || 0);
+        const errs = (res.errors || []).length;
+        toast(`Import: dodano ${added}${errs ? `, błędów ${errs}` : ''}.`, errs > 0);
+        state.mag.products = null; renderProdukty();
+      }
     }
   };
 
   function afterConfigChange() {
-    state.mag.formData = null; state.mag.locations = null;
+    state.mag.formData = null; state.mag.locations = null; state.mag.destinations = null;
     if (state.magTab === 'konfiguracja') renderKonfiguracja();
     const sub = $('[data-mag-subtitle]'); if (sub) loadMagazyn();
   }
   function delSupplier(id) {
     if (!confirm('Usunąć dostawcę?')) return;
     api('/warehouse/suppliers/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function delDestination(id) {
+    if (!confirm('Usunąć miejsce dostawy?')) return;
+    api('/warehouse/delivery-destinations/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function recomputeHealth() {
+    toast('Przeliczam…');
+    api('/warehouse/health/recompute', { method: 'POST', body: JSON.stringify({}) })
+      .then((r) => { toast('Przeliczono ' + (r.recomputed != null ? r.recomputed : '') + ' pozycji.'); if (state.magReport === 'health') renderReport('health'); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function openOpPdf(id) {
+    window.open('/warehouse/operations/' + encodeURIComponent(id) + '/pdf', '_blank');
   }
   function delLocation(id) {
     if (!confirm('Usunąć lokalizację?')) return;
@@ -1411,7 +1470,7 @@
         <div style="font-size:13px;font-weight:600;color:var(--ink);margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
         ${lines}
       </div>
-      <div class="drawer-foot">${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
+      <div class="drawer-foot"><button class="btn btn-ghost" data-op-pdf="${esc(op.id)}">PDF</button>${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
   }
 
   function renderOpEditor(box, op, form) {
@@ -1529,20 +1588,25 @@
   // ---- Produkty
   async function renderProdukty() {
     const el = $('[data-mag-panel="produkty"]');
+    const isAdmin = state.user && state.user.role === 'admin';
     el.innerHTML = `<div class="anim-fadeup">
       <div class="mag-toolbar">
         <div class="search mag-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A2AEB9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input placeholder="Szukaj po nazwie, kodzie, kategorii…" data-mag-prod-search></div>
+        ${isAdmin ? '<button class="btn btn-ghost" data-prod-import>Import CSV</button>' : ''}
         <button class="btn btn-ghost" data-mag-csv>Eksportuj CSV</button>
+        ${isAdmin ? '<button class="btn btn-primary" data-prod-new><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nowy produkt</button>' : ''}
       </div>
       <div data-mag-prod-list><div class="loading">Ładowanie…</div></div></div>`;
     const list = $('[data-mag-prod-list]');
     const render = (items) => {
       if (!items.length) { list.innerHTML = emptyBlock('Brak produktów', ''); return; }
-      list.innerHTML = tableHTML(
-        [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ilość', num: true }],
+      const cols = [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ilość', num: true }, { t: 'Partie', num: true }, { t: 'Wartość', num: true }];
+      if (isAdmin) cols.push({ t: '', num: true });
+      list.innerHTML = tableHTML(cols,
         items.map((p) => ({ cells: [
-          { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { html: `<span class="chip chip-grey">${esc(p.category)}</span>` }, { v: fmtInt(p.quantity), cls: 'num' }
-        ] }))
+          { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { html: `<span class="chip chip-grey">${esc(p.category)}</span>` },
+          { v: fmtInt(p.quantity), cls: 'num' }, { v: p.batchCount ? fmtInt(p.batchCount) : '—', cls: 'num' }, { v: p.totalValue ? fmtMoney(p.totalValue) : '—', cls: 'num' }
+        ].concat(isAdmin ? [{ html: `<button class="btn btn-ghost btn-sm" data-prod-edit="${esc(p.itemCode)}">Edytuj</button>`, cls: 'num' }] : []) }))
       );
     };
     const filt = () => {
@@ -1570,6 +1634,87 @@
     a.href = URL.createObjectURL(blob); a.download = 'produkty-magazyn.csv';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
     toast('Wyeksportowano ' + rows.length + ' pozycji.');
+  }
+
+  // ---- Edytor produktu (partie cenowe + historia)
+  const prodEdit = { id: null, code: null, batches: [] };
+  function openProductEditor(code) {
+    const p = (state.mag.products || []).find((x) => x.itemCode === code); if (!p) return;
+    prodEdit.id = p.id; prodEdit.code = p.itemCode;
+    prodEdit.batches = (p.priceBatches || []).map((b) => ({ qty: b.qty, unitPrice: b.unitPrice, note: b.note }));
+    const wrap = $('#drawer-wrap'); const box = $('#drawer'); wrap.classList.remove('hidden');
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags"><span class="chip chip-grey">${esc(p.category || '—')}</span><span class="chip chip-blue mono-cell">${esc(p.itemCode)}</span></div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>Edytuj produkt</h2>
+        <div class="sheet-fields">
+          <label class="field"><span>Nazwa *</span><input data-prod-f="name" value="${esc(p.name || '')}"></label>
+          <div class="field-2">
+            <label class="field"><span>Kategoria</span><input data-prod-f="category" value="${esc(p.category || '')}"></label>
+            <label class="field"><span>Kod</span><input data-prod-f="itemCode" value="${esc(p.itemCode || '')}"></label>
+          </div>
+          <div class="field-2">
+            <label class="field"><span>Marka</span><input data-prod-f="brand" value="${esc(p.brand || '')}"></label>
+            <label class="field"><span>Model</span><input data-prod-f="model" value="${esc(p.model || '')}"></label>
+          </div>
+          <label class="field"><span>Notatka</span><input data-prod-f="notes" value="${esc(p.notes || '')}"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px;">
+          <div style="font-size:13px;font-weight:600;color:var(--ink);">Partie cenowe</div>
+          <button class="btn btn-ghost btn-sm" data-batch-add>+ Dodaj partię</button>
+        </div>
+        <div data-batch-rows></div>
+        <div data-batch-total class="prod-batch-total"></div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin:20px 0 8px;">Historia ruchów</div>
+        <div data-prod-history><div class="loading">Ładowanie…</div></div>
+      </div>
+      <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-prod-save>Zapisz</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
+    renderBatchRows();
+    loadProdHistory(p.itemCode);
+  }
+  function readBatchesFromDOM() {
+    const rows = $$('[data-batch-row]');
+    prodEdit.batches = rows.map((r) => ({
+      qty: Number($('[data-batch-qty]', r).value) || 0,
+      unitPrice: Number($('[data-batch-price]', r).value) || 0,
+      note: $('[data-batch-note]', r).value || ''
+    }));
+  }
+  function renderBatchRows() {
+    const box = $('[data-batch-rows]'); if (!box) return;
+    box.innerHTML = prodEdit.batches.map((b, i) => `<div class="prod-batch-row" data-batch-row>
+      <input type="number" min="0" step="1" data-batch-qty value="${b.qty != null ? b.qty : ''}" placeholder="szt.">
+      <input type="number" min="0" step="0.01" data-batch-price value="${b.unitPrice != null ? b.unitPrice : ''}" placeholder="cena/szt.">
+      <input type="text" data-batch-note value="${esc(b.note || '')}" placeholder="notatka">
+      <button class="btn btn-danger-ghost btn-sm" data-batch-del="${i}">×</button>
+    </div>`).join('') || '<div class="eq-sub" style="padding:6px 0;">Brak partii — dodaj, by ustawić ilość i wartość.</div>';
+    const total = prodEdit.batches.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const val = prodEdit.batches.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+    const t = $('[data-batch-total]'); if (t) t.textContent = `Łącznie: ${fmtInt(total)} szt. · wartość ${fmtMoney(val)}`;
+  }
+  function loadProdHistory(code) {
+    const box = $('[data-prod-history]'); if (!box) return;
+    api('/warehouse/moves?itemCode=' + encodeURIComponent(code) + '&limit=200').then((moves) => {
+      if (!moves.length) { box.innerHTML = '<div class="eq-sub">Brak ruchów.</div>'; return; }
+      box.innerHTML = tableHTML(
+        [{ t: 'Data' }, { t: 'Z' }, { t: 'Do' }, { t: 'Ilość', num: true }, { t: 'Rodzaj' }],
+        moves.map((m) => ({ cells: [
+          { v: fmtDate(m.doneAt), cls: 'mut' }, { v: m.fromName || '—', cls: 'mut' }, { v: m.toName || '—', cls: 'mut' },
+          { v: fmtInt(m.quantity), cls: 'num' }, { v: MOVE_KIND[m.kind] || m.kind || '—', cls: 'mut' }
+        ] }))
+      );
+    }).catch(() => { box.innerHTML = '<div class="eq-sub">Nie udało się wczytać historii.</div>'; });
+  }
+  async function saveProduct() {
+    readBatchesFromDOM();
+    const payload = { priceBatches: prodEdit.batches.filter((b) => b.qty > 0 || b.unitPrice > 0 || b.note) };
+    $$('[data-prod-f]').forEach((el) => (payload[el.getAttribute('data-prod-f')] = el.value.trim()));
+    if (!payload.name) { toast('Podaj nazwę.', true); return; }
+    try {
+      await api('/admin/items/' + encodeURIComponent(prodEdit.id), { method: 'PATCH', body: JSON.stringify(payload) });
+      toast('Zapisano produkt.'); closeDrawer(); state.mag.products = null; state.mag.valuation = null; renderProdukty();
+    } catch (e) { toast(e.message || 'Nie udało się zapisać.', true); }
   }
 
   // ---- Raportowanie
@@ -1657,12 +1802,14 @@
           ['Ujemne stany', (h.negativeQuants || []).length],
           ['Quanty-sieroty', (h.orphanQuants || []).length]
         ];
-        body.innerHTML = tableHTML(
+        const table = tableHTML(
           [{ t: 'Sprawdzenie' }, { t: 'Liczba', num: true }, { t: 'Stan', num: true }],
           checks.map(([name, n]) => ({ cells: [
             { v: name }, { v: fmtInt(n), cls: 'num' }, { html: chip(n === 0), cls: 'num' }
           ] }))
         );
+        const isAdmin = state.user && state.user.role === 'admin';
+        body.innerHTML = table + (isAdmin ? '<div style="margin-top:14px;"><button class="btn btn-ghost btn-sm" data-health-recompute>Przelicz kondycję wszystkich</button></div>' : '');
       }
     } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
@@ -1672,11 +1819,12 @@
     const el = $('[data-mag-panel="konfiguracja"]');
     el.innerHTML = '<div class="loading">Ładowanie…</div>';
     try {
-      const [suppliers, locs] = await Promise.all([
+      const [suppliers, locs, dests] = await Promise.all([
         api('/warehouse/suppliers'),
-        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
+        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations'),
+        api('/warehouse/delivery-destinations')
       ]);
-      state.mag.locations = locs; state.mag.suppliers = suppliers;
+      state.mag.locations = locs; state.mag.suppliers = suppliers; state.mag.destinations = dests;
       const acts = (edit, del, id) => `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn btn-ghost btn-sm" data-${edit}="${esc(id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-${del}="${esc(id)}">Usuń</button></div>`;
       const supTable = suppliers.length ? tableHTML(
         [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }, { t: '', num: true }],
@@ -1693,8 +1841,16 @@
           { html: l.editable ? acts('loc-edit', 'loc-del', l.id) : '<span class="eq-sub">systemowa</span>', cls: 'num' }
         ] }))
       ) : emptyBlock('Brak lokalizacji', '');
+      const dstTable = dests.length ? tableHTML(
+        [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }, { t: '', num: true }],
+        dests.map((d) => ({ cells: [
+          { v: d.name }, { v: d.contact || '—', cls: 'mut' }, { v: d.notes || '—', cls: 'mut' },
+          { html: acts('dst-edit', 'dst-del', d.id), cls: 'num' }
+        ] }))
+      ) : emptyBlock('Brak miejsc dostaw', '');
       el.innerHTML = `<div class="anim-fadeup">
         <div class="mag-config-section"><div class="mag-config-head"><h3>Dostawcy</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="dostawca">+ Nowy dostawca</button></div>${supTable}</div>
+        <div class="mag-config-section"><div class="mag-config-head"><h3>Miejsca dostaw</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="destynacja">+ Nowe miejsce</button></div>${dstTable}</div>
         <div class="mag-config-section"><div class="mag-config-head"><h3>Lokalizacje</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="lokalizacja">+ Nowa lokalizacja</button></div>${locTable}</div>
       </div>`;
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
@@ -2185,7 +2341,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2226,7 +2382,17 @@
     if (t.hasAttribute('data-mag-op')) { openOpEditor(t.getAttribute('data-mag-op')); return; }
     if (t.hasAttribute('data-mag-csv')) { exportProductsCSV(); return; }
     if (t.hasAttribute('data-mag-new-op')) { openNewOp(state.magOpType); return; }
-    if (t.hasAttribute('data-mag-config-add')) { openSheet(t.getAttribute('data-mag-config-add') === 'dostawca' ? 'supplier' : 'location', {}); return; }
+    if (t.hasAttribute('data-mag-config-add')) { const k = t.getAttribute('data-mag-config-add'); openSheet(k === 'dostawca' ? 'supplier' : k === 'destynacja' ? 'destination' : 'location', {}); return; }
+    if (t.hasAttribute('data-dst-edit')) { const d = (state.mag.destinations || []).find((x) => x.id === t.getAttribute('data-dst-edit')); openSheet('destination', d || {}); return; }
+    if (t.hasAttribute('data-dst-del')) { delDestination(t.getAttribute('data-dst-del')); return; }
+    if (t.hasAttribute('data-prod-new')) { openSheet('newProduct', {}); return; }
+    if (t.hasAttribute('data-prod-import')) { openSheet('prodImport', {}); return; }
+    if (t.hasAttribute('data-prod-edit')) { openProductEditor(t.getAttribute('data-prod-edit')); return; }
+    if (t.hasAttribute('data-prod-save')) { saveProduct(); return; }
+    if (t.hasAttribute('data-batch-add')) { readBatchesFromDOM(); prodEdit.batches.push({ qty: 0, unitPrice: 0, note: '' }); renderBatchRows(); return; }
+    if (t.hasAttribute('data-batch-del')) { readBatchesFromDOM(); prodEdit.batches.splice(Number(t.getAttribute('data-batch-del')), 1); renderBatchRows(); return; }
+    if (t.hasAttribute('data-health-recompute')) { recomputeHealth(); return; }
+    if (t.hasAttribute('data-op-pdf')) { openOpPdf(t.getAttribute('data-op-pdf')); return; }
     if (t.hasAttribute('data-op-addline')) { readOpLinesFromDOM(); opEdit.lines.push({}); renderOpLines(); return; }
     if (t.hasAttribute('data-op-delline')) { readOpLinesFromDOM(); opEdit.lines.splice(Number(t.getAttribute('data-op-delline')), 1); renderOpLines(); return; }
     if (t.hasAttribute('data-op-save')) { saveOp().catch((err) => toast(err.message || 'Nie udało się zapisać.', true)); return; }
