@@ -52,6 +52,16 @@
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
+  // Miniatura sprzętu: zdjęcie z bazy (imageUrl/thumbnailUrl) z fallbackiem do
+  // inicjałów, gdy brak URL lub obrazek się nie wczyta (onerror). Ten sam wzorzec
+  // co hero w szczegółach sprzętu.
+  function itemThumb(it, monoClass, imgClass) {
+    const url = String((it && (it.imageUrl || it.thumbnailUrl)) || '').trim();
+    const init = esc(initials(it && it.name));
+    if (!url) return `<span class="${monoClass}">${init}</span>`;
+    return `<img class="${imgClass}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="${monoClass}" style="display:none;">${init}</span>`;
+  }
+
   function fmtDate(v) {
     if (!v) return '';
     const d = new Date(v);
@@ -281,7 +291,7 @@
       list.innerHTML = items.map((it) => {
         const sub2 = [it.category, it.model || it.brand].filter(Boolean).join(' · ');
         return `<div class="eq-card">
-          <div class="eq-thumb"><span class="mono">${esc(initials(it.name))}</span>
+          <div class="eq-thumb">${itemThumb(it, 'mono', 'eq-thumb-img')}
             <span class="eq-state"><span class="${conditionChip(it.conditionStatus)}">${esc(it.conditionStatus || 'Dostępny')}</span></span></div>
           <div class="eq-body">
             <div class="eq-name">${esc(it.name || it.itemCode)}</div>
@@ -321,7 +331,7 @@
         const sub = [it.category, it.currentLocation, it.conditionStatus].filter(Boolean).join(' · ');
         const qty = it.heldQuantity && it.heldQuantity > 1 ? ` ×${it.heldQuantity}` : '';
         return `<div class="row-card">
-          <span class="row-mono">${esc(initials(it.name))}</span>
+          ${itemThumb(it, 'row-mono', 'row-mono row-img')}
           <div class="row-main"><div class="n">${esc(it.name || it.itemCode)}${qty}</div><div class="s">${esc(sub)}</div></div>
           <div class="row-actions">
             <button class="btn-primary btn" data-return="${esc(it.itemCode)}" data-name="${esc(it.name || it.itemCode)}">Oddaj</button>
@@ -851,6 +861,10 @@
         <div class="field-2">
           <label class="field"><span>Nr seryjny</span><input name="serialNumber" value="${esc(ctx.serialNumber || '')}" placeholder="opcjonalnie"></label>
           <label class="field"><span>Tagi (po przecinku)</span><input name="tags" value="${esc((ctx.tags || []).join(', '))}" placeholder="np. studio, foto"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Zdjęcie (URL)</span><input name="imageUrl" value="${esc(ctx.imageUrl || '')}" placeholder="https://… — pokaże się na kafelku i w szczegółach"></label>
+          <label class="field"><span>Miniatura (URL)</span><input name="thumbnailUrl" value="${esc(ctx.thumbnailUrl || '')}" placeholder="opcjonalnie, gdy inna niż zdjęcie"></label>
         </div>
         ${ctx._id ? '' : `<label class="field"><span>Przypisz od razu do</span><select name="assignedToEmail">${userOpts}</select></label>`}
         <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`;
