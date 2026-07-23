@@ -52,14 +52,27 @@
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
-  // Miniatura sprzętu: zdjęcie z bazy (imageUrl/thumbnailUrl) z fallbackiem do
-  // inicjałów, gdy brak URL lub obrazek się nie wczyta (onerror). Ten sam wzorzec
-  // co hero w szczegółach sprzętu.
-  function itemThumb(it, monoClass, imgClass) {
+  // Graficzny placeholder (brak zdjęcia) — inline SVG na tokenach (fill przez
+  // style=var(...), bo atrybuty fill nie czytają zmiennych CSS) → działa w dark.
+  // Ikona „obraz" + inicjały. `hidden` = startowo ukryty (fallback pod <img>).
+  function thumbPlaceholder(it, hidden) {
+    const init = esc(initials(it && it.name));
+    return `<span class="thumb-ph"${hidden ? ' style="display:none;"' : ''}><svg viewBox="0 0 120 90" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="90" style="fill:var(--blue-soft);"/>
+      <g style="fill:none;stroke:var(--blue-ink);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;"><rect x="40" y="24" width="40" height="32" rx="3"/><circle cx="51" cy="35" r="3.4"/><path d="m80 50-10-10-20 18"/></g>
+      <text x="60" y="80" text-anchor="middle" style="fill:var(--blue);font:600 11px 'Golos Text',system-ui,sans-serif;">${init}</text>
+    </svg></span>`;
+  }
+
+  // Miniatura sprzętu: zdjęcie z bazy (imageUrl/thumbnailUrl). Fallback (brak URL
+  // lub onerror): `big` → graficzny placeholder, w przeciwnym razie inicjały.
+  function itemThumb(it, monoClass, imgClass, big) {
     const url = String((it && (it.imageUrl || it.thumbnailUrl)) || '').trim();
     const init = esc(initials(it && it.name));
-    if (!url) return `<span class="${monoClass}">${init}</span>`;
-    return `<img class="${imgClass}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="${monoClass}" style="display:none;">${init}</span>`;
+    if (!url) return big ? thumbPlaceholder(it, false) : `<span class="${monoClass}">${init}</span>`;
+    const disp = big ? 'block' : 'flex';
+    const fb = big ? thumbPlaceholder(it, true) : `<span class="${monoClass}" style="display:none;">${init}</span>`;
+    return `<img class="${imgClass}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='${disp}';">${fb}`;
   }
 
   function fmtDate(v) {
@@ -291,7 +304,7 @@
       list.innerHTML = items.map((it) => {
         const sub2 = [it.category, it.model || it.brand].filter(Boolean).join(' · ');
         return `<div class="eq-card">
-          <div class="eq-thumb">${itemThumb(it, 'mono', 'eq-thumb-img')}
+          <div class="eq-thumb">${itemThumb(it, 'mono', 'eq-thumb-img', true)}
             <span class="eq-state"><span class="${conditionChip(it.conditionStatus)}">${esc(it.conditionStatus || 'Dostępny')}</span></span></div>
           <div class="eq-body">
             <div class="eq-name">${esc(it.name || it.itemCode)}</div>
@@ -554,9 +567,7 @@
           <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
         <div class="drawer-body">
-          <div class="drawer-hero">${(it.imageUrl || it.thumbnailUrl)
-            ? `<img class="drawer-img" src="${esc(it.imageUrl || it.thumbnailUrl)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="mono" style="display:none;">${esc(initials(it.name))}</span>`
-            : `<span class="mono">${esc(initials(it.name))}</span>`}</div>
+          <div class="drawer-hero">${itemThumb(it, 'mono', 'drawer-img', true)}</div>
           <h2>${esc(it.name || it.itemCode)}</h2>
           <p class="sub">${esc([it.category, it.details].filter(Boolean).join(' · ') || it.itemCode)}</p>
           <div class="kv-grid">
