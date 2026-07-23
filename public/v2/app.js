@@ -544,6 +544,7 @@
     const box = $('#drawer');
     wrap.classList.remove('hidden');
     box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    const isAdmin = state.user && state.user.role === 'admin';
     api('/items/' + encodeURIComponent(code)).then((it) => {
       const tags = (it.tags || []).map((t) => `<span class="chip chip-blue">${esc(t)}</span>`).join('') || '<span class="eq-sub">Brak tagów</span>';
       const assign = it.assignedToName || it.assignedToEmail || 'Brak';
@@ -571,12 +572,40 @@
           ${it.activeLoan ? `<div class="kv" style="margin-bottom:22px;"><div class="k">Aktywne wypożyczenie</div><div class="v" style="font-weight:500;font-size:13.5px;">od ${esc(fmtDate(it.activeLoan.borrowedAt))} · ${esc(it.activeLoan.userDisplayName || it.activeLoan.userEmail || '')}${it.activeLoan.targetUseLocation ? ' · ' + esc(it.activeLoan.targetUseLocation) : ''}</div></div>` : ''}
           <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Tagi</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">${tags}</div>
+          ${isAdmin ? `<div style="font-size:13px;font-weight:600;color:var(--ink);margin:22px 0 8px;">Historia sprzętu</div><div data-item-history><div class="loading">Ładowanie…</div></div>` : ''}
         </div>
         <div class="drawer-foot">
           <button class="btn btn-primary" style="flex:1;" data-request="${esc(it.itemCode)}" data-name="${esc(it.name || it.itemCode)}">Złóż wniosek</button>
           <button class="btn btn-ghost" data-close-drawer>Zamknij</button>
         </div>`;
+      if (isAdmin) loadItemHistory(it);
     }).catch((e) => { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; });
+  }
+
+  // Historia sprzętu (admin) — łączy audyt po entityId (zdarzenia samego sprzętu)
+  // i po itemCode (wypożyczenia/zwroty/wnioski); dokładne dopasowanie kodu po froncie.
+  function loadItemHistory(it) {
+    const box = $('[data-item-history]'); if (!box) return;
+    const code = String(it.itemCode || '').toUpperCase();
+    const byCode = code ? api('/admin/audit-logs?itemCode=' + encodeURIComponent(code) + '&limit=200').catch(() => []) : Promise.resolve([]);
+    const byEntity = it._id ? api('/admin/audit-logs?entityType=item&entityId=' + encodeURIComponent(it._id) + '&limit=200').catch(() => []) : Promise.resolve([]);
+    Promise.all([byEntity, byCode]).then(([ent, cod]) => {
+      const seen = new Set(); const logs = [];
+      (Array.isArray(ent) ? ent : []).forEach((l) => { const id = String(l._id); if (!seen.has(id)) { seen.add(id); logs.push(l); } });
+      (Array.isArray(cod) ? cod : []).forEach((l) => {
+        if (String((l.payload && l.payload.itemCode) || '').toUpperCase() !== code) return; // regex łapie podciągi — zawężamy
+        const id = String(l._id); if (!seen.has(id)) { seen.add(id); logs.push(l); }
+      });
+      logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      if (!logs.length) { box.innerHTML = '<div class="eq-sub">Brak zapisów w historii.</div>'; return; }
+      box.innerHTML = tableHTML(
+        [{ t: 'Kiedy' }, { t: 'Osoba' }, { t: 'Akcja' }],
+        logs.map((l) => ({ cells: [
+          { v: fmtDate(l.createdAt), cls: 'mut' }, { v: l.actorEmail || '—', cls: 'mut' },
+          { v: AUDIT_ACTION_LABELS[l.actionType] || l.actionType || '—' }
+        ] }))
+      );
+    }).catch(() => { box.innerHTML = '<div class="eq-sub">Nie udało się wczytać historii.</div>'; });
   }
   function closeDrawer() { $('#drawer-wrap').classList.add('hidden'); }
 
@@ -839,6 +868,8 @@
         const locOpts = locList.map((l) => `<option value="${esc(l)}"${(ctx.currentLocation || 'Magazyn') === l ? ' selected' : ''}>${esc(l)}</option>`).join('');
         const catOpts = (o.categories || []).map((c) => `<option value="${esc(c)}"></option>`).join('');
         const userOpts = '<option value="">— nikt —</option>' + (o.users || []).map((u) => `<option value="${esc(u.email)}"${ctx.assignedToEmail === u.email ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const statusOpts = Object.keys(ITEM_STATUS).map((s) => `<option value="${esc(s)}"${(ctx.operationalStatus || 'available') === s ? ' selected' : ''}>${esc(ITEM_STATUS[s])}</option>`).join('');
+        const warrantyVal = ctx.warrantyUntil ? String(ctx.warrantyUntil).slice(0, 10) : '';
         return `
         <datalist id="aiCatList">${catOpts}</datalist>
         <div class="field-2">
@@ -861,6 +892,14 @@
         <div class="field-2">
           <label class="field"><span>Nr seryjny</span><input name="serialNumber" value="${esc(ctx.serialNumber || '')}" placeholder="opcjonalnie"></label>
           <label class="field"><span>Tagi (po przecinku)</span><input name="tags" value="${esc((ctx.tags || []).join(', '))}" placeholder="np. studio, foto"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Gwarancja do</span><input name="warrantyUntil" type="date" value="${esc(warrantyVal)}"></label>
+          <label class="field"><span>Lokalizacja szczegółowa</span><input name="detailedLocation" value="${esc(ctx.detailedLocation || '')}" placeholder="np. półka B3 / szafa 2"></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Kod QR</span><input name="qrCodeValue" value="${esc(ctx.qrCodeValue || '')}" placeholder="opcjonalnie"></label>
+          ${ctx._id ? `<label class="field"><span>Status operacyjny</span><select name="operationalStatus">${statusOpts}</select></label>` : '<div></div>'}
         </div>
         <div class="field-2">
           <label class="field"><span>Zdjęcie (URL)</span><input name="imageUrl" value="${esc(ctx.imageUrl || '')}" placeholder="https://… — pokaże się na kafelku i w szczegółach"></label>
@@ -1931,7 +1970,9 @@
         { t: 'Kod', f: (r) => r.itemCode || '—', cls: 'mono-cell' }, { t: 'Nazwa', f: (r) => r.itemName || '—' },
         { t: 'Osoba', f: (r) => r.userDisplayName || r.userEmail || '—' }, { t: 'Ilość', f: (r) => r.quantity || 1, num: true },
         { t: 'Status', f: (r) => r.status === 'active' ? 'Aktywne' : r.status === 'returned' ? 'Zwrócone' : (r.status || '—') },
-        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' }
+        { t: 'Skąd', f: (r) => r.fromLocation || '—' }, { t: 'Gdzie używane', f: (r) => r.targetUseLocation || '—' },
+        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' },
+        { t: 'Zwrot do', f: (r) => r.returnLocation || '—' }, { t: 'Notatka zwrotu', f: (r) => r.returnNote || '—' }
       ] },
     requests: { url: '/admin/loan-requests', sub: (n) => `${n} ${plural(n, 'wniosek', 'wnioski', 'wniosków')}`,
       cols: [
