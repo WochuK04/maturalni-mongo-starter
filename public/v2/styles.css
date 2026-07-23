@@ -252,6 +252,33 @@ button{cursor:pointer;}
 .inbox-card .meta{font-size:13px;color:var(--muted);margin-bottom:8px;}
 .inbox-card .done{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--green);}
 
+/* ---------- partie cenowe (edytor produktu) ---------- */
+.prod-batch-row{display:grid;grid-template-columns:1fr 1fr 1.4fr auto;gap:8px;margin-bottom:8px;align-items:center;}
+.prod-batch-row input{border:1px solid var(--line-2);border-radius:9px;padding:8px 10px;font-size:13px;color:var(--ink);background:var(--surface);outline:none;width:100%;box-sizing:border-box;}
+.prod-batch-row input:focus{border-color:var(--blue);}
+.prod-batch-total{font-size:13px;font-weight:600;color:var(--ink);margin-top:4px;}
+
+/* ---------- inline select (użytkownicy) ---------- */
+.usel{border:1px solid var(--line-2);border-radius:9px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--ink);background:var(--surface);outline:none;max-width:100%;}
+.usel:focus{border-color:var(--blue);}
+
+/* ---------- request note + comments ---------- */
+.req-note{width:100%;box-sizing:border-box;border:1px solid var(--line-2);border-radius:10px;padding:9px 12px;font-size:13.5px;font-family:inherit;color:var(--ink);background:var(--surface);outline:none;resize:vertical;margin:10px 0 4px;}
+.req-note:focus{border-color:var(--blue);}
+details.cmt{margin-top:10px;border-top:1px solid var(--line-3);padding-top:8px;}
+details.cmt>summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);list-style:none;user-select:none;}
+details.cmt>summary::-webkit-details-marker{display:none;}
+details.cmt[open]>summary{margin-bottom:8px;}
+.cmt-list{display:flex;flex-direction:column;gap:8px;margin-bottom:8px;}
+.cmt-empty{font-size:12.5px;color:var(--muted-2);padding:4px 0;}
+.cmt-item{background:var(--bg);border-radius:10px;padding:9px 12px;}
+.cmt-who{font-size:12px;font-weight:600;color:var(--ink);}
+.cmt-when{font-weight:400;color:var(--muted-2);margin-left:6px;}
+.cmt-text{font-size:13px;color:var(--ink);margin-top:2px;white-space:pre-wrap;}
+.cmt-form{display:flex;gap:8px;}
+.cmt-form input{flex:1;border:1px solid var(--line-2);border-radius:10px;padding:9px 12px;font-size:13.5px;color:var(--ink);background:var(--surface);outline:none;}
+.cmt-form input:focus{border-color:var(--blue);}
+
 /* ---------- team ---------- */
 .team-card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px;}
 .team-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px;}
@@ -290,6 +317,7 @@ button{cursor:pointer;}
 .drawer-body{flex:1;overflow:auto;padding:26px;}
 .drawer-hero{display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:16px;height:190px;margin-bottom:22px;}
 .drawer-hero .mono{width:72px;height:72px;border-radius:18px;font-size:26px;letter-spacing:-1px;}
+.drawer-img{width:100%;height:100%;object-fit:cover;border-radius:16px;}
 .drawer-body h2{margin:0 0 4px;font-size:25px;font-weight:600;letter-spacing:-1px;color:var(--heading);}
 .drawer-body .sub{margin:0 0 22px;font-size:14px;color:var(--muted);}
 .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px;}
@@ -445,6 +473,14 @@ table.wtable tbody tr.click:hover{background:var(--surface-hover);}
 .onb-link{font-size:13px;color:var(--blue);margin-top:6px;display:inline-block;text-decoration:none;}
 .onb-link:hover{text-decoration:underline;}
 .onb-admin{display:flex;gap:6px;flex-shrink:0;}
+
+/* ---------- bar chart (Statystyki) ---------- */
+.bar-chart{display:flex;flex-direction:column;gap:10px;}
+.bar-row{display:flex;align-items:center;gap:12px;}
+.bar-lbl{flex:0 0 40%;max-width:40%;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bar-track{flex:1;height:12px;background:var(--bg);border-radius:9999px;overflow:hidden;}
+.bar-fill{display:block;height:100%;border-radius:9999px;transition:width .4s cubic-bezier(.2,0,.2,1);min-width:2px;}
+.bar-val{flex:0 0 auto;font-size:13px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;min-width:32px;text-align:right;}
 
 /* ==========================================================================
    WYJAZDY (Turbo Weekend)

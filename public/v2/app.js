@@ -200,8 +200,11 @@
     if (view === 'pulpit') return loadPulpit();
     if (view === 'available') return loadAvailable();
     if (view === 'mojsprzet') return loadMine();
-    if (view === 'skrzynka') { loadInbox(); loadHistory(); return; }
+    if (view === 'skrzynka') { loadInbox(); loadReports(); loadMyRequests(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
+    if (view === 'stats') return loadStats();
+    if (view === 'users') return loadUsers();
+    if (view === 'rejestry') return loadRejestry();
     if (view === 'admin') return loadAdminItems();
   }
 
@@ -333,31 +336,138 @@
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
   }
 
-  // ---- Skrzynka (action items)
+  // ---- Skrzynka: wnioski (decyzje + moje) z pełnym obiegiem i komentarzami
+  function reqBadge(r) {
+    return r.kind === 'purchase' ? '<span class="chip chip-orange">Zakup</span>' : '<span class="chip chip-blue">Wypożyczenie</span>';
+  }
+  // Akcje wg statusu/rodzaju — odwzorowanie getActionConfig z v1 (routing po STATUSIE).
+  function reqActionsFor(r) {
+    const purchase = r.kind === 'purchase'; const st = r.status;
+    if (st === 'pending_manager') return [{ key: 'mgr-approve', label: 'Przekaż do administracji', cls: 'btn-primary' }, { key: 'mgr-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }];
+    if (st === 'pending_admin' || st === 'pending') return purchase
+      ? [{ key: 'adm-approve', label: 'Zatwierdź zakup', cls: 'btn-primary' }, { key: 'adm-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }]
+      : [{ key: 'adm-approve', label: 'Wydaj sprzęt', cls: 'btn-primary' }, { key: 'adm-reject', label: 'Odrzuć', cls: 'btn-danger-ghost' }];
+    if (purchase && st === 'to_order') return [{ key: 'order', label: 'Oznacz jako zamówiony', cls: 'btn-primary' }, { key: 'cancel-purchase', label: 'Anuluj zakup', cls: 'btn-danger-ghost' }];
+    if (purchase && st === 'ordered') return [{ key: 'stock', label: 'Dodaj do magazynu', cls: 'btn-primary' }, { key: 'cancel-purchase', label: 'Anuluj zakup', cls: 'btn-danger-ghost' }];
+    return [];
+  }
+  function reqMetaLine(r) {
+    const bits = [];
+    bits.push('Wnioskujący: ' + esc(r.requesterName || r.requesterEmail || '—'));
+    bits.push(esc(fmtDate(r.requestedAt)));
+    if (r.purpose) bits.push(esc(r.purpose));
+    if (r.kind === 'purchase' && r.justification) bits.push(esc(r.justification));
+    if (r.decisionNote) bits.push('Uwaga: ' + esc(r.decisionNote));
+    return bits.join(' · ');
+  }
+  function requestCard(r, mode) {
+    const decide = mode === 'decide';
+    const actions = decide ? reqActionsFor(r) : [];
+    const canCancel = mode === 'mine' && ['pending_manager', 'pending_admin', 'pending'].includes(r.status);
+    const noteBox = actions.length ? `<textarea class="req-note" data-decision-note rows="1" placeholder="Uwaga do decyzji (opcjonalnie)"></textarea>` : '';
+    const actionsHtml = actions.length
+      ? `${noteBox}<div class="row-actions">${actions.map((a) => `<button class="btn ${a.cls} btn-sm" data-req-act="${a.key}" data-req-id="${esc(r._id)}">${esc(a.label)}</button>`).join('')}</div>`
+      : (decide ? `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>W toku obiegu</div>` : '');
+    const cancelHtml = canCancel ? `<div class="row-actions"><button class="btn btn-danger-ghost btn-sm" data-req-cancel="${esc(r._id)}">Anuluj wniosek</button></div>` : '';
+    return `<div class="inbox-card" data-req-card>
+      <div class="h">${reqBadge(r)}<span class="title">${esc(r.itemName || r.itemCode || 'Wniosek')}</span>
+        <span class="chip chip-grey" style="margin-left:auto;">${esc(statusLabel(r.status))}</span></div>
+      <div class="meta">${reqMetaLine(r)}</div>
+      ${actionsHtml}${cancelHtml}
+      ${commentsThreadHtml(r._id)}
+    </div>`;
+  }
+
   function loadInbox() {
-    const list = $('[data-skrzynka-list]');
+    const wrap = $('[data-skrzynka-decide-wrap]'); const list = $('[data-skrzynka-list]');
     const render = (items) => {
-      if (!items.length) { list.innerHTML = emptyBlock('Skrzynka jest pusta', 'Nie masz obecnie nic do decyzji.'); return; }
-      const canDecide = state.user && (state.user.role === 'manager' || state.user.role === 'admin');
-      list.innerHTML = items.map((r) => {
-        const badgeClass = r.kind === 'purchase' ? 'chip chip-orange' : 'chip chip-blue';
-        const badge = r.kind === 'purchase' ? 'Zakup' : 'Wypożyczenie';
-        const actionable = canDecide && (r.status === 'pending_manager' || r.status === 'pending_admin' || r.status === 'pending');
-        return `<div class="inbox-card">
-          <div class="h"><span class="${badgeClass}">${badge}</span><span class="title">${esc(r.itemName || r.itemCode || 'Wniosek')}</span>
-            <span class="chip chip-grey" style="margin-left:auto;">${esc(statusLabel(r.status))}</span></div>
-          <div class="meta">Wnioskujący: ${esc(r.requesterName || r.requesterEmail || '—')} · ${esc(fmtDate(r.requestedAt))}${r.purpose ? ' · ' + esc(r.purpose) : ''}</div>
-          ${actionable ? `<div class="row-actions">
-            <button class="btn-primary btn btn-sm" data-approve="${esc(r._id)}">Zatwierdź</button>
-            <button class="btn-danger-ghost btn btn-sm" data-reject="${esc(r._id)}">Odrzuć</button>
-          </div>` : `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>W toku obiegu</div>`}
-        </div>`;
-      }).join('');
+      if (wrap) wrap.hidden = !items.length;
+      if (!items.length) { list.innerHTML = ''; return; }
+      list.innerHTML = items.map((r) => requestCard(r, 'decide')).join('');
+      bindCommentThreads(list);
     };
     if (state.cache.inbox) { render(state.cache.inbox); return; }
     list.innerHTML = '<div class="loading">Ładowanie…</div>';
     api('/my/action-items').then((items) => { state.cache.inbox = items; render(items); })
+      .catch(() => { if (wrap) wrap.hidden = false; list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
+  }
+
+  function loadMyRequests() {
+    const list = $('[data-skrzynka-mine]'); if (!list) return;
+    const render = (items) => {
+      if (!items.length) { list.innerHTML = emptyBlock('Brak wniosków', 'Twoje wnioski o wypożyczenie i zakup pojawią się tutaj.'); return; }
+      list.innerHTML = items.map((r) => requestCard(r, 'mine')).join('');
+      bindCommentThreads(list);
+    };
+    if (state.cache.myreq) { render(state.cache.myreq); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/my/loan-requests').then((items) => { state.cache.myreq = items; render(items); })
       .catch(() => { list.innerHTML = emptyBlock('Nie udało się wczytać', ''); });
+  }
+
+  // ---- Zgłoszenia admina (notifications: usterki + transfery)
+  const ISSUE_LABELS = { damage: 'Uszkodzenie', lost: 'Zgubienie', other: 'Inne' };
+  function loadReports() {
+    const wrap = $('[data-skrzynka-reports-wrap]'); const list = $('[data-skrzynka-reports]');
+    if (!wrap || !list) return;
+    const isAdmin = state.user && state.user.role === 'admin';
+    if (!isAdmin) { wrap.hidden = true; return; }
+    const render = (items) => {
+      wrap.hidden = false;
+      if (!items.length) { list.innerHTML = emptyBlock('Brak zgłoszeń', 'Usterki i transfery pojawią się tutaj.'); return; }
+      list.innerHTML = items.map((n) => {
+        const resolved = n.status === 'resolved';
+        const title = n.kind === 'transfer' ? `🔄 Transfer: ${esc(n.itemName || n.itemCode || '')}` : `⚠️ ${esc(ISSUE_LABELS[n.issueType] || 'Zgłoszenie')}: ${esc(n.itemName || n.itemCode || '')}`;
+        const meta = n.kind === 'transfer'
+          ? `Z: ${esc(n.fromName || n.fromEmail || 'magazynu')} → na: ${esc(n.toName || n.toEmail || '—')} · wykonał: ${esc(n.createdByName || n.createdByEmail || '—')} · ${esc(fmtDate(n.createdAt))}`
+          : `Zgłosił: ${esc(n.createdByName || n.createdByEmail || '—')} · ${esc(fmtDate(n.createdAt))}`;
+        return `<div class="inbox-card${resolved ? ' report-resolved' : ''}">
+          <div class="h"><span class="title">${title}</span><span class="chip ${resolved ? 'chip-grey' : n.kind === 'transfer' ? 'chip-blue' : 'chip-orange'}" style="margin-left:auto;">${resolved ? 'Załatwione' : 'Otwarte'}</span></div>
+          <div class="meta">${meta}</div>
+          ${n.message ? `<div class="meta">📝 ${esc(n.message)}</div>` : ''}
+          ${resolved ? `<div class="done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Załatwione przez ${esc(n.resolvedByEmail || '—')}</div>`
+            : `<div class="row-actions"><button class="btn btn-primary btn-sm" data-notif-resolve="${esc(n._id)}">Oznacz jako załatwione</button></div>`}
+        </div>`;
+      }).join('');
+    };
+    if (state.cache.reports) { render(state.cache.reports); return; }
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/admin/notifications').then((items) => { state.cache.reports = items; render(items); })
+      .catch(() => { wrap.hidden = false; list.innerHTML = emptyBlock('Nie udało się wczytać zgłoszeń', ''); });
+  }
+  function resolveNotif(id) {
+    api('/admin/notifications/' + encodeURIComponent(id) + '/resolve', { method: 'POST', body: JSON.stringify({}) })
+      .then(() => { toast('Oznaczono jako załatwione.'); delete state.cache.reports; loadReports(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // ---- Komentarze pod wnioskiem (lazy-load przy rozwinięciu)
+  function commentsThreadHtml(id) {
+    return `<details class="cmt" data-cmt="${esc(id)}"><summary>💬 Komentarze</summary>
+      <div class="cmt-list" data-cmt-list><div class="loading" style="padding:12px;">Ładowanie…</div></div>
+      <div class="cmt-form"><input data-cmt-input maxlength="2000" placeholder="Napisz komentarz…"><button class="btn btn-primary btn-sm" data-cmt-send="${esc(id)}">Wyślij</button></div>
+    </details>`;
+  }
+  function bindCommentThreads(root) {
+    $$('details.cmt', root).forEach((d) => {
+      if (d._bound) return; d._bound = true;
+      d.addEventListener('toggle', () => { if (d.open && !d._loaded) { d._loaded = true; loadComments(d); } });
+    });
+  }
+  function loadComments(details) {
+    const id = details.getAttribute('data-cmt'); const box = $('[data-cmt-list]', details);
+    api('/loan-requests/' + encodeURIComponent(id) + '/comments').then((cs) => {
+      if (!cs.length) { box.innerHTML = '<div class="cmt-empty">Brak komentarzy. Napisz pierwszy.</div>'; return; }
+      box.innerHTML = cs.map((c) => `<div class="cmt-item"><div class="cmt-who">${esc(c.authorName || c.authorEmail)} <span class="cmt-when">${esc(fmtDate(c.createdAt))}</span></div><div class="cmt-text">${esc(c.text)}</div></div>`).join('');
+    }).catch(() => { box.innerHTML = '<div class="cmt-empty">Nie udało się wczytać komentarzy.</div>'; });
+  }
+  async function sendComment(id, details) {
+    const inp = $('[data-cmt-input]', details); const text = (inp.value || '').trim();
+    if (!text) return;
+    try {
+      await api('/loan-requests/' + encodeURIComponent(id) + '/comments', { method: 'POST', body: JSON.stringify({ text }) });
+      inp.value = ''; details._loaded = true; loadComments(details);
+    } catch (e) { toast(e.message || 'Nie udało się dodać komentarza.', true); }
   }
 
   // ---- Historia (read-only): zgłoszenia, transfery i wnioski użytkownika
@@ -433,15 +543,22 @@
           <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
         <div class="drawer-body">
-          <div class="drawer-hero"><span class="mono">${esc(initials(it.name))}</span></div>
+          <div class="drawer-hero">${(it.imageUrl || it.thumbnailUrl)
+            ? `<img class="drawer-img" src="${esc(it.imageUrl || it.thumbnailUrl)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><span class="mono" style="display:none;">${esc(initials(it.name))}</span>`
+            : `<span class="mono">${esc(initials(it.name))}</span>`}</div>
           <h2>${esc(it.name || it.itemCode)}</h2>
           <p class="sub">${esc([it.category, it.details].filter(Boolean).join(' · ') || it.itemCode)}</p>
           <div class="kv-grid">
             <div class="kv"><div class="k">Marka / model</div><div class="v">${esc([it.brand, it.model].filter(Boolean).join(' / ') || '—')}</div></div>
             <div class="kv"><div class="k">Lokalizacja</div><div class="v">${esc(it.currentLocation || '—')}</div></div>
-            <div class="kv"><div class="k">Stan</div><div class="v">${esc(it.conditionStatus || '—')}</div></div>
+            <div class="kv"><div class="k">Stan</div><div class="v">${esc(condLabel(it.conditionStatus))}</div></div>
+            <div class="kv"><div class="k">Status</div><div class="v">${esc(ITEM_STATUS[it.operationalStatus] || it.operationalStatus || '—')}</div></div>
             <div class="kv"><div class="k">Przypisanie</div><div class="v">${esc(assign)}</div></div>
+            <div class="kv"><div class="k">Nr seryjny</div><div class="v">${esc(it.serialNumber || '—')}</div></div>
+            ${it.qrCodeValue ? `<div class="kv"><div class="k">Kod QR</div><div class="v mono-cell" style="font-size:13px;">${esc(it.qrCodeValue)}</div></div>` : ''}
+            ${it.warrantyUntil ? `<div class="kv"><div class="k">Gwarancja do</div><div class="v">${esc(it.warrantyUntil)}</div></div>` : ''}
           </div>
+          ${it.activeLoan ? `<div class="kv" style="margin-bottom:22px;"><div class="k">Aktywne wypożyczenie</div><div class="v" style="font-weight:500;font-size:13.5px;">od ${esc(fmtDate(it.activeLoan.borrowedAt))} · ${esc(it.activeLoan.userDisplayName || it.activeLoan.userEmail || '')}${it.activeLoan.targetUseLocation ? ' · ' + esc(it.activeLoan.targetUseLocation) : ''}</div></div>` : ''}
           <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Tagi</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">${tags}</div>
         </div>
@@ -550,6 +667,20 @@
         if (ctx.id) await api('/warehouse/suppliers/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
         else await api('/warehouse/suppliers', { method: 'POST', body: JSON.stringify(data) });
         toast('Zapisano dostawcę.'); afterConfigChange();
+      }
+    },
+    destination: {
+      eyebrow: 'Magazyn · Konfiguracja', title: (ctx) => ctx.id ? 'Edytuj miejsce dostawy' : 'Nowe miejsce dostawy',
+      hint: 'Miejsce dostawy będzie dostępne przy wydaniach.', cta: 'Zapisz',
+      fields: (ctx) => `
+        <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Biuro Kraków"></label>
+        <label class="field"><span>Kontakt</span><input name="contact" value="${esc(ctx.contact || '')}" placeholder="e-mail / telefon"></label>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`,
+      submit: async (data, ctx) => {
+        if (!data.name) throw new Error('Podaj nazwę miejsca.');
+        if (ctx.id) await api('/warehouse/delivery-destinations/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/warehouse/delivery-destinations', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano miejsce dostawy.'); afterConfigChange();
       }
     },
     location: {
@@ -771,17 +902,132 @@
         toast(`Import: dodano ${ins}${errs ? `, błędów ${errs}` : ''}.`, errs > 0);
         invalidate(['available', 'mine']); loadAdminItems();
       }
+    },
+    reorderRule: {
+      eyebrow: 'Magazyn · Zapotrzebowanie', title: (ctx) => ctx.id ? 'Edytuj regułę' : 'Nowa reguła min-max',
+      hint: 'Gdy dostępny stan spadnie poniżej minimum, pozycja trafi do braków. Dla reguły „Sprzęt” można od razu uzupełnić.', cta: 'Zapisz',
+      onOpen: async (ctx) => { if (!ctx.id && !state.mag.products) { try { state.mag.products = await api('/warehouse/products'); } catch (_) { state.mag.products = []; } } },
+      fields: (ctx) => {
+        const edit = !!ctx.id;
+        const prodOpts = (state.mag.products || []).map((p) => `<option value="${esc(p.itemCode)}">${esc(p.name || '')}</option>`).join('');
+        const scopeSel = edit
+          ? `<input value="${ctx.scope === 'item' ? 'Sprzęt' : 'Kategoria'}" disabled>`
+          : `<select name="scope"><option value="category">Kategoria</option><option value="item">Sprzęt (kod)</option></select>`;
+        const targetField = edit
+          ? `<input value="${esc(ctx.label || ctx.target || '')}" disabled>`
+          : `<input name="target" list="rrProdList" placeholder="kategoria lub kod sprzętu">`;
+        return `
+        <datalist id="rrProdList">${prodOpts}</datalist>
+        <div class="field-2">
+          <label class="field"><span>Poziom</span>${scopeSel}</label>
+          <label class="field"><span>Cel${edit ? '' : ' *'}</span>${targetField}</label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Minimum *</span><input name="minQty" type="number" min="0" step="1" value="${ctx.minQty != null ? ctx.minQty : ''}" placeholder="np. 3"></label>
+          <label class="field"><span>Maksimum *</span><input name="maxQty" type="number" min="1" step="1" value="${ctx.maxQty != null ? ctx.maxQty : ''}" placeholder="np. 6"></label>
+        </div>
+        <label class="field"><span>Notatka</span><input name="note" value="${esc(ctx.note || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (ctx.id) {
+          await api('/warehouse/reorder-rules/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify({ minQty: data.minQty, maxQty: data.maxQty, note: data.note }) });
+        } else {
+          if (!data.target) throw new Error('Podaj kategorię lub kod sprzętu.');
+          await api('/warehouse/reorder-rules', { method: 'POST', body: JSON.stringify(data) });
+        }
+        toast('Zapisano regułę.'); renderZapotrzebowanie(); if (state.magTab === 'przeglad') renderPrzeglad();
+      }
+    },
+    newUser: {
+      eyebrow: 'Użytkownicy', title: 'Dodaj użytkownika',
+      hint: 'Konto zostanie utworzone; osoba dokończy je przy pierwszym logowaniu Google.', cta: 'Dodaj',
+      fields: () => {
+        const managers = (state.userAdmin || []).filter((u) => u.role === 'manager' || u.role === 'admin');
+        const mgrOpts = '<option value="">— bezpośrednio do administracji —</option>' + managers.map((m) => `<option value="${esc(m.email)}">${esc(m.fullName || m.email)}</option>`).join('');
+        const roleOpts = Object.keys(ROLE_LABELS).map((r) => `<option value="${r}"${r === 'user' ? ' selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('');
+        return `
+        <label class="field"><span>E-mail *</span><input name="email" type="email" placeholder="imie.nazwisko@maturalni.com"></label>
+        <label class="field"><span>Imię i nazwisko</span><input name="fullName" placeholder="np. Jan Kowalski"></label>
+        <div class="field-2">
+          <label class="field"><span>Rola</span><select name="role">${roleOpts}</select></label>
+          <label class="field"><span>Wnioski trafiają do</span><select name="managerEmail">${mgrOpts}</select></label>
+        </div>`;
+      },
+      submit: async (data) => {
+        if (!data.email) throw new Error('Podaj e-mail.');
+        await api('/admin/users', { method: 'POST', body: JSON.stringify(data) });
+        toast('Dodano użytkownika.'); loadUsers();
+      }
+    },
+    returnItem: {
+      eyebrow: 'Mój sprzęt', title: 'Oddaj sprzęt',
+      hint: (ctx) => `Oddajesz „${ctx.name || 'sprzęt'}”. Wskaż miejsce zwrotu.`, cta: 'Oddaj',
+      onOpen: async (ctx) => { if (!state.locations) { try { state.locations = await api('/locations'); } catch (_) { state.locations = ['Magazyn', 'Studio', 'Biuro', 'Serwis']; } } },
+      fields: () => {
+        const opts = (state.locations || ['Magazyn']).map((l) => `<option value="${esc(l)}"${l === 'Magazyn' ? ' selected' : ''}>${esc(l)}</option>`).join('');
+        return `<label class="field"><span>Miejsce zwrotu</span><select name="returnLocation">${opts}</select></label>
+        <label class="field"><span>Notatka</span><input name="returnNote" placeholder="np. stan, uwagi (opcjonalnie)"></label>`;
+      },
+      submit: async (data, ctx) => {
+        await api('/items/' + encodeURIComponent(ctx.itemCode) + '/return', { method: 'POST', body: JSON.stringify({ returnLocation: data.returnLocation || 'Magazyn', returnNote: data.returnNote || '' }) });
+        toast('Sprzęt oddany.'); invalidate(['mine', 'available', 'history']); loadMine();
+      }
+    },
+    newProduct: {
+      eyebrow: 'Magazyn · Produkty', title: 'Nowy produkt',
+      hint: 'Utwórz pozycję magazynową. Ilość i wartość ustawisz partiami cenowymi w edycji.', cta: 'Utwórz',
+      fields: () => `
+        <label class="field"><span>Nazwa *</span><input name="name" placeholder="np. Koszulka L"></label>
+        <div class="field-2">
+          <label class="field"><span>Kategoria</span><input name="category" placeholder="np. Gadżet" value="Towar"></label>
+          <label class="field"><span>Marka</span><input name="brand" placeholder="opcjonalnie"></label>
+        </div>
+        <label class="field"><span>Model</span><input name="model" placeholder="opcjonalnie"></label>
+        <label class="field"><span>Notatka</span><input name="notes" placeholder="opcjonalnie"></label>`,
+      submit: async (data) => {
+        if (!data.name) throw new Error('Podaj nazwę.');
+        await api('/warehouse/products', { method: 'POST', body: JSON.stringify(data) });
+        toast('Utworzono produkt.'); state.mag.products = null; renderProdukty();
+      }
+    },
+    prodImport: {
+      eyebrow: 'Magazyn · Produkty', title: 'Import CSV produktów',
+      hint: 'Nagłówek + wiersze. Wymagane: name, category. Opcjonalne: itemCode, quantity, unitPrice, brand, model, notes.', cta: 'Importuj',
+      fields: () => `<label class="field"><span>Dane CSV *</span><textarea name="csv" rows="8" placeholder="name,category,quantity,unitPrice&#10;Koszulka L,Gadżet,50,19.99"></textarea></label>`,
+      submit: async (data) => {
+        const rows = parseCSV(data.csv || '');
+        if (!rows.length) throw new Error('Brak wierszy do importu.');
+        const items = rows.map((r) => ({ ...r, quantity: r.quantity ? Number(r.quantity) : undefined, unitPrice: r.unitPrice ? Number(r.unitPrice) : undefined }));
+        const res = await api('/warehouse/products/bulk', { method: 'POST', body: JSON.stringify({ items }) });
+        const added = res.added != null ? res.added : (res.insertedCount || 0);
+        const errs = (res.errors || []).length;
+        toast(`Import: dodano ${added}${errs ? `, błędów ${errs}` : ''}.`, errs > 0);
+        state.mag.products = null; renderProdukty();
+      }
     }
   };
 
   function afterConfigChange() {
-    state.mag.formData = null; state.mag.locations = null;
+    state.mag.formData = null; state.mag.locations = null; state.mag.destinations = null;
     if (state.magTab === 'konfiguracja') renderKonfiguracja();
     const sub = $('[data-mag-subtitle]'); if (sub) loadMagazyn();
   }
   function delSupplier(id) {
     if (!confirm('Usunąć dostawcę?')) return;
     api('/warehouse/suppliers/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function delDestination(id) {
+    if (!confirm('Usunąć miejsce dostawy?')) return;
+    api('/warehouse/delivery-destinations/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); afterConfigChange(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function recomputeHealth() {
+    toast('Przeliczam…');
+    api('/warehouse/health/recompute', { method: 'POST', body: JSON.stringify({}) })
+      .then((r) => { toast('Przeliczono ' + (r.recomputed != null ? r.recomputed : '') + ' pozycji.'); if (state.magReport === 'health') renderReport('health'); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  function openOpPdf(id) {
+    window.open('/warehouse/operations/' + encodeURIComponent(id) + '/pdf', '_blank');
   }
   function delLocation(id) {
     if (!confirm('Usunąć lokalizację?')) return;
@@ -978,22 +1224,29 @@
   }
 
   // -------------------------------------------------------------- actions
-  async function doReturn(code, name) {
-    if (!confirm(`Oddać „${name}” do magazynu?`)) return;
+  const REQ_ACTION_MAP = {
+    'mgr-approve': ['/manager/loan-requests/', '/approve', 'Przekazano do administracji'],
+    'mgr-reject': ['/manager/loan-requests/', '/reject', 'Wniosek odrzucony'],
+    'adm-approve': ['/admin/loan-requests/', '/approve', 'Wniosek zatwierdzony'],
+    'adm-reject': ['/admin/loan-requests/', '/reject', 'Wniosek odrzucony'],
+    order: ['/admin/purchase-requests/', '/order', 'Oznaczono jako zamówiony'],
+    stock: ['/admin/purchase-requests/', '/stock', 'Dodano do magazynu'],
+    'cancel-purchase': ['/admin/purchase-requests/', '/cancel', 'Zakup anulowany']
+  };
+  async function requestAction(id, key, note) {
+    const cfg = REQ_ACTION_MAP[key]; if (!cfg) return;
     try {
-      await api('/items/' + encodeURIComponent(code) + '/return', { method: 'POST', body: JSON.stringify({ returnLocation: 'Magazyn' }) });
-      toast('Sprzęt oddany.'); invalidate(['mine', 'available']); loadMine();
-    } catch (e) { toast(e.message || 'Nie udało się oddać.', true); }
-  }
-
-  async function decide(id, approve) {
-    const isAdmin = state.user && state.user.role === 'admin';
-    const base = isAdmin ? '/admin/loan-requests/' : '/manager/loan-requests/';
-    try {
-      await api(base + encodeURIComponent(id) + (approve ? '/approve' : '/reject'), { method: 'POST', body: JSON.stringify({}) });
-      toast(approve ? 'Wniosek zatwierdzony.' : 'Wniosek odrzucony.');
-      invalidate(['inbox']); loadInbox();
+      await api(cfg[0] + encodeURIComponent(id) + cfg[1], { method: 'POST', body: JSON.stringify({ decisionNote: note || '' }) });
+      toast(cfg[2]);
+      invalidate(['inbox', 'myreq', 'history']); loadInbox(); loadMyRequests();
     } catch (e) { toast(e.message || 'Nie udało się.', true); }
+  }
+  async function cancelOwnRequest(id) {
+    if (!confirm('Anulować ten wniosek?')) return;
+    try {
+      await api('/my/loan-requests/' + encodeURIComponent(id) + '/cancel', { method: 'POST', body: JSON.stringify({}) });
+      toast('Wniosek anulowany.'); invalidate(['inbox', 'myreq', 'history']); loadMyRequests(); loadInbox();
+    } catch (e) { toast(e.message || 'Nie udało się anulować.', true); }
   }
 
   function invalidate(keys) {
@@ -1091,6 +1344,7 @@
     if (tab === 'przeglad') return renderPrzeglad();
     if (tab === 'operacje') return renderOperacje();
     if (tab === 'produkty') return renderProdukty();
+    if (tab === 'zapotrzebowanie') return renderZapotrzebowanie();
     if (tab === 'wyjazdy') return renderWyjazdy();
     if (tab === 'raportowanie') return renderRaportowanie();
     if (tab === 'konfiguracja') return renderKonfiguracja();
@@ -1127,7 +1381,21 @@
         <div class="h"><span class="emoji" style="background:#FBEDE0;">🛒</span><span class="title">Zapotrzebowanie</span></div>
         <div class="nums"><div><div class="n">${fmtInt(repl.below)}</div><div class="l">poniżej minimum</div></div><div><div class="n">${fmtInt(repl.rules)}</div><div class="l">reguł</div></div></div>
       </div>`;
-      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:var(--ink);">Operacje</h3><div class="op-cards">${cards}${replCard}</div></div>`;
+      const shortageItems = (repl.items || []);
+      const shortage = shortageItems.length ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 12px;">
+          <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--ink);">Braki (poniżej minimum)</h3>
+          <button class="btn btn-ghost btn-sm" data-mag-tab="zapotrzebowanie">Zobacz reguły</button>
+        </div>
+        ${tableHTML(
+          [{ t: 'Cel' }, { t: 'Poziom' }, { t: 'Dostępne', num: true }, { t: 'Minimum', num: true }, { t: 'Do zamówienia', num: true }],
+          shortageItems.map((r) => ({ cells: [
+            { v: r.label }, { v: r.scope === 'item' ? 'Sprzęt' : 'Kategoria', cls: 'mut' },
+            { v: fmtInt(r.available), cls: 'num' }, { v: fmtInt(r.minQty), cls: 'num' },
+            { html: `<strong>${fmtInt(r.toOrder)}</strong>`, cls: 'num' }
+          ] }))
+        )}` : '';
+      el.innerHTML = `<div class="anim-fadeup">${stats}<h3 style="margin:0 0 14px;font-size:16px;font-weight:600;color:var(--ink);">Operacje</h3><div class="op-cards">${cards}${replCard}</div>${shortage}</div>`;
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
@@ -1202,7 +1470,7 @@
         <div style="font-size:13px;font-weight:600;color:var(--ink);margin:4px 0 8px;">Pozycje (${(op.lines || []).length})</div>
         ${lines}
       </div>
-      <div class="drawer-foot">${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
+      <div class="drawer-foot"><button class="btn btn-ghost" data-op-pdf="${esc(op.id)}">PDF</button>${canReverse ? `<button class="btn btn-ghost" style="flex:1;" data-op-reverse="${esc(op.id)}">Cofnij do roboczej</button>` : ''}<button class="btn btn-ghost" ${canReverse ? '' : 'style="flex:1;"'} data-close-drawer>Zamknij</button></div>`;
   }
 
   function renderOpEditor(box, op, form) {
@@ -1320,20 +1588,25 @@
   // ---- Produkty
   async function renderProdukty() {
     const el = $('[data-mag-panel="produkty"]');
+    const isAdmin = state.user && state.user.role === 'admin';
     el.innerHTML = `<div class="anim-fadeup">
       <div class="mag-toolbar">
         <div class="search mag-search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A2AEB9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input placeholder="Szukaj po nazwie, kodzie, kategorii…" data-mag-prod-search></div>
+        ${isAdmin ? '<button class="btn btn-ghost" data-prod-import>Import CSV</button>' : ''}
         <button class="btn btn-ghost" data-mag-csv>Eksportuj CSV</button>
+        ${isAdmin ? '<button class="btn btn-primary" data-prod-new><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nowy produkt</button>' : ''}
       </div>
       <div data-mag-prod-list><div class="loading">Ładowanie…</div></div></div>`;
     const list = $('[data-mag-prod-list]');
     const render = (items) => {
       if (!items.length) { list.innerHTML = emptyBlock('Brak produktów', ''); return; }
-      list.innerHTML = tableHTML(
-        [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ilość', num: true }],
+      const cols = [{ t: 'Kod' }, { t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Ilość', num: true }, { t: 'Partie', num: true }, { t: 'Wartość', num: true }];
+      if (isAdmin) cols.push({ t: '', num: true });
+      list.innerHTML = tableHTML(cols,
         items.map((p) => ({ cells: [
-          { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { html: `<span class="chip chip-grey">${esc(p.category)}</span>` }, { v: fmtInt(p.quantity), cls: 'num' }
-        ] }))
+          { v: p.itemCode, cls: 'mono-cell' }, { v: p.name }, { html: `<span class="chip chip-grey">${esc(p.category)}</span>` },
+          { v: fmtInt(p.quantity), cls: 'num' }, { v: p.batchCount ? fmtInt(p.batchCount) : '—', cls: 'num' }, { v: p.totalValue ? fmtMoney(p.totalValue) : '—', cls: 'num' }
+        ].concat(isAdmin ? [{ html: `<button class="btn btn-ghost btn-sm" data-prod-edit="${esc(p.itemCode)}">Edytuj</button>`, cls: 'num' }] : []) }))
       );
     };
     const filt = () => {
@@ -1361,6 +1634,87 @@
     a.href = URL.createObjectURL(blob); a.download = 'produkty-magazyn.csv';
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
     toast('Wyeksportowano ' + rows.length + ' pozycji.');
+  }
+
+  // ---- Edytor produktu (partie cenowe + historia)
+  const prodEdit = { id: null, code: null, batches: [] };
+  function openProductEditor(code) {
+    const p = (state.mag.products || []).find((x) => x.itemCode === code); if (!p) return;
+    prodEdit.id = p.id; prodEdit.code = p.itemCode;
+    prodEdit.batches = (p.priceBatches || []).map((b) => ({ qty: b.qty, unitPrice: b.unitPrice, note: b.note }));
+    const wrap = $('#drawer-wrap'); const box = $('#drawer'); wrap.classList.remove('hidden');
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags"><span class="chip chip-grey">${esc(p.category || '—')}</span><span class="chip chip-blue mono-cell">${esc(p.itemCode)}</span></div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>Edytuj produkt</h2>
+        <div class="sheet-fields">
+          <label class="field"><span>Nazwa *</span><input data-prod-f="name" value="${esc(p.name || '')}"></label>
+          <div class="field-2">
+            <label class="field"><span>Kategoria</span><input data-prod-f="category" value="${esc(p.category || '')}"></label>
+            <label class="field"><span>Kod</span><input data-prod-f="itemCode" value="${esc(p.itemCode || '')}"></label>
+          </div>
+          <div class="field-2">
+            <label class="field"><span>Marka</span><input data-prod-f="brand" value="${esc(p.brand || '')}"></label>
+            <label class="field"><span>Model</span><input data-prod-f="model" value="${esc(p.model || '')}"></label>
+          </div>
+          <label class="field"><span>Notatka</span><input data-prod-f="notes" value="${esc(p.notes || '')}"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px;">
+          <div style="font-size:13px;font-weight:600;color:var(--ink);">Partie cenowe</div>
+          <button class="btn btn-ghost btn-sm" data-batch-add>+ Dodaj partię</button>
+        </div>
+        <div data-batch-rows></div>
+        <div data-batch-total class="prod-batch-total"></div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin:20px 0 8px;">Historia ruchów</div>
+        <div data-prod-history><div class="loading">Ładowanie…</div></div>
+      </div>
+      <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-prod-save>Zapisz</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
+    renderBatchRows();
+    loadProdHistory(p.itemCode);
+  }
+  function readBatchesFromDOM() {
+    const rows = $$('[data-batch-row]');
+    prodEdit.batches = rows.map((r) => ({
+      qty: Number($('[data-batch-qty]', r).value) || 0,
+      unitPrice: Number($('[data-batch-price]', r).value) || 0,
+      note: $('[data-batch-note]', r).value || ''
+    }));
+  }
+  function renderBatchRows() {
+    const box = $('[data-batch-rows]'); if (!box) return;
+    box.innerHTML = prodEdit.batches.map((b, i) => `<div class="prod-batch-row" data-batch-row>
+      <input type="number" min="0" step="1" data-batch-qty value="${b.qty != null ? b.qty : ''}" placeholder="szt.">
+      <input type="number" min="0" step="0.01" data-batch-price value="${b.unitPrice != null ? b.unitPrice : ''}" placeholder="cena/szt.">
+      <input type="text" data-batch-note value="${esc(b.note || '')}" placeholder="notatka">
+      <button class="btn btn-danger-ghost btn-sm" data-batch-del="${i}">×</button>
+    </div>`).join('') || '<div class="eq-sub" style="padding:6px 0;">Brak partii — dodaj, by ustawić ilość i wartość.</div>';
+    const total = prodEdit.batches.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const val = prodEdit.batches.reduce((a, b) => a + (Number(b.qty) || 0) * (Number(b.unitPrice) || 0), 0);
+    const t = $('[data-batch-total]'); if (t) t.textContent = `Łącznie: ${fmtInt(total)} szt. · wartość ${fmtMoney(val)}`;
+  }
+  function loadProdHistory(code) {
+    const box = $('[data-prod-history]'); if (!box) return;
+    api('/warehouse/moves?itemCode=' + encodeURIComponent(code) + '&limit=200').then((moves) => {
+      if (!moves.length) { box.innerHTML = '<div class="eq-sub">Brak ruchów.</div>'; return; }
+      box.innerHTML = tableHTML(
+        [{ t: 'Data' }, { t: 'Z' }, { t: 'Do' }, { t: 'Ilość', num: true }, { t: 'Rodzaj' }],
+        moves.map((m) => ({ cells: [
+          { v: fmtDate(m.doneAt), cls: 'mut' }, { v: m.fromName || '—', cls: 'mut' }, { v: m.toName || '—', cls: 'mut' },
+          { v: fmtInt(m.quantity), cls: 'num' }, { v: MOVE_KIND[m.kind] || m.kind || '—', cls: 'mut' }
+        ] }))
+      );
+    }).catch(() => { box.innerHTML = '<div class="eq-sub">Nie udało się wczytać historii.</div>'; });
+  }
+  async function saveProduct() {
+    readBatchesFromDOM();
+    const payload = { priceBatches: prodEdit.batches.filter((b) => b.qty > 0 || b.unitPrice > 0 || b.note) };
+    $$('[data-prod-f]').forEach((el) => (payload[el.getAttribute('data-prod-f')] = el.value.trim()));
+    if (!payload.name) { toast('Podaj nazwę.', true); return; }
+    try {
+      await api('/admin/items/' + encodeURIComponent(prodEdit.id), { method: 'PATCH', body: JSON.stringify(payload) });
+      toast('Zapisano produkt.'); closeDrawer(); state.mag.products = null; state.mag.valuation = null; renderProdukty();
+    } catch (e) { toast(e.message || 'Nie udało się zapisać.', true); }
   }
 
   // ---- Raportowanie
@@ -1448,12 +1802,14 @@
           ['Ujemne stany', (h.negativeQuants || []).length],
           ['Quanty-sieroty', (h.orphanQuants || []).length]
         ];
-        body.innerHTML = tableHTML(
+        const table = tableHTML(
           [{ t: 'Sprawdzenie' }, { t: 'Liczba', num: true }, { t: 'Stan', num: true }],
           checks.map(([name, n]) => ({ cells: [
             { v: name }, { v: fmtInt(n), cls: 'num' }, { html: chip(n === 0), cls: 'num' }
           ] }))
         );
+        const isAdmin = state.user && state.user.role === 'admin';
+        body.innerHTML = table + (isAdmin ? '<div style="margin-top:14px;"><button class="btn btn-ghost btn-sm" data-health-recompute>Przelicz kondycję wszystkich</button></div>' : '');
       }
     } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
@@ -1463,11 +1819,12 @@
     const el = $('[data-mag-panel="konfiguracja"]');
     el.innerHTML = '<div class="loading">Ładowanie…</div>';
     try {
-      const [suppliers, locs] = await Promise.all([
+      const [suppliers, locs, dests] = await Promise.all([
         api('/warehouse/suppliers'),
-        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations')
+        state.mag.locations ? Promise.resolve(state.mag.locations) : api('/warehouse/locations'),
+        api('/warehouse/delivery-destinations')
       ]);
-      state.mag.locations = locs; state.mag.suppliers = suppliers;
+      state.mag.locations = locs; state.mag.suppliers = suppliers; state.mag.destinations = dests;
       const acts = (edit, del, id) => `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn btn-ghost btn-sm" data-${edit}="${esc(id)}">Edytuj</button><button class="btn btn-danger-ghost btn-sm" data-${del}="${esc(id)}">Usuń</button></div>`;
       const supTable = suppliers.length ? tableHTML(
         [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }, { t: '', num: true }],
@@ -1484,11 +1841,171 @@
           { html: l.editable ? acts('loc-edit', 'loc-del', l.id) : '<span class="eq-sub">systemowa</span>', cls: 'num' }
         ] }))
       ) : emptyBlock('Brak lokalizacji', '');
+      const dstTable = dests.length ? tableHTML(
+        [{ t: 'Nazwa' }, { t: 'Kontakt' }, { t: 'Notatka' }, { t: '', num: true }],
+        dests.map((d) => ({ cells: [
+          { v: d.name }, { v: d.contact || '—', cls: 'mut' }, { v: d.notes || '—', cls: 'mut' },
+          { html: acts('dst-edit', 'dst-del', d.id), cls: 'num' }
+        ] }))
+      ) : emptyBlock('Brak miejsc dostaw', '');
       el.innerHTML = `<div class="anim-fadeup">
         <div class="mag-config-section"><div class="mag-config-head"><h3>Dostawcy</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="dostawca">+ Nowy dostawca</button></div>${supTable}</div>
+        <div class="mag-config-section"><div class="mag-config-head"><h3>Miejsca dostaw</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="destynacja">+ Nowe miejsce</button></div>${dstTable}</div>
         <div class="mag-config-section"><div class="mag-config-head"><h3>Lokalizacje</h3><button class="btn btn-ghost btn-sm" data-mag-config-add="lokalizacja">+ Nowa lokalizacja</button></div>${locTable}</div>
       </div>`;
     } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  // -------------------------------------------------------------- Użytkownicy (admin)
+  const ROLE_LABELS = { user: 'Użytkownik', viewer: 'Podgląd (read-only)', manager: 'Kierownik', admin: 'Administrator' };
+  function loadUsers() {
+    const list = $('[data-users-list]'); const sub = $('[data-users-sub]'); if (!list) return;
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/admin/users').then((users) => {
+      state.userAdmin = users;
+      state.users = users.map((u) => ({ email: u.email, fullName: u.fullName || u.email })); // odśwież cache selecta transferu
+      if (sub) sub.textContent = `${users.length} ${plural(users.length, 'osoba', 'osoby', 'osób')}`;
+      const managers = users.filter((u) => u.role === 'manager' || u.role === 'admin');
+      const me = state.user && state.user.email;
+      const roleSel = (u) => `<select class="usel" data-user-role="${esc(u.email)}">${Object.keys(ROLE_LABELS).map((r) => `<option value="${r}"${(u.role || 'user') === r ? ' selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select>`;
+      const mgrSel = (u) => `<select class="usel" data-user-mgr="${esc(u.email)}"><option value="">— bezpośrednio do administracji —</option>${managers.filter((m) => m.email !== u.email).map((m) => `<option value="${esc(m.email)}"${u.managerEmail === m.email ? ' selected' : ''}>${esc(m.fullName || m.email)} (${esc(ROLE_LABELS[m.role] || m.role)})</option>`).join('')}</select>`;
+      list.innerHTML = tableHTML(
+        [{ t: 'Użytkownik' }, { t: 'E-mail' }, { t: 'Rola' }, { t: 'Wnioski trafiają do' }, { t: '', num: true }],
+        users.map((u) => ({ cells: [
+          { html: `${esc(u.fullName || u.email)}${u.pendingFirstLogin ? ' <span class="chip chip-orange">oczekuje na logowanie</span>' : ''}` },
+          { v: u.email, cls: 'mut' }, { html: roleSel(u) }, { html: mgrSel(u) },
+          { html: u.email === me ? '<span class="eq-sub">to Ty</span>' : `<button class="btn btn-danger-ghost btn-sm" data-user-del="${esc(u.email)}">Usuń</button>`, cls: 'num' }
+        ] }))
+      );
+      bindUserSelects(list);
+    }).catch((e) => { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); });
+  }
+  function bindUserSelects(root) {
+    $$('[data-user-role]', root).forEach((s) => s.addEventListener('change', () => patchUser(s.getAttribute('data-user-role'), { role: s.value })));
+    $$('[data-user-mgr]', root).forEach((s) => s.addEventListener('change', () => patchUser(s.getAttribute('data-user-mgr'), { managerEmail: s.value })));
+  }
+  function patchUser(email, body) {
+    api('/admin/users/' + encodeURIComponent(email), { method: 'PATCH', body: JSON.stringify(body) })
+      .then(() => { toast('Zapisano.'); loadUsers(); })
+      .catch((e) => { toast(e.message || 'Nie udało się.', true); loadUsers(); });
+  }
+  function delUser(email) {
+    if (!confirm('Usunąć użytkownika ' + email + '?')) return;
+    api('/admin/users/' + encodeURIComponent(email), { method: 'DELETE' })
+      .then(() => { toast('Usunięto użytkownika.'); loadUsers(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Rejestry (admin)
+  const AUDIT_ACTION_LABELS = {
+    loan_request_created: 'Złożył wniosek o wypożyczenie', purchase_request_created: 'Złożył wniosek o zakup',
+    loan_request_cancelled: 'Anulował swój wniosek', loan_request_manager_approved: 'Zaakceptował (kierownik)',
+    loan_request_manager_rejected: 'Odrzucił (kierownik)', loan_request_approved: 'Zatwierdził i wydał sprzęt',
+    loan_request_rejected: 'Odrzucił wniosek', purchase_request_approved: 'Zatwierdził zakup (do zamówienia)',
+    purchase_request_ordered: 'Oznaczył zakup jako zamówiony', purchase_request_stocked: 'Dodał zakup do magazynu',
+    purchase_request_cancelled: 'Anulował zakup', loan_request_auto_rejected: 'Odrzucił (sprzęt wycofany)',
+    request_comment_added: 'Dodał komentarz', loan_created: 'Utworzył wypożyczenie', loan_returned: 'Przyjął zwrot',
+    item_created: 'Dodał sprzęt', item_updated: 'Zaktualizował sprzęt', item_deactivated: 'Wycofał sprzęt',
+    item_discarded: 'Wyrzucił sprzęt', item_transferred: 'Przeniósł sprzęt', issue_reported: 'Zgłosił problem',
+    user_created: 'Dodał użytkownika', user_updated: 'Zmienił użytkownika', user_deleted: 'Usunął użytkownika',
+    warehouse_operation_done: 'Zatwierdził operację', warehouse_operation_reversed: 'Cofnął operację',
+    reorder_rule_created: 'Dodał regułę min-max'
+  };
+  const REJ_DEFS = {
+    loans: { url: '/admin/loans', sub: (n) => `${n} ${plural(n, 'wypożyczenie', 'wypożyczenia', 'wypożyczeń')}`,
+      cols: [
+        { t: 'Kod', f: (r) => r.itemCode || '—', cls: 'mono-cell' }, { t: 'Nazwa', f: (r) => r.itemName || '—' },
+        { t: 'Osoba', f: (r) => r.userDisplayName || r.userEmail || '—' }, { t: 'Ilość', f: (r) => r.quantity || 1, num: true },
+        { t: 'Status', f: (r) => r.status === 'active' ? 'Aktywne' : r.status === 'returned' ? 'Zwrócone' : (r.status || '—') },
+        { t: 'Wypożyczono', f: (r) => fmtDate(r.borrowedAt) }, { t: 'Zwrócono', f: (r) => r.returnedAt ? fmtDate(r.returnedAt) : '—' }
+      ] },
+    requests: { url: '/admin/loan-requests', sub: (n) => `${n} ${plural(n, 'wniosek', 'wnioski', 'wniosków')}`,
+      cols: [
+        { t: 'Rodzaj', f: (r) => r.kind === 'purchase' ? 'Zakup' : 'Wypożyczenie' }, { t: 'Pozycja', f: (r) => r.itemName || r.itemCode || '—' },
+        { t: 'Wnioskujący', f: (r) => r.requesterName || r.requesterEmail || '—' },
+        { t: 'Status', f: (r) => statusLabel(r.status) }, { t: 'Data', f: (r) => fmtDate(r.requestedAt) }
+      ] },
+    audit: { url: '/admin/audit-logs', sub: (n) => `${n} ${plural(n, 'wpis', 'wpisy', 'wpisów')}`,
+      cols: [
+        { t: 'Kiedy', f: (r) => fmtDate(r.createdAt) }, { t: 'Osoba', f: (r) => r.actorEmail || '—' },
+        { t: 'Akcja', f: (r) => AUDIT_ACTION_LABELS[r.actionType] || r.actionType || '—' },
+        { t: 'Czego dotyczy', f: (r) => (r.payload && (r.payload.itemCode || r.payload.itemName || r.payload.email)) || r.entityId || '—' }
+      ] }
+  };
+  function loadRejestry() { setRejTab(state.rejTab || 'loans'); }
+  function setRejTab(tab) {
+    state.rejTab = tab;
+    $$('[data-rej-tab]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-rej-tab') === tab));
+    renderRejTab(tab);
+  }
+  async function renderRejTab(tab) {
+    const body = $('[data-rej-body]'); const sub = $('[data-rej-sub]'); const def = REJ_DEFS[tab]; if (!body || !def) return;
+    body.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const rows = await api(def.url);
+      state.rej = state.rej || {}; state.rej[tab] = rows;
+      if (sub) sub.textContent = def.sub(rows.length);
+      if (!rows.length) { body.innerHTML = emptyBlock('Brak danych', ''); return; }
+      body.innerHTML = tableHTML(
+        def.cols.map((c) => ({ t: c.t, num: c.num })),
+        rows.map((r) => ({ cells: def.cols.map((c) => ({ v: c.f(r), cls: (c.num ? 'num ' : '') + (c.cls || '') })) }))
+      );
+    } catch (e) { body.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+  function exportRejCSV() {
+    const tab = state.rejTab || 'loans'; const def = REJ_DEFS[tab]; const rows = (state.rej && state.rej[tab]) || [];
+    if (!rows.length) { toast('Brak danych do eksportu.'); return; }
+    const escC = (v) => { const s = String(v == null ? '' : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const csv = [def.cols.map((c) => c.t).join(',')].concat(rows.map((r) => def.cols.map((c) => escC(c.f(r))).join(','))).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = 'rejestr-' + tab + '.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  // -------------------------------------------------------------- Zapotrzebowanie (min-max)
+  async function renderZapotrzebowanie() {
+    const el = $('[data-mag-panel="zapotrzebowanie"]'); if (!el) return;
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const rules = await api('/warehouse/reorder-rules');
+      state.mag.reorder = rules;
+      const isAdmin = state.user && state.user.role === 'admin';
+      const below = rules.filter((r) => r.below).length;
+      const head = `<div class="page-head-row" style="margin-bottom:16px;">
+        <div><h3 style="margin:0 0 4px;font-size:18px;font-weight:600;color:var(--heading);">Zapotrzebowanie</h3>
+        <p style="margin:0;font-size:13.5px;color:var(--muted);">${rules.length} ${plural(rules.length, 'reguła', 'reguły', 'reguł')} min-max · ${below} poniżej minimum</p></div>
+        ${isAdmin ? '<button class="btn btn-primary btn-sm" data-rr-new><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Nowa reguła</button>' : ''}</div>`;
+      if (!rules.length) { el.innerHTML = `<div class="anim-fadeup">${head}${emptyBlock('Brak reguł zapotrzebowania', isAdmin ? 'Dodaj regułę min-max dla kategorii lub konkretnego sprzętu.' : '')}</div>`; return; }
+      const rows = rules.map((r) => {
+        const statusChip = !r.isActive ? '<span class="chip chip-grey">Nieaktywna</span>'
+          : r.below ? '<span class="chip chip-red">Poniżej minimum</span>' : '<span class="chip chip-new">OK</span>';
+        const acts = isAdmin ? `<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
+          ${r.below && r.scope === 'item' && r.toOrder > 0 ? `<button class="btn btn-ghost btn-sm" data-rr-replenish="${esc(r.id)}">Uzupełnij</button>` : ''}
+          <button class="btn btn-ghost btn-sm" data-rr-edit="${esc(r.id)}">Edytuj</button>
+          <button class="btn btn-danger-ghost btn-sm" data-rr-del="${esc(r.id)}">Usuń</button></div>` : '';
+        return { cells: [
+          { v: r.label }, { v: r.scope === 'item' ? 'Sprzęt' : 'Kategoria', cls: 'mut' },
+          { v: fmtInt(r.minQty), cls: 'num' }, { v: fmtInt(r.maxQty), cls: 'num' },
+          { v: fmtInt(r.available), cls: 'num' }, { html: `<strong>${r.toOrder > 0 ? fmtInt(r.toOrder) : '—'}</strong>`, cls: 'num' },
+          { html: statusChip }, { html: acts, cls: 'num' }
+        ] };
+      });
+      el.innerHTML = `<div class="anim-fadeup">${head}${tableHTML(
+        [{ t: 'Cel' }, { t: 'Poziom' }, { t: 'Min', num: true }, { t: 'Max', num: true }, { t: 'Dostępne', num: true }, { t: 'Do zamówienia', num: true }, { t: 'Status' }, { t: '', num: true }],
+        rows
+      )}</div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+  function delReorderRule(id) {
+    if (!confirm('Usunąć regułę zapotrzebowania?')) return;
+    api('/warehouse/reorder-rules/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto regułę.'); renderZapotrzebowanie(); if (state.magTab === 'przeglad') renderPrzeglad(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+  async function replenishRule(id) {
+    try {
+      const r = await api('/warehouse/reorder-rules/' + encodeURIComponent(id) + '/replenish', { method: 'POST', body: JSON.stringify({}) });
+      toast(r.message || 'Utworzono roboczą operację przyjęcia.');
+      renderZapotrzebowanie();
+    } catch (e) { toast(e.message || 'Nie udało się uzupełnić.', true); }
   }
 
   // -------------------------------------------------------------- Wyjazdy (Turbo Weekend)
@@ -1774,12 +2291,63 @@
     openSheet('adminDiscard', { _id: id, name: it ? it.name : '' });
   }
 
+  // -------------------------------------------------------------- Statystyki (dashboard admina)
+  function barChart(rows, colorFn) {
+    const max = Math.max(1, ...rows.map((r) => r.count || 0));
+    const bars = rows.map((r) => {
+      const pct = Math.round(((r.count || 0) / max) * 100);
+      const col = colorFn ? colorFn(r) : 'var(--blue)';
+      return `<div class="bar-row"><span class="bar-lbl">${esc(r.label)}</span><span class="bar-track"><span class="bar-fill" style="width:${pct}%;background:${col};"></span></span><span class="bar-val">${fmtInt(r.count || 0)}</span></div>`;
+    }).join('');
+    return `<div class="bar-chart">${bars || '<div class="tw-empty">Brak danych</div>'}</div>`;
+  }
+  const STATUS_COLOR = { available: 'var(--green)', loaned: 'var(--blue)', unavailable: 'var(--orange)', inactive: 'var(--muted-2)', discarded: 'var(--red)' };
+
+  async function loadStats() {
+    const el = $('[data-stats-body]'); if (!el) return;
+    el.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      const s = await api('/admin/stats');
+      const warn = s.warranty && s.warranty.expired > 0;
+      const kpis = `<div class="stat-row">
+        <div class="stat"><div class="k">Sprzęt łącznie</div><div class="v">${fmtInt(s.itemsTotal)}</div></div>
+        <div class="stat"><div class="k">Aktywne wypożyczenia</div><div class="v" style="color:var(--blue);">${fmtInt(s.activeLoans)}</div></div>
+        <div class="stat"><div class="k">Oczekujące wnioski</div><div class="v" style="color:var(--orange);">${fmtInt(s.pendingRequests && s.pendingRequests.total)}</div></div>
+        <div class="stat"><div class="k">Gwarancje ≤30 dni</div><div class="v" style="color:${warn ? 'var(--red)' : 'var(--ink)'};">${fmtInt(s.warranty && s.warranty.total)}</div>${warn ? `<div class="s" style="color:var(--red);">${fmtInt(s.warranty.expired)} po terminie</div>` : ''}</div>
+      </div>`;
+      const statusRows = Object.entries(s.itemsByStatus || {}).map(([k, v]) => ({ label: ITEM_STATUS[k] || k, count: v, key: k }));
+      const condRows = (s.itemsByCondition || []).map((r) => ({ label: condLabel(r.condition), count: r.count }));
+      const catRows = (s.itemsByCategory || []).map((r) => ({ label: r.category, count: r.count }));
+      const charts = `<div class="grid-2" style="margin-top:16px;">
+        <div class="card"><h3>Sprzęt wg statusu</h3>${barChart(statusRows, (r) => STATUS_COLOR[r.key] || 'var(--blue)')}</div>
+        <div class="card"><h3>Sprzęt wg stanu technicznego</h3>${barChart(condRows)}</div>
+      </div>
+      <div class="card" style="margin-top:16px;"><h3>Sprzęt wg kategorii</h3>${barChart(catRows, () => 'var(--purple)')}</div>`;
+      const wItems = (s.warranty && s.warranty.items) || [];
+      const warrantyTable = `<div class="card" style="margin-top:16px;"><h3>Gwarancje kończące się w 30 dni</h3>${
+        wItems.length ? tableHTML(
+          [{ t: 'Nazwa' }, { t: 'Kategoria' }, { t: 'Gwarancja do' }, { t: 'Status', num: true }],
+          wItems.map((w) => ({ cells: [
+            { v: w.name }, { v: w.category || '—', cls: 'mut' }, { v: w.warrantyUntil, cls: 'mut' },
+            { html: `<span class="chip ${w.expired ? 'chip-red' : w.daysLeft <= 7 ? 'chip-orange' : 'chip-grey'}">${w.expired ? 'Po terminie' : w.daysLeft === 0 ? 'dziś' : 'za ' + w.daysLeft + ' dni'}</span>`, cls: 'num' }
+          ] }))
+        ) : '<div class="tw-empty">Brak gwarancji kończących się w 30 dni.</div>'
+      }</div>`;
+      el.innerHTML = `<div class="anim-fadeup">${kpis}${charts}${warrantyTable}</div>`;
+    } catch (e) { el.innerHTML = emptyBlock('Nie udało się wczytać statystyk', e.message || ''); }
+  }
+
   // -------------------------------------------------------------- global events
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-approve],[data-reject],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del]');
     if (!t) return;
+
+    if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
+    if (t.hasAttribute('data-rr-edit')) { const r = (state.mag.reorder || []).find((x) => x.id === t.getAttribute('data-rr-edit')); openSheet('reorderRule', r || {}); return; }
+    if (t.hasAttribute('data-rr-del')) { delReorderRule(t.getAttribute('data-rr-del')); return; }
+    if (t.hasAttribute('data-rr-replenish')) { replenishRule(t.getAttribute('data-rr-replenish')); return; }
 
     if (t.hasAttribute('data-ai-new')) { openSheet('adminItem', {}); return; }
     if (t.hasAttribute('data-ai-edit')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-edit')); openSheet('adminItem', it || {}); return; }
@@ -1814,7 +2382,17 @@
     if (t.hasAttribute('data-mag-op')) { openOpEditor(t.getAttribute('data-mag-op')); return; }
     if (t.hasAttribute('data-mag-csv')) { exportProductsCSV(); return; }
     if (t.hasAttribute('data-mag-new-op')) { openNewOp(state.magOpType); return; }
-    if (t.hasAttribute('data-mag-config-add')) { openSheet(t.getAttribute('data-mag-config-add') === 'dostawca' ? 'supplier' : 'location', {}); return; }
+    if (t.hasAttribute('data-mag-config-add')) { const k = t.getAttribute('data-mag-config-add'); openSheet(k === 'dostawca' ? 'supplier' : k === 'destynacja' ? 'destination' : 'location', {}); return; }
+    if (t.hasAttribute('data-dst-edit')) { const d = (state.mag.destinations || []).find((x) => x.id === t.getAttribute('data-dst-edit')); openSheet('destination', d || {}); return; }
+    if (t.hasAttribute('data-dst-del')) { delDestination(t.getAttribute('data-dst-del')); return; }
+    if (t.hasAttribute('data-prod-new')) { openSheet('newProduct', {}); return; }
+    if (t.hasAttribute('data-prod-import')) { openSheet('prodImport', {}); return; }
+    if (t.hasAttribute('data-prod-edit')) { openProductEditor(t.getAttribute('data-prod-edit')); return; }
+    if (t.hasAttribute('data-prod-save')) { saveProduct(); return; }
+    if (t.hasAttribute('data-batch-add')) { readBatchesFromDOM(); prodEdit.batches.push({ qty: 0, unitPrice: 0, note: '' }); renderBatchRows(); return; }
+    if (t.hasAttribute('data-batch-del')) { readBatchesFromDOM(); prodEdit.batches.splice(Number(t.getAttribute('data-batch-del')), 1); renderBatchRows(); return; }
+    if (t.hasAttribute('data-health-recompute')) { recomputeHealth(); return; }
+    if (t.hasAttribute('data-op-pdf')) { openOpPdf(t.getAttribute('data-op-pdf')); return; }
     if (t.hasAttribute('data-op-addline')) { readOpLinesFromDOM(); opEdit.lines.push({}); renderOpLines(); return; }
     if (t.hasAttribute('data-op-delline')) { readOpLinesFromDOM(); opEdit.lines.splice(Number(t.getAttribute('data-op-delline')), 1); renderOpLines(); return; }
     if (t.hasAttribute('data-op-save')) { saveOp().catch((err) => toast(err.message || 'Nie udało się zapisać.', true)); return; }
@@ -1847,9 +2425,18 @@
     if (t.dataset.request) { openSheet('request', { itemCode: t.dataset.request, name: t.dataset.name }); return; }
     if (t.dataset.transfer) { openSheet('transfer', { itemCode: t.dataset.transfer, name: t.dataset.name }); return; }
     if (t.dataset.report) { openSheet('report', { itemCode: t.dataset.report, name: t.dataset.name }); return; }
-    if (t.dataset.return) { doReturn(t.dataset.return, t.dataset.name); return; }
-    if (t.dataset.approve) { decide(t.dataset.approve, true); return; }
-    if (t.dataset.reject) { decide(t.dataset.reject, false); return; }
+    if (t.dataset.return) { openSheet('returnItem', { itemCode: t.dataset.return, name: t.dataset.name }); return; }
+    if (t.hasAttribute('data-req-act')) {
+      const card = t.closest('[data-req-card]'); const noteEl = card && $('[data-decision-note]', card);
+      requestAction(t.getAttribute('data-req-id'), t.getAttribute('data-req-act'), noteEl ? noteEl.value : ''); return;
+    }
+    if (t.hasAttribute('data-req-cancel')) { cancelOwnRequest(t.getAttribute('data-req-cancel')); return; }
+    if (t.hasAttribute('data-cmt-send')) { const d = t.closest('details.cmt'); sendComment(t.getAttribute('data-cmt-send'), d); return; }
+    if (t.hasAttribute('data-notif-resolve')) { resolveNotif(t.getAttribute('data-notif-resolve')); return; }
+    if (t.hasAttribute('data-rej-tab')) { setRejTab(t.getAttribute('data-rej-tab')); return; }
+    if (t.hasAttribute('data-rej-csv')) { exportRejCSV(); return; }
+    if (t.hasAttribute('data-user-new')) { openSheet('newUser', {}); return; }
+    if (t.hasAttribute('data-user-del')) { delUser(t.getAttribute('data-user-del')); return; }
   });
 
   document.addEventListener('keydown', (e) => {
