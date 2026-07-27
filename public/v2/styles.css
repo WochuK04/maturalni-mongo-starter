@@ -109,6 +109,8 @@ button{cursor:pointer;}
 .btn-ghost{background:var(--surface);border:1px solid var(--line-2);color:var(--ink-2);font-weight:500;}
 .btn-ghost:hover{border-color:var(--line-hover);}
 .btn-danger-ghost{background:transparent;border:1px solid var(--red-line);color:var(--red);}
+.btn-danger{background:var(--red);color:#fff;}
+.btn-danger:hover{filter:brightness(.94);}
 .btn-sm{padding:9px 14px;font-size:13px;}
 .btn-block{width:100%;}
 
