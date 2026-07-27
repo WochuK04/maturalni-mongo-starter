@@ -1,1 +1,112 @@
-# Testowo
+# Zaplecze Maturalni
+
+Wewnętrzny system Maturalni do zarządzania **sprzętem, magazynem, licencjami i onboardingiem** pracowników. Node.js + Express + MongoDB, front to vanilla-JS SPA. Uruchamiany jako aplikacja serverless na Vercelu (`export default app`), lokalnie jako klasyczny serwer HTTP.
+
+## Stack
+
+- **Backend:** Node.js (ESM), Express 4, MongoDB (driver `mongodb`), sesje przez `express-session` + `connect-mongo`
+- **Auth:** Google OAuth 2.0 (`passport-google-oauth20`), ograniczone do domeny firmowej
+- **Frontend:** vanilla JS SPA w `public/` (bez frameworka i bez builda)
+- **PDF:** `pdfkit` (wydruki operacji magazynowych)
+- **Import danych:** `xlsx` (import listy sprzętu z Excela)
+- **Testy:** wbudowany `node:test`
+
+## Wymagania
+
+- Node.js 20+ (używamy `node --test` i `--watch`)
+- Dostęp do instancji MongoDB (lokalny `mongod` lub Atlas)
+- Poświadczenia Google OAuth (Client ID / Secret / Callback URL)
+
+## Szybki start (lokalnie)
+
+```bash
+npm install
+# utwórz plik .env i uzupełnij wartości (patrz sekcja Zmienne środowiskowe)
+npm run seed           # opcjonalnie: dane startowe
+npm run dev            # http://localhost:3000
+```
+
+`npm run dev` odpala `node --watch src/index.js`. Aplikacja domyślnie serwuje **nowy interfejs (v2)** pod `/`; stary interfejs jest dostępny pod `/v1`.
+
+> **Uwaga (serverless):** na Vercelu moduł eksportuje `app`. Jeśli chcesz sprawdzić boot bez pełnego HTTP, użyj harnessu importującego `src/index.js`.
+
+## Zmienne środowiskowe
+
+Aplikacja akceptuje dwa warianty nazw dla Mongo, bo lokalny `.env` używa `MONGODB_URI` / `DB_NAME`, a produkcja `MONGO_URI` / `MONGO_DB_NAME`.
+
+| Zmienna | Wymagana | Opis |
+|---|---|---|
+| `MONGODB_URI` / `MONGO_URI` | ✅ | Connection string do MongoDB |
+| `DB_NAME` / `MONGO_DB_NAME` | — | Nazwa bazy (domyślnie `equipment_db`) |
+| `SESSION_SECRET` | ✅ | Sekret sesji Express |
+| `GOOGLE_CLIENT_ID` | ✅ | Google OAuth Client ID |
+| `GOOGLE_CLIENT_SECRET` | ✅ | Google OAuth Client Secret |
+| `GOOGLE_CALLBACK_URL` | ✅ | np. `http://localhost:3000/auth/google/callback` |
+| `ALLOWED_EMAIL_DOMAIN` | — | Ogranicza logowanie do domeny (np. `maturalni.com`) |
+| `PORT` | — | Port lokalny (domyślnie `3000`) |
+| `NODE_ENV` | — | `production` włącza ustawienia sesji dla proda |
+
+**Środowiska bazy:** lokalny `.env` wskazuje na `localhost`; Vercel/prod używa Atlasa (baza `maturalni_equipment`). Operacje na danych produkcyjnych muszą celować w Atlas, nie w lokalną bazę.
+
+## Logowanie i role
+
+Logowanie przez Google OAuth (`/auth/google`). Przy pierwszym logowaniu tworzy się użytkownik; jeśli ustawiony jest `ALLOWED_EMAIL_DOMAIN`, dopuszczane są tylko maile z tej domeny.
+
+Role (bramki w [`src/auth.js`](src/auth.js)):
+
+- **user** — pracownik: własny sprzęt, wnioski o wypożyczenie, onboarding
+- **manager** — dodatkowo akceptacja wniosków zespołu
+- **viewer** — wgląd read-only do magazynu
+- **admin** — pełne uprawnienia (magazyn, użytkownicy, konfiguracja)
+
+Pierwszy admin (`k.woch@<domena>`) nadawany jest automatycznie; pozostałe role nadaje admin w panelu „Użytkownicy".
+
+## Moduły
+
+- **Sprzęt** — rejestr sprzętu (per sztuka), wypożyczenia, zwroty, zgłaszanie usterek, transfery, historia
+- **Magazyn** — model w stylu Odoo: operacje jako dokumenty ze stanami, partie FIFO, wyceny stanu, rezerwacje, aging, reguły uzupełnień, dostawcy, lokalizacje, wydruki PDF
+- **Licencje** — ewidencja licencji/subskrypcji oprogramowania
+- **Onboarding (TiL)** — kroki dostępowo-sprzętowe, panel osób, śledzenie postępu
+- **Wyjazdy** — planowanie wyjazdów: mapa Polski, autobusy, interaktywna checklista pakowania zintegrowana ze stanem magazynu
+- **Administracja** — użytkownicy, powiadomienia, statystyki, dziennik audytu
+
+## Struktura kodu
+
+```
+src/
+  index.js          # aplikacja Express + wszystkie trasy HTTP (~120 endpointów)
+  db.js             # połączenie z MongoDB + współdzielony klient (dla session store)
+  auth.js           # Passport (Google OAuth) + bramki ról (requireAuth/Admin/Manager/…)
+  schema.js         # nazwy kolekcji + ensureIndexes
+  stock.js          # logika magazynu (operacje, FIFO, rezerwacje, wyceny, aging) — czysta, testowalna
+  operation-pdf.js  # generowanie PDF operacji (pdfkit)
+  seed.js           # dane startowe
+  person-email-map.js, manager-map.js
+public/             # SPA v1 (klasyczny interfejs, /v1)
+public/v2/          # SPA v2 (domyślny interfejs, /)
+scripts/            # import z Excela, migracje kodów, backfille, seed onboardingu
+test/               # testy node:test (jednostkowe stock.* + integracyjne warehouse.*/auth/loans)
+```
+
+Sesje przechowywane są w kolekcji `sessions`; `connect-mongo` **współdzieli** klienta Mongo aplikacji (bez osobnej puli połączeń), co na serverless redukuje liczbę połączeń do Atlasa i eliminuje gubienie sesji przy cold-startach.
+
+## Skrypty npm
+
+| Komenda | Opis |
+|---|---|
+| `npm run dev` | Serwer deweloperski z auto-restartem (`node --watch`) |
+| `npm run seed` | Załaduj dane startowe |
+| `npm run import:excel` | Import listy sprzętu z pliku Excel |
+| `npm run backfill:emails` | Backfill maili osób |
+| `npm run rename:codes` | Zmiana kodów produktów |
+| `npm test` | Wszystkie testy (wymaga MongoDB; ustaw też dummy `GOOGLE_*`) |
+| `npm run test:unit` | Testy jednostkowe `stock.*` (bez MongoDB) |
+| `npm run test:int` | Testy integracyjne magazynu (wymaga MongoDB) |
+
+## Testy i CI
+
+Testy używają `node:test`. `test:unit` nie wymaga bazy; `test`/`test:int` wymagają dostępnego MongoDB oraz dummy zmiennych `GOOGLE_*`. **Nie ustawiaj `MONGO_DB_NAME`** przy testach — używana jest izolowana baza testowa. CI (unit + integracyjne) działa w GitHub Actions.
+
+## Deploy
+
+Wdrażane na Vercelu jako funkcja serverless (moduł eksportuje `app`). Zmienne środowiskowe konfigurowane w panelu Vercela; produkcja łączy się z Atlasem.
