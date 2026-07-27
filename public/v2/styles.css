@@ -566,3 +566,30 @@ table.wtable tbody tr.click:hover{background:var(--surface-hover);}
   .main{padding-top:58px;padding-bottom:76px;height:auto;min-height:100vh;}
   .drawer{width:100%;max-width:100%;}
 }
+
+/* ===== Pulpit: panel „Wymaga uwagi" (alerty admina) ===== */
+.pulpit-alerts{margin-bottom:22px;}
+.alerts-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.alerts-head h3{margin:0;}
+.alerts-total{min-width:24px;height:24px;padding:0 8px;border-radius:12px;background:var(--red-soft);color:var(--red);
+  display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;}
+.alerts-total:empty{display:none;}
+.pulpit-alerts [data-alerts-body]{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
+.alert-group{text-align:left;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:14px;padding:14px 16px;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .05s;width:100%;font:inherit;}
+.alert-group:hover{border-color:var(--line-hover);box-shadow:0 4px 14px rgba(20,30,60,.06);}
+.alert-group:active{transform:translateY(1px);}
+.alert-group.sev-danger{border-left-color:var(--red);}
+.alert-group.sev-warn{border-left-color:var(--orange);}
+.ag-head{display:flex;align-items:center;gap:8px;}
+.ag-dot{width:8px;height:8px;border-radius:50%;background:var(--orange);flex:0 0 auto;}
+.sev-danger .ag-dot{background:var(--red);}
+.ag-title{font-size:14px;font-weight:600;color:var(--heading);flex:1;}
+.ag-count{min-width:22px;height:22px;padding:0 7px;border-radius:11px;background:var(--orange-soft);color:var(--orange-ink);
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+.sev-danger .ag-count{background:var(--red-soft);color:var(--red);}
+.ag-hint{margin-top:5px;font-size:12.5px;color:var(--muted);}
+.ag-items{margin-top:10px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--line);padding-top:10px;}
+.alert-item{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:12.5px;}
+.ai-label{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ai-meta{color:var(--muted);flex:0 0 auto;font-variant-numeric:tabular-nums;}

@@ -3079,6 +3079,191 @@ app.get('/admin/stats', requireAuth, requireAdmin, async (_req, res) => {
   });
 });
 
+// Polska odmiana przez liczbę (1 / 2-4 / 5+), z regułą dla nastek (12-14 → forma „wiele").
+function plForm(n, one, few, many) {
+  const abs = Math.abs(Number(n) || 0);
+  const d = abs % 10, h = abs % 100;
+  if (abs === 1) return one;
+  if (d >= 2 && d <= 4 && !(h >= 12 && h <= 14)) return few;
+  return many;
+}
+const plPozycje = (n) => plForm(n, 'pozycja', 'pozycje', 'pozycji');
+const plProsby = (n) => plForm(n, 'prośba', 'prośby', 'próśb');
+const plOsoby = (n) => plForm(n, 'osoba', 'osoby', 'osób');
+const plWnioski = (n) => plForm(n, 'wniosek', 'wnioski', 'wniosków');
+
+// Pulpit — skonsolidowane alerty „co wymaga uwagi" w jednym miejscu, zamiast klikania
+// po zakładkach. Agreguje po stronie serwera: braki magazynowe (reguły poniżej minimum),
+// starzejący się stan (>180 dni), licencje przeterminowane / do odnowienia (≤30 dni),
+// prośby o dostęp w onboardingu (TiL: „requested"), osoby w trakcie onboardingu,
+// wnioski oczekujące na decyzję oraz gwarancje wygasające (≤30 dni). Zwraca tylko
+// niepuste grupy; `view` wskazuje zakładkę do przejścia w SPA. Tylko admin.
+app.get('/admin/alerts', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+  const now = new Date();
+
+  const [replen, agingReport, licenses, onbPeople, tilRequested, pendingReqCount, warrantyDocs] = await Promise.all([
+    computeReplenishment(db),
+    (async () => {
+      const items = (await db.collection(collections.items)
+        .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1, priceBatches: 1 } })
+        .toArray()).filter(it => isWarehouseCategory(it.category));
+      return computeAging(items, now);
+    })(),
+    db.collection(collections.licenses).find({ isActive: { $ne: false } }).toArray(),
+    db.collection(collections.users)
+      .find({ onboardingStatus: 'in_progress' }, { projection: { email: 1, fullName: 1, onboardingStartedAt: 1 } })
+      .sort({ onboardingStartedAt: 1 }).toArray(),
+    db.collection(collections.onboardingProgress).countDocuments({ state: 'requested' }),
+    db.collection(collections.loanRequests).countDocuments({ status: { $in: ACTIVE_REQUEST_STATUSES } }),
+    db.collection(collections.items)
+      .find({ isActive: { $ne: false }, warrantyUntil: { $nin: [null, ''] } },
+        { projection: { itemCode: 1, name: 1, warrantyUntil: 1 } }).toArray()
+  ]);
+
+  const alerts = [];
+
+  // 1. Braki magazynowe — reguły poniżej minimum (liczone od stanu dostępnego).
+  const below = replen.filter(r => r.below).sort((a, b) => (b.toOrder || 0) - (a.toOrder || 0));
+  if (below.length) {
+    alerts.push({
+      key: 'stock-below', severity: 'danger', view: 'magazyn',
+      title: 'Braki magazynowe',
+      count: below.length,
+      hint: `${below.length} ${plPozycje(below.length)} poniżej minimum`,
+      items: below.slice(0, 8).map(r => ({
+        label: r.label, meta: `dostępne ${r.available}/${r.minQty} · domów ${r.toOrder}`
+      }))
+    });
+  }
+
+  // 2. Starzejący się stan (>180 dni).
+  const aged = (agingReport.products || []).filter(p => (p.agedQty || 0) > 0)
+    .sort((a, b) => (b.oldestDays || 0) - (a.oldestDays || 0));
+  if (aged.length) {
+    const agedValue = Math.round(aged.reduce((s, p) => s + (p.agedValue || 0), 0) * 100) / 100;
+    alerts.push({
+      key: 'aging', severity: 'warn', view: 'magazyn',
+      title: 'Zalegający stan (>180 dni)',
+      count: aged.length,
+      hint: `${aged.length} ${plPozycje(aged.length)} · ${agedValue.toLocaleString('pl-PL')} zł`,
+      items: aged.slice(0, 8).map(p => ({
+        label: `${p.itemCode} · ${p.name}`,
+        meta: `${p.agedQty} szt. · ${p.oldestDays == null ? 'brak daty' : p.oldestDays + ' dni'}`
+      }))
+    });
+  }
+
+  // 3. Licencje — przeterminowane (danger) i do odnowienia w ≤30 dni (warn).
+  const licViews = licenses.map(l => licenseView(l, now)).filter(v => v.status !== 'cancelled');
+  const licOverdue = licViews.filter(v => v.daysToRenewal != null && v.daysToRenewal < 0)
+    .sort((a, b) => a.daysToRenewal - b.daysToRenewal);
+  const licSoon = licViews.filter(v => v.daysToRenewal != null && v.daysToRenewal >= 0 && v.daysToRenewal <= 30)
+    .sort((a, b) => a.daysToRenewal - b.daysToRenewal);
+  if (licOverdue.length) {
+    alerts.push({
+      key: 'lic-overdue', severity: 'danger', view: 'licencje',
+      title: 'Licencje przeterminowane',
+      count: licOverdue.length,
+      hint: `${licOverdue.length} po terminie odnowienia`,
+      items: licOverdue.slice(0, 8).map(v => ({
+        label: v.name, meta: `${Math.abs(v.daysToRenewal)} dni po terminie`
+      }))
+    });
+  }
+  if (licSoon.length) {
+    alerts.push({
+      key: 'lic-soon', severity: 'warn', view: 'licencje',
+      title: 'Licencje do odnowienia',
+      count: licSoon.length,
+      hint: `${licSoon.length} w ciągu 30 dni`,
+      items: licSoon.slice(0, 8).map(v => ({
+        label: v.name, meta: v.daysToRenewal === 0 ? 'dziś' : `za ${v.daysToRenewal} dni`
+      }))
+    });
+  }
+
+  // 4. Prośby o dostęp/sprzęt w onboardingu (TiL) czekające na przyznanie.
+  if (tilRequested > 0) {
+    alerts.push({
+      key: 'til-requested', severity: 'danger', view: 'onboarding',
+      title: 'Prośby o dostęp (onboarding)',
+      count: tilRequested,
+      hint: `${tilRequested} ${plProsby(tilRequested)} czeka na przyznanie`,
+      items: []
+    });
+  }
+
+  // 5. Osoby w trakcie onboardingu (postęp < 100%).
+  if (onbPeople.length) {
+    const stepsTotal = await db.collection(collections.onboardingSteps).countDocuments({ isActive: { $ne: false } });
+    const emails = onbPeople.map(p => p.email);
+    const progress = emails.length
+      ? await db.collection(collections.onboardingProgress).find({ userEmail: { $in: emails } }).toArray()
+      : [];
+    const steps = await db.collection(collections.onboardingSteps)
+      .find({ isActive: { $ne: false } }, { projection: { owner: 1 } }).toArray();
+    const byUser = new Map();
+    for (const p of progress) {
+      if (!byUser.has(p.userEmail)) byUser.set(p.userEmail, new Map());
+      byUser.get(p.userEmail).set(String(p.stepId), p);
+    }
+    const rows = onbPeople.map(u => {
+      const prog = byUser.get(u.email) || new Map();
+      const done = steps.filter(s => onboardingStepComplete({ owner: s.owner === 'til' ? 'til' : 'self' }, prog.get(String(s._id)))).length;
+      const pct = stepsTotal ? Math.round((done / stepsTotal) * 100) : 0;
+      return { fullName: u.fullName || u.email, pct };
+    }).filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct);
+    if (rows.length) {
+      alerts.push({
+        key: 'onboarding', severity: 'warn', view: 'onboarding',
+        title: 'Onboarding w toku',
+        count: rows.length,
+        hint: `${rows.length} ${plOsoby(rows.length)} nie zakończyło`,
+        items: rows.slice(0, 8).map(r => ({ label: r.fullName, meta: `${r.pct}%` }))
+      });
+    }
+  }
+
+  // 6. Wnioski o wypożyczenie/zakup oczekujące na decyzję.
+  if (pendingReqCount > 0) {
+    alerts.push({
+      key: 'requests', severity: 'warn', view: 'skrzynka',
+      title: 'Wnioski oczekujące',
+      count: pendingReqCount,
+      hint: `${pendingReqCount} ${plWnioski(pendingReqCount)} do rozpatrzenia`,
+      items: []
+    });
+  }
+
+  // 7. Gwarancje wygasające (≤30 dni, w tym już wygasłe).
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const warranty = warrantyDocs
+    .map(doc => {
+      const parsed = new Date(doc.warrantyUntil);
+      if (Number.isNaN(parsed.getTime())) return null;
+      const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+      const daysLeft = Math.round((target - today) / dayMs);
+      return { itemCode: doc.itemCode, name: doc.name || '', daysLeft };
+    })
+    .filter(Boolean).filter(e => e.daysLeft < 30).sort((a, b) => a.daysLeft - b.daysLeft);
+  if (warranty.length) {
+    alerts.push({
+      key: 'warranty', severity: 'warn', view: 'admin',
+      title: 'Gwarancje wygasające',
+      count: warranty.length,
+      hint: `${warranty.length} w ciągu 30 dni`,
+      items: warranty.slice(0, 8).map(e => ({
+        label: `${e.itemCode} · ${e.name}`,
+        meta: e.daysLeft < 0 ? `${Math.abs(e.daysLeft)} dni po terminie` : (e.daysLeft === 0 ? 'dziś' : `za ${e.daysLeft} dni`)
+      }))
+    });
+  }
+
+  res.json({ generatedAt: now.toISOString(), total: alerts.reduce((s, a) => s + a.count, 0), alerts });
+});
+
 // ===== Zarządzanie użytkownikami (tylko admin) =====
 
 app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
