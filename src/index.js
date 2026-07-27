@@ -3085,12 +3085,16 @@ app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
   const db = await getDb();
 
   const users = await db.collection(collections.users)
-    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1, googleId: 1 } })
+    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1, googleId: 1, offboardedAt: 1 } })
     .sort({ fullName: 1 })
     .toArray();
 
   // Brak googleId → konto utworzone z góry, jeszcze bez pierwszego logowania.
-  res.json(users.map(({ googleId, ...u }) => ({ ...u, pendingFirstLogin: !googleId })));
+  res.json(users.map(({ googleId, ...u }) => ({
+    ...u,
+    pendingFirstLogin: !googleId,
+    offboarded: u.isActive === false || !!u.offboardedAt
+  })));
 });
 
 // Utworzenie użytkownika „z góry" (przed pierwszym logowaniem) — np. by przypisać
@@ -3254,6 +3258,159 @@ app.delete('/admin/users/:email', requireAuth, requireAdmin, async (req, res) =>
   });
 
   res.json({ message: 'Usunięto użytkownika' });
+});
+
+// ===================== OFF-BOARDING =====================
+// Odejście pracownika: konto Google jest kasowane z Workspace zewnętrznie, więc nie
+// blokujemy tu logowania — off-boarding służy do UPORZĄDKOWANIA tego, co osoba wciąż
+// „trzyma" w systemie (sprzęt, licencje, przyznane dostępy TiL) i do dezaktywacji
+// konta, żeby zniknęło z list wyboru (kierownik/przypisania) i z paneli onboardingu.
+
+// Zbiera wszystko, co jest powiązane z odchodzącą osobą. Czyste odczyty — używane
+// zarówno przez podgląd (GET) jak i do policzenia zakresu sprzątania przy „Zakończ".
+async function collectOffboardingHoldings(db, email) {
+  const [loans, licensesAll, accessProg] = await Promise.all([
+    db.collection(collections.loans)
+      .find({ userEmail: email, status: 'active' }, { projection: { itemCode: 1, itemName: 1, quantity: 1, borrowedAt: 1 } })
+      .sort({ borrowedAt: -1 }).toArray(),
+    db.collection(collections.licenses).find({ isActive: { $ne: false } }).toArray(),
+    db.collection(collections.onboardingProgress)
+      .find({ userEmail: email, state: { $in: ['granted', 'confirmed'] } }).toArray()
+  ]);
+
+  const loanCodes = new Set(loans.map(l => String(l.itemCode || '').trim().toUpperCase()).filter(Boolean));
+
+  // Uzupełnij nazwy sprzętu dla wypożyczeń bez itemName (legacy).
+  const codesForNames = [...new Set(loans.map(l => l.itemCode).filter(Boolean))];
+  const nameByCode = new Map();
+  if (codesForNames.length) {
+    const its = await db.collection(collections.items)
+      .find({ itemCode: { $in: codesForNames } }, { projection: { itemCode: 1, name: 1 } }).toArray();
+    for (const it of its) nameByCode.set(it.itemCode, it.name || '');
+  }
+
+  // Pozycje przypisane „na sztywno" (assignedToEmail — np. import Excela) bez aktywnego
+  // wypożyczenia tej osoby — żeby nie dublować tego, co już jest na liście wypożyczeń.
+  const legacyRaw = await db.collection(collections.items)
+    .find({ assignedToEmail: email, isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1 } }).toArray();
+  const legacyItems = legacyRaw.filter(it => !loanCodes.has(String(it.itemCode || '').trim().toUpperCase()));
+
+  const em = email.toLowerCase();
+  const seats = licensesAll.filter(l => (Array.isArray(l.assignedTo) ? l.assignedTo : [])
+    .some(a => String(a || '').trim().toLowerCase() === em));
+  const owned = licensesAll.filter(l => String(l.ownerEmail || '').toLowerCase() === em);
+
+  const stepIds = accessProg.map(p => p.stepId).filter(Boolean);
+  const steps = stepIds.length
+    ? await db.collection(collections.onboardingSteps)
+        .find({ _id: { $in: stepIds.map(id => { try { return new ObjectId(id); } catch { return null; } }).filter(Boolean) } },
+          { projection: { title: 1 } }).toArray()
+    : [];
+  const titleById = new Map(steps.map(s => [String(s._id), s.title || '']));
+  const accesses = accessProg.map(p => ({ stepId: String(p.stepId), title: titleById.get(String(p.stepId)) || '(krok)', state: p.state }));
+
+  return {
+    loans: loans.map(l => ({ id: String(l._id), itemCode: l.itemCode, itemName: l.itemName || nameByCode.get(l.itemCode) || '', quantity: Number(l.quantity) || 1, borrowedAt: l.borrowedAt || null })),
+    legacyItems: legacyItems.map(it => ({ itemCode: it.itemCode, name: it.name || '' })),
+    seats: seats.map(l => ({ id: String(l._id), name: l.name || '' })),
+    owned: owned.map(l => ({ id: String(l._id), name: l.name || '' })),
+    accesses
+  };
+}
+
+app.get('/admin/offboarding/:email', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+  const user = await db.collection(collections.users).findOne(
+    { email },
+    { projection: { email: 1, fullName: 1, role: 1, isActive: 1, offboardedAt: 1, onboardingStatus: 1 } }
+  );
+  if (!user) return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+  const holdings = await collectOffboardingHoldings(db, email);
+  res.json({
+    user: {
+      email: user.email, fullName: user.fullName || user.email, role: user.role || 'user',
+      isActive: user.isActive !== false, offboardedAt: user.offboardedAt || null,
+      onboardingStatus: user.onboardingStatus || null
+    },
+    ...holdings,
+    total: holdings.loans.length + holdings.legacyItems.length + holdings.seats.length + holdings.owned.length + holdings.accesses.length
+  });
+});
+
+// „Zakończ off-boarding": oddaje cały sprzęt do magazynu, zdejmuje osobę z licencji
+// (miejsca + zwolnienie właściciela), cofa przyznane dostępy TiL do stanu wyjściowego,
+// odpina bezpośrednich podwładnych i dezaktywuje konto. Idempotentne dla części, które
+// są już czyste. Nie można off-boardować samego siebie.
+app.post('/admin/offboarding/:email/finish', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+  if (email === req.user.email) return res.status(400).json({ message: 'Nie możesz off-boardować własnego konta' });
+  const user = await db.collection(collections.users).findOne({ email });
+  if (!user) return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+
+  const returnLocation = String(req.body?.returnLocation || 'Magazyn').trim() || 'Magazyn';
+  const now = new Date();
+  const holdings = await collectOffboardingHoldings(db, email);
+
+  // 1. Oddaj wszystkie aktywne wypożyczenia do magazynu (ta sama logika co zwrot).
+  for (const loan of holdings.loans) {
+    await db.collection(collections.loans).updateOne(
+      { _id: new ObjectId(loan.id), status: 'active' },
+      { $set: { status: 'returned', returnedAt: now, returnLocation, returnNote: 'Off-boarding', closedByEmail: req.user.email } }
+    );
+    const code = String(loan.itemCode || '').trim().toUpperCase();
+    if (code) await syncItemAssignment(db, code, { defaultLocation: returnLocation });
+  }
+
+  // 2. Odepnij pozycje przypisane „na sztywno" i przelicz przypisanie.
+  for (const it of holdings.legacyItems) {
+    await db.collection(collections.items).updateOne(
+      { itemCode: it.itemCode }, { $set: { assignedToEmail: null, assignedToName: null, updatedAt: now } }
+    );
+    await syncItemAssignment(db, String(it.itemCode).trim().toUpperCase(), { defaultLocation: returnLocation });
+  }
+
+  // 3. Zdejmij osobę z miejsc licencji i zwolnij licencje, których była właścicielem.
+  await db.collection(collections.licenses).updateMany(
+    { assignedTo: { $exists: true } },
+    { $pull: { assignedTo: { $in: [email, email.toLowerCase()] } }, $set: { updatedAt: now } }
+  );
+  if (holdings.owned.length) {
+    await db.collection(collections.licenses).updateMany(
+      { _id: { $in: holdings.owned.map(l => new ObjectId(l.id)) } },
+      { $set: { ownerEmail: null, ownerName: '', updatedAt: now } }
+    );
+  }
+
+  // 4. Cofnij przyznane dostępy TiL do stanu wyjściowego (pending).
+  if (holdings.accesses.length) {
+    await db.collection(collections.onboardingProgress).updateMany(
+      { userEmail: email, state: { $in: ['granted', 'confirmed'] } },
+      { $set: { state: 'pending', updatedAt: now } }
+    );
+  }
+
+  // 5. Odepnij bezpośrednich podwładnych (routing wniosków) i dezaktywuj konto.
+  await db.collection(collections.users).updateMany({ managerEmail: email }, { $set: { managerEmail: null } });
+  await db.collection(collections.users).updateOne(
+    { email },
+    { $set: { isActive: false, onboardingStatus: 'offboarded', offboardedAt: now, offboardedByEmail: req.user.email, updatedAt: now } }
+  );
+
+  const summary = {
+    loansReturned: holdings.loans.length,
+    itemsUnassigned: holdings.legacyItems.length,
+    licenseSeatsRemoved: holdings.seats.length,
+    licensesOwnershipCleared: holdings.owned.length,
+    accessesRevoked: holdings.accesses.length
+  };
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email, actionType: 'user_offboarded', entityType: 'user', entityId: email,
+    payload: { email, fullName: user.fullName || null, ...summary }, createdAt: now
+  });
+
+  res.json({ message: 'Zakończono off-boarding', summary });
 });
 
 app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
