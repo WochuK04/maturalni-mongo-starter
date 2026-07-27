@@ -110,3 +110,16 @@ Testy używają `node:test`. `test:unit` nie wymaga bazy; `test`/`test:int` wyma
 ## Deploy
 
 Wdrażane na Vercelu jako funkcja serverless (moduł eksportuje `app`). Zmienne środowiskowe konfigurowane w panelu Vercela; produkcja łączy się z Atlasem.
+
+## Troubleshooting
+
+- **Po „Sign in with Google" wraca na ekran logowania (sesja gubiona).** Objaw to `/me` zwracające 401 tuż po zalogowaniu. Zwykle znaczy, że session store nie zapisał sesji — sprawdź logi Vercela pod kątem `[session-store] błąd:`. Store współdzieli klienta Mongo aplikacji (`getMongoClient`), więc wymaga poprawnego `MONGODB_URI`/`MONGO_URI` **oraz** ustawionego `SESSION_SECRET`. Na serverless upewnij się, że `app.set('trust proxy', 1)` działa i cookie sesji nie jest blokowane (HTTPS na prodzie).
+- **`Brak MONGO_URI / MONGODB_URI w zmiennych środowiskowych`.** Aplikacja nie wystartuje bez connection stringa. Ustaw `MONGODB_URI` (lokalnie) lub `MONGO_URI` (prod).
+- **`401 Brak autoryzacji` na endpointach API.** Nie ma aktywnej sesji — zaloguj się przez `/auth/google`. Jeśli logowanie odrzuca maila: sprawdź `ALLOWED_EMAIL_DOMAIN` (dopuszcza tylko `@<domena>`).
+- **`403 Brak uprawnień…`.** Konto ma za niską rolę. Role nadaje admin w panelu „Użytkownicy"; pierwszy admin (`k.woch@<domena>`) tworzy się automatycznie przy logowaniu.
+- **Testy nie łączą się z bazą.** `test`/`test:int` wymagają dostępnego MongoDB i dummy zmiennych `GOOGLE_*`. **Nie ustawiaj `MONGO_DB_NAME`** — testy używają izolowanej bazy. Jeśli nie masz lokalnego Mongo, odpal same testy jednostkowe: `npm run test:unit`.
+- **Zmiana roli/kierownika nie działa bez ponownego logowania?** Powinna działać — `deserializeUser` pobiera świeży dokument użytkownika przy każdym żądaniu. Jeśli nie widać efektu, sprawdź, czy zmiana zapisała się w kolekcji `users`.
+
+## Dalsza dokumentacja
+
+Konwencje pracy (gałęzie, commity, testy przed PR) opisuje [CONTRIBUTING.md](CONTRIBUTING.md).
