@@ -253,6 +253,7 @@
 
   // ---- Pulpit
   async function loadPulpit() {
+    loadPulpitAlerts();
     if (!state.cache.available) await refreshCounts();
     else {
       const availCount = (state.cache.available || []).reduce((s, i) => s + (Number(i.available) || 0), 0);
@@ -291,6 +292,42 @@
   function activityText(r) {
     const label = r.kind === 'purchase' ? 'Wniosek o zakup' : 'Wniosek o wypożyczenie';
     return `${label} — ${r.itemName || r.itemCode || ''} (${statusLabel(r.status)})`;
+  }
+
+  // Panel „Wymaga uwagi" (tylko admin): skonsolidowane alerty z /admin/alerts.
+  const ALERT_GO_VIEWS = ['magazyn', 'licencje', 'onboarding'];
+  async function loadPulpitAlerts() {
+    const panel = $('[data-pulpit-alerts]');
+    if (!panel) return;
+    const isAdmin = state.user && state.user.role === 'admin';
+    if (!isAdmin) { panel.hidden = true; return; }
+    const body = $('[data-alerts-body]');
+    const totalEl = $('[data-alerts-total]');
+    try {
+      const data = await api('/admin/alerts');
+      const groups = (data && data.alerts) || [];
+      if (!groups.length) {
+        panel.hidden = false;
+        if (totalEl) totalEl.textContent = '';
+        if (body) body.innerHTML = emptyBlock('Wszystko na bieżąco ✓', 'Brak spraw wymagających uwagi.');
+        return;
+      }
+      panel.hidden = false;
+      if (totalEl) totalEl.textContent = String(data.total || groups.reduce((s, g) => s + (g.count || 0), 0));
+      if (body) body.innerHTML = groups.map((g) => {
+        const nav = ALERT_GO_VIEWS.includes(g.view) ? `data-go="${esc(g.view)}"` : `data-view="${esc(g.view)}"`;
+        const rows = (g.items || []).map((it) =>
+          `<div class="alert-item"><span class="ai-label">${esc(it.label)}</span><span class="ai-meta">${esc(it.meta || '')}</span></div>`).join('');
+        return `<button class="alert-group sev-${esc(g.severity)}" ${nav}>
+          <div class="ag-head"><span class="ag-dot"></span><span class="ag-title">${esc(g.title)}</span>
+            <span class="ag-count">${g.count}</span></div>
+          <div class="ag-hint">${esc(g.hint || '')}</div>
+          ${rows ? `<div class="ag-items">${rows}</div>` : ''}</button>`;
+      }).join('');
+    } catch (_) {
+      panel.hidden = false;
+      if (body) body.innerHTML = emptyBlock('Nie udało się wczytać alertów', '');
+    }
   }
 
   // ---- Dostępny sprzęt
