@@ -376,6 +376,18 @@ details.cmt[open]>summary{margin-bottom:8px;}
 .hist-when{font-size:11.5px;color:var(--muted-2);white-space:nowrap;flex-shrink:0;}
 .hist-sec-title{font-size:16px;font-weight:600;color:var(--ink);margin:28px 0 12px;}
 
+/* Zwijane sekcje Skrzynki */
+.sec-toggle{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;padding:0;margin:28px 0 12px;
+  font:inherit;font-size:16px;font-weight:600;color:var(--ink);text-align:left;cursor:pointer;}
+.sec-toggle .chev{color:var(--muted-2);flex:0 0 auto;transform:rotate(90deg);transition:transform .18s;}
+.sec-toggle.collapsed .chev{transform:rotate(0deg);}
+.sec-toggle .t{flex:0 0 auto;}
+.sec-toggle .sec-count{min-width:22px;height:22px;padding:0 7px;border-radius:11px;background:var(--blue-soft);color:var(--blue);
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+.sec-toggle .sec-count:empty{display:none;}
+.sec-toggle:hover .t{color:var(--blue);}
+.sec-body.collapsed{display:none;}
+
 /* ==========================================================================
    MODAL SHEET
    ========================================================================== */

@@ -223,7 +223,7 @@
     if (view === 'pulpit') return loadPulpit();
     if (view === 'available') return loadAvailable();
     if (view === 'mojsprzet') return loadMine();
-    if (view === 'skrzynka') { loadInbox(); loadReports(); loadMyRequests(); loadHistory(); return; }
+    if (view === 'skrzynka') { applySkrzynkaCollapse(); loadInbox(); loadReports(); loadMyRequests(); loadHistory(); return; }
     if (view === 'zespol') return loadTeam();
     if (view === 'stats') return loadStats();
     if (view === 'users') return loadUsers();
@@ -401,10 +401,42 @@
     </div>`;
   }
 
+  // ---- Zwijane sekcje Skrzynki (stan zapamiętany w localStorage) ----
+  const SKRZYNKA_COLLAPSE_KEY = 'zaplecze.skrzynka.collapsed';
+  // Domyślnie zwinięta „Historia aktywności" (najdłuższa, archiwalna) — reszta rozwinięta.
+  const SEC_DEFAULT_COLLAPSED = { history: true };
+  function skrzynkaCollapseState() {
+    try { return JSON.parse(localStorage.getItem(SKRZYNKA_COLLAPSE_KEY)) || {}; }
+    catch (_) { return {}; }
+  }
+  function isSecCollapsed(key) {
+    const st = skrzynkaCollapseState();
+    return key in st ? !!st[key] : !!SEC_DEFAULT_COLLAPSED[key];
+  }
+  function applySecCollapse(key) {
+    const collapsed = isSecCollapsed(key);
+    const btn = $(`[data-sec-toggle="${key}"]`);
+    const body = $(`[data-sec-body="${key}"]`);
+    if (btn) btn.classList.toggle('collapsed', collapsed);
+    if (body) body.classList.toggle('collapsed', collapsed);
+  }
+  function applySkrzynkaCollapse() { ['decide', 'reports', 'mine', 'history'].forEach(applySecCollapse); }
+  function toggleSec(key) {
+    const st = skrzynkaCollapseState();
+    st[key] = !isSecCollapsed(key);
+    try { localStorage.setItem(SKRZYNKA_COLLAPSE_KEY, JSON.stringify(st)); } catch (_) { /* brak localStorage */ }
+    applySecCollapse(key);
+  }
+  function setSecCount(key, n) {
+    const el = $(`[data-sec-count="${key}"]`);
+    if (el) el.textContent = n > 0 ? String(n) : '';
+  }
+
   function loadInbox() {
     const wrap = $('[data-skrzynka-decide-wrap]'); const list = $('[data-skrzynka-list]');
     const render = (items) => {
       if (wrap) wrap.hidden = !items.length;
+      setSecCount('decide', items.length);
       if (!items.length) { list.innerHTML = ''; return; }
       list.innerHTML = items.map((r) => requestCard(r, 'decide')).join('');
       bindCommentThreads(list);
@@ -418,6 +450,7 @@
   function loadMyRequests() {
     const list = $('[data-skrzynka-mine]'); if (!list) return;
     const render = (items) => {
+      setSecCount('mine', items.length);
       if (!items.length) { list.innerHTML = emptyBlock('Brak wniosków', 'Twoje wnioski o wypożyczenie i zakup pojawią się tutaj.'); return; }
       list.innerHTML = items.map((r) => requestCard(r, 'mine')).join('');
       bindCommentThreads(list);
@@ -437,6 +470,7 @@
     if (!isAdmin) { wrap.hidden = true; return; }
     const render = (items) => {
       wrap.hidden = false;
+      setSecCount('reports', items.filter((n) => n.status !== 'resolved').length);
       if (!items.length) { list.innerHTML = emptyBlock('Brak zgłoszeń', 'Usterki i transfery pojawią się tutaj.'); return; }
       list.innerHTML = items.map((n) => {
         const resolved = n.status === 'resolved';
@@ -504,6 +538,7 @@
     const box = $('[data-skrzynka-history]');
     if (!box) return;
     const render = (events) => {
+      setSecCount('history', events.length);
       if (!events.length) { box.innerHTML = emptyBlock('Brak historii', 'Twoje zgłoszenia, transfery i wnioski pojawią się tutaj.'); return; }
       box.innerHTML = events.map((ev) => {
         const name = ev.itemName || ev.itemCode || '';
@@ -2623,7 +2658,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2725,6 +2760,7 @@
     if (t.hasAttribute('data-req-cancel')) { cancelOwnRequest(t.getAttribute('data-req-cancel')); return; }
     if (t.hasAttribute('data-cmt-send')) { const d = t.closest('details.cmt'); sendComment(t.getAttribute('data-cmt-send'), d); return; }
     if (t.hasAttribute('data-notif-resolve')) { resolveNotif(t.getAttribute('data-notif-resolve')); return; }
+    if (t.dataset.secToggle) { toggleSec(t.dataset.secToggle); return; }
     if (t.hasAttribute('data-rej-tab')) { setRejTab(t.getAttribute('data-rej-tab')); return; }
     if (t.hasAttribute('data-rej-csv')) { exportRejCSV(); return; }
     if (t.hasAttribute('data-user-new')) { openSheet('newUser', {}); return; }
