@@ -253,6 +253,7 @@
 
   // ---- Pulpit
   async function loadPulpit() {
+    loadPulpitAlerts();
     if (!state.cache.available) await refreshCounts();
     else {
       const availCount = (state.cache.available || []).reduce((s, i) => s + (Number(i.available) || 0), 0);
@@ -291,6 +292,42 @@
   function activityText(r) {
     const label = r.kind === 'purchase' ? 'Wniosek o zakup' : 'Wniosek o wypożyczenie';
     return `${label} — ${r.itemName || r.itemCode || ''} (${statusLabel(r.status)})`;
+  }
+
+  // Panel „Wymaga uwagi" (tylko admin): skonsolidowane alerty z /admin/alerts.
+  const ALERT_GO_VIEWS = ['magazyn', 'licencje', 'onboarding'];
+  async function loadPulpitAlerts() {
+    const panel = $('[data-pulpit-alerts]');
+    if (!panel) return;
+    const isAdmin = state.user && state.user.role === 'admin';
+    if (!isAdmin) { panel.hidden = true; return; }
+    const body = $('[data-alerts-body]');
+    const totalEl = $('[data-alerts-total]');
+    try {
+      const data = await api('/admin/alerts');
+      const groups = (data && data.alerts) || [];
+      if (!groups.length) {
+        panel.hidden = false;
+        if (totalEl) totalEl.textContent = '';
+        if (body) body.innerHTML = emptyBlock('Wszystko na bieżąco ✓', 'Brak spraw wymagających uwagi.');
+        return;
+      }
+      panel.hidden = false;
+      if (totalEl) totalEl.textContent = String(data.total || groups.reduce((s, g) => s + (g.count || 0), 0));
+      if (body) body.innerHTML = groups.map((g) => {
+        const nav = ALERT_GO_VIEWS.includes(g.view) ? `data-go="${esc(g.view)}"` : `data-view="${esc(g.view)}"`;
+        const rows = (g.items || []).map((it) =>
+          `<div class="alert-item"><span class="ai-label">${esc(it.label)}</span><span class="ai-meta">${esc(it.meta || '')}</span></div>`).join('');
+        return `<button class="alert-group sev-${esc(g.severity)}" ${nav}>
+          <div class="ag-head"><span class="ag-dot"></span><span class="ag-title">${esc(g.title)}</span>
+            <span class="ag-count">${g.count}</span></div>
+          <div class="ag-hint">${esc(g.hint || '')}</div>
+          ${rows ? `<div class="ag-items">${rows}</div>` : ''}</button>`;
+      }).join('');
+    } catch (_) {
+      panel.hidden = false;
+      if (body) body.innerHTML = emptyBlock('Nie udało się wczytać alertów', '');
+    }
   }
 
   // ---- Dostępny sprzęt
@@ -1330,11 +1367,21 @@
     api('/onboarding/steps/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.onb = null; loadOnboarding(); refreshOnboardingCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
-  // Akcja pracownika na kroku TiL (request/confirm/unconfirm).
+  // Akcja pracownika na kroku TiL (request/confirm/unconfirm). Optymistycznie —
+  // aktualizujemy stan w cache i przerysowujemy listę BEZ ponownego pobierania
+  // (żeby nie było przeładowania/spinnera); w razie błędu cofamy.
   function onbTilAction(id, action) {
+    const step = (state.onb || []).find((s) => s.id === id);
+    if (!step) return;
+    const prev = { state: step.state, done: step.done };
+    if (action === 'request' && step.state === 'pending') step.state = 'requested';
+    else if (action === 'confirm' && step.state === 'granted') { step.state = 'confirmed'; step.done = true; }
+    else if (action === 'unconfirm' && step.state === 'confirmed') { step.state = 'granted'; step.done = false; }
+    else return;
+    loadOnboarding(); // re-render z cache
     api('/onboarding/' + encodeURIComponent(id) + '/toggle', { method: 'POST', body: JSON.stringify({ action }) })
-      .then(() => { state.onb = null; loadOnboarding(); refreshOnboardingCounts(); })
-      .catch((e) => toast(e.message || 'Nie udało się.', true));
+      .then(() => refreshOnboardingCounts())
+      .catch((e) => { step.state = prev.state; step.done = prev.done; loadOnboarding(); toast(e.message || 'Nie udało się.', true); });
   }
 
   function setOnbTab(tab) {
@@ -2187,9 +2234,11 @@
       list.innerHTML = tableHTML(
         [{ t: 'Użytkownik' }, { t: 'E-mail' }, { t: 'Rola' }, { t: 'Wnioski trafiają do' }, { t: '', num: true }],
         users.map((u) => ({ cells: [
-          { html: `${esc(u.fullName || u.email)}${u.pendingFirstLogin ? ' <span class="chip chip-orange">oczekuje na logowanie</span>' : ''}` },
+          { html: `${esc(u.fullName || u.email)}${u.pendingFirstLogin ? ' <span class="chip chip-orange">oczekuje na logowanie</span>' : ''}${u.offboarded ? ' <span class="chip chip-grey">off-boarded</span>' : ''}` },
           { v: u.email, cls: 'mut' }, { html: roleSel(u) }, { html: mgrSel(u) },
-          { html: u.email === me ? '<span class="eq-sub">to Ty</span>' : `<button class="btn btn-danger-ghost btn-sm" data-user-del="${esc(u.email)}">Usuń</button>`, cls: 'num' }
+          { html: u.email === me
+              ? '<span class="eq-sub">to Ty</span>'
+              : `<div class="row-actions">${u.offboarded ? '' : `<button class="btn btn-ghost btn-sm" data-user-offboard="${esc(u.email)}">Off-board</button>`}<button class="btn btn-danger-ghost btn-sm" data-user-del="${esc(u.email)}">Usuń</button></div>`, cls: 'num' }
         ] }))
       );
       bindUserSelects(list);
@@ -2208,6 +2257,55 @@
     if (!confirm('Usunąć użytkownika ' + email + '?')) return;
     api('/admin/users/' + encodeURIComponent(email), { method: 'DELETE' })
       .then(() => { toast('Usunięto użytkownika.'); loadUsers(); })
+      .catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // Off-boarding: drawer z tym, co osoba trzyma + akcja „Zakończ".
+  function offbSection(title, rows, renderRow) {
+    if (!rows.length) return '';
+    return `<div style="margin-bottom:18px;"><div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">${esc(title)} <span class="eq-sub">(${rows.length})</span></div>
+      <div style="display:flex;flex-direction:column;gap:6px;">${rows.map(renderRow).join('')}</div></div>`;
+  }
+  function openOffboarding(email) {
+    const wrap = $('#drawer-wrap'); const box = $('#drawer');
+    wrap.classList.remove('hidden');
+    box.innerHTML = '<div class="loading">Ładowanie…</div>';
+    api('/admin/offboarding/' + encodeURIComponent(email)).then((d) => {
+      const row = (label, meta) => `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);"><span style="color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span><span style="color:var(--muted);flex-shrink:0;">${esc(meta || '')}</span></div>`;
+      const sections = [
+        offbSection('Sprzęt (wypożyczenia)', d.loans, (l) => row(`${l.itemCode} · ${l.itemName || ''}`, `${l.quantity} szt.`)),
+        offbSection('Sprzęt przypisany na sztywno', d.legacyItems, (it) => row(`${it.itemCode} · ${it.name || ''}`, '')),
+        offbSection('Licencje (miejsca)', d.seats, (l) => row(l.name, '')),
+        offbSection('Licencje (właściciel)', d.owned, (l) => row(l.name, 'zwolnimy właściciela')),
+        offbSection('Przyznane dostępy (onboarding)', d.accesses, (a) => row(a.title, a.state === 'confirmed' ? 'potwierdzony' : 'przyznany'))
+      ].filter(Boolean).join('');
+      const clean = d.total === 0;
+      box.innerHTML = `
+        <div class="drawer-head">
+          <div class="tags"><span class="chip chip-grey">Off-boarding</span></div>
+          <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+        <div class="drawer-body">
+          <h2>${esc(d.user.fullName)}</h2>
+          <p class="sub">${esc(d.user.email)} · ${esc(ROLE_LABELS[d.user.role] || d.user.role)}</p>
+          ${clean
+            ? emptyBlock('Nic do uporządkowania', 'Ta osoba nie trzyma sprzętu, licencji ani dostępów.')
+            : `<p style="font-size:13px;color:var(--muted);margin:0 0 16px;">Zakończenie odda sprzęt do magazynu, zdejmie osobę z licencji, cofnie dostępy i dezaktywuje konto.</p>${sections}`}
+        </div>
+        <div class="drawer-foot">
+          <button class="btn btn-danger" style="flex:1;" data-offb-finish="${esc(d.user.email)}">Zakończ off-boarding</button>
+          <button class="btn btn-ghost" data-close-drawer>Anuluj</button>
+        </div>`;
+    }).catch((e) => { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; });
+  }
+  function finishOffboarding(email) {
+    if (!confirm('Zakończyć off-boarding ' + email + '?\nSprzęt wróci do magazynu, dostępy zostaną cofnięte, konto zdezaktywowane.')) return;
+    api('/admin/offboarding/' + encodeURIComponent(email) + '/finish', { method: 'POST', body: JSON.stringify({}) })
+      .then((r) => {
+        const s = (r && r.summary) || {};
+        toast(`Off-boarding zakończony (oddano ${s.loansReturned || 0} szt., cofnięto ${s.accessesRevoked || 0} dostępów).`);
+        closeDrawer(); loadUsers();
+      })
       .catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
@@ -2655,10 +2753,8 @@
   }
 
   // -------------------------------------------------------------- global events
-
-  // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-user-offboard],[data-offb-finish],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2765,6 +2861,8 @@
     if (t.hasAttribute('data-rej-csv')) { exportRejCSV(); return; }
     if (t.hasAttribute('data-user-new')) { openSheet('newUser', {}); return; }
     if (t.hasAttribute('data-user-del')) { delUser(t.getAttribute('data-user-del')); return; }
+    if (t.hasAttribute('data-user-offboard')) { openOffboarding(t.getAttribute('data-user-offboard')); return; }
+    if (t.hasAttribute('data-offb-finish')) { finishOffboarding(t.getAttribute('data-offb-finish')); return; }
   });
 
   document.addEventListener('keydown', (e) => {

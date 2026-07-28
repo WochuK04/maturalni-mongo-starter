@@ -13,6 +13,13 @@ import { setupPassport, requireAuth, requireAdmin, requireManager, requireWareho
 import { LOCATION_KINDS, OPERATION_TYPES, RESERVING_OP_TYPES, validateOperation, reverseOperation, nextReference, isOperationType, computeReplenishment, replenishmentDraft, reservedQuantities, checkReservation, isReorderScope, isProtectedLocation, slugifyLocationCode, cascadeItemCodeRename, computeValuation, summarizeMovesByKind, computeGiftThresholdReport, GIFT_VAT_THRESHOLD, computeStockHealth, recomputeQuants, refreshItemCache, computeAging, applyMove } from './stock.js';
 import { createOperationPdfDoc } from './operation-pdf.js';
 import { MANAGER_MAP } from './manager-map.js';
+import { licenseView } from './lib/licenses.js';
+import { registerLicenseRoutes } from './routes/licenses.js';
+import { onboardingStepComplete } from './lib/onboarding.js';
+import { registerOnboardingRoutes } from './routes/onboarding.js';
+import { normalizeItemCode } from './lib/item-code.js';
+import { WAREHOUSE_ONLY_CATEGORIES, isWarehouseCategory } from './lib/categories.js';
+import { registerTurboWeekendRoutes } from './routes/turbo-weekends.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -79,10 +86,6 @@ app.use(express.static('public', { index: false }));
 // Escape znaków specjalnych regexu — do bezpiecznego dopasowania tekstu z usera.
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function normalizeItemCode(value) {
-  return String(value || '').trim().toUpperCase();
 }
 
 function parseBoolean(value) {
@@ -221,46 +224,6 @@ const FALLBACK_LOCATIONS = ['Magazyn', 'Studio', 'Biuro', 'U pracownika', 'Serwi
 // Widok „Dostępny sprzęt" pokazuje TYLKO elektronikę, więc te kategorie są z niego
 // wykluczone (pozostają widoczne w module Magazyn, który prezentuje wszystkie kategorie).
 // Porównanie jest case-insensitive — trzymamy wartości po małej literze.
-const WAREHOUSE_ONLY_CATEGORIES = ['gadżet', 'opakowanie', 'sponsor', 'towar'];
-
-// Moduł „Magazyn" pokazuje DOKŁADNIE te kategorie (nie-elektronikę). Elektronika
-// (i pozostałe, np. Roll-up) żyje w widoku „Dostępny sprzęt". Case-insensitive.
-const isWarehouseCategory = (category) =>
-  WAREHOUSE_ONLY_CATEGORIES.includes(String(category || '').trim().toLowerCase());
-
-// === Turbo Weekend =========================================================
-// Startowa lista pakowania. mode 'per_person' → sztuki = ceil(uczestnicy ×
-// value), 'fixed' → stała ilość niezależna od liczby osób. roundUpTo zaokrągla
-// w górę do wielokrotności (np. woda w zgrzewkach po 6).
-const DEFAULT_PACKING_ITEMS = [
-  { name: 'Notesy', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
-  { name: 'Długopisy', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
-  { name: 'Teczki z materiałami', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
-  { name: 'Identyfikatory', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
-  { name: 'Smycze', mode: 'per_person', value: 1, unit: 'szt.', category: 'Materiały' },
-  { name: 'Koszulki', mode: 'per_person', value: 1, unit: 'szt.', category: 'Gadżety' },
-  { name: 'Woda (butelki)', mode: 'per_person', value: 1.5, unit: 'szt.', roundUpTo: 6, category: 'Katering' },
-  { name: 'Przekąski / batony', mode: 'per_person', value: 1, unit: 'szt.', category: 'Katering' },
-  { name: 'Markery do flipcharta', mode: 'fixed', value: 10, unit: 'szt.', category: 'Materiały' },
-  { name: 'Baner roll-up', mode: 'fixed', value: 2, unit: 'szt.', category: 'Sprzęt' },
-  { name: 'Głośnik', mode: 'fixed', value: 1, unit: 'szt.', category: 'Sprzęt' },
-  { name: 'Mikrofon', mode: 'fixed', value: 2, unit: 'szt.', category: 'Sprzęt' },
-  { name: 'Przedłużacz', mode: 'fixed', value: 3, unit: 'szt.', category: 'Sprzęt' },
-  { name: 'Apteczka', mode: 'fixed', value: 1, unit: 'szt.', category: 'Sprzęt' }
-];
-
-// Dla danej liczby uczestników wylicza sztuki każdej pozycji listy pakowania.
-function computePackingQuantity(item, participants) {
-  const people = Math.max(0, Number(participants) || 0);
-  const roundUpTo = Math.max(1, Number(item.roundUpTo) || 1);
-  if (item.mode === 'fixed') {
-    return Math.max(0, Math.round(Number(item.fixed) || 0));
-  }
-  const raw = people * (Number(item.perPerson) || 0);
-  const rounded = Math.ceil(raw);
-  // Zaokrąglenie w górę do pełnej paczki (np. zgrzewki wody po 6).
-  return Math.ceil(rounded / roundUpTo) * roundUpTo;
-}
 
 // Stan techniczny z importu CSV bywa wpisany "po polsku" albo jako surowa wartość.
 // Sprowadzamy do znanej wartości z ITEM_CONDITIONS, w razie wątpliwości fallback.
@@ -3079,18 +3042,207 @@ app.get('/admin/stats', requireAuth, requireAdmin, async (_req, res) => {
   });
 });
 
+// Polska odmiana przez liczbę (1 / 2-4 / 5+), z regułą dla nastek (12-14 → forma „wiele").
+function plForm(n, one, few, many) {
+  const abs = Math.abs(Number(n) || 0);
+  const d = abs % 10, h = abs % 100;
+  if (abs === 1) return one;
+  if (d >= 2 && d <= 4 && !(h >= 12 && h <= 14)) return few;
+  return many;
+}
+const plPozycje = (n) => plForm(n, 'pozycja', 'pozycje', 'pozycji');
+const plProsby = (n) => plForm(n, 'prośba', 'prośby', 'próśb');
+const plOsoby = (n) => plForm(n, 'osoba', 'osoby', 'osób');
+const plWnioski = (n) => plForm(n, 'wniosek', 'wnioski', 'wniosków');
+
+// Pulpit — skonsolidowane alerty „co wymaga uwagi" w jednym miejscu, zamiast klikania
+// po zakładkach. Agreguje po stronie serwera: braki magazynowe (reguły poniżej minimum),
+// starzejący się stan (>180 dni), licencje przeterminowane / do odnowienia (≤30 dni),
+// prośby o dostęp w onboardingu (TiL: „requested"), osoby w trakcie onboardingu,
+// wnioski oczekujące na decyzję oraz gwarancje wygasające (≤30 dni). Zwraca tylko
+// niepuste grupy; `view` wskazuje zakładkę do przejścia w SPA. Tylko admin.
+app.get('/admin/alerts', requireAuth, requireAdmin, async (_req, res) => {
+  const db = await getDb();
+  const now = new Date();
+
+  const [replen, agingReport, licenses, onbPeople, tilRequested, pendingReqCount, warrantyDocs] = await Promise.all([
+    computeReplenishment(db),
+    (async () => {
+      const items = (await db.collection(collections.items)
+        .find({ isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1, category: 1, priceBatches: 1 } })
+        .toArray()).filter(it => isWarehouseCategory(it.category));
+      return computeAging(items, now);
+    })(),
+    db.collection(collections.licenses).find({ isActive: { $ne: false } }).toArray(),
+    db.collection(collections.users)
+      .find({ onboardingStatus: 'in_progress' }, { projection: { email: 1, fullName: 1, onboardingStartedAt: 1 } })
+      .sort({ onboardingStartedAt: 1 }).toArray(),
+    db.collection(collections.onboardingProgress).countDocuments({ state: 'requested' }),
+    db.collection(collections.loanRequests).countDocuments({ status: { $in: ACTIVE_REQUEST_STATUSES } }),
+    db.collection(collections.items)
+      .find({ isActive: { $ne: false }, warrantyUntil: { $nin: [null, ''] } },
+        { projection: { itemCode: 1, name: 1, warrantyUntil: 1 } }).toArray()
+  ]);
+
+  const alerts = [];
+
+  // 1. Braki magazynowe — reguły poniżej minimum (liczone od stanu dostępnego).
+  const below = replen.filter(r => r.below).sort((a, b) => (b.toOrder || 0) - (a.toOrder || 0));
+  if (below.length) {
+    alerts.push({
+      key: 'stock-below', severity: 'danger', view: 'magazyn',
+      title: 'Braki magazynowe',
+      count: below.length,
+      hint: `${below.length} ${plPozycje(below.length)} poniżej minimum`,
+      items: below.slice(0, 8).map(r => ({
+        label: r.label, meta: `dostępne ${r.available}/${r.minQty} · domów ${r.toOrder}`
+      }))
+    });
+  }
+
+  // 2. Starzejący się stan (>180 dni).
+  const aged = (agingReport.products || []).filter(p => (p.agedQty || 0) > 0)
+    .sort((a, b) => (b.oldestDays || 0) - (a.oldestDays || 0));
+  if (aged.length) {
+    const agedValue = Math.round(aged.reduce((s, p) => s + (p.agedValue || 0), 0) * 100) / 100;
+    alerts.push({
+      key: 'aging', severity: 'warn', view: 'magazyn',
+      title: 'Zalegający stan (>180 dni)',
+      count: aged.length,
+      hint: `${aged.length} ${plPozycje(aged.length)} · ${agedValue.toLocaleString('pl-PL')} zł`,
+      items: aged.slice(0, 8).map(p => ({
+        label: `${p.itemCode} · ${p.name}`,
+        meta: `${p.agedQty} szt. · ${p.oldestDays == null ? 'brak daty' : p.oldestDays + ' dni'}`
+      }))
+    });
+  }
+
+  // 3. Licencje — przeterminowane (danger) i do odnowienia w ≤30 dni (warn).
+  const licViews = licenses.map(l => licenseView(l, now)).filter(v => v.status !== 'cancelled');
+  const licOverdue = licViews.filter(v => v.daysToRenewal != null && v.daysToRenewal < 0)
+    .sort((a, b) => a.daysToRenewal - b.daysToRenewal);
+  const licSoon = licViews.filter(v => v.daysToRenewal != null && v.daysToRenewal >= 0 && v.daysToRenewal <= 30)
+    .sort((a, b) => a.daysToRenewal - b.daysToRenewal);
+  if (licOverdue.length) {
+    alerts.push({
+      key: 'lic-overdue', severity: 'danger', view: 'licencje',
+      title: 'Licencje przeterminowane',
+      count: licOverdue.length,
+      hint: `${licOverdue.length} po terminie odnowienia`,
+      items: licOverdue.slice(0, 8).map(v => ({
+        label: v.name, meta: `${Math.abs(v.daysToRenewal)} dni po terminie`
+      }))
+    });
+  }
+  if (licSoon.length) {
+    alerts.push({
+      key: 'lic-soon', severity: 'warn', view: 'licencje',
+      title: 'Licencje do odnowienia',
+      count: licSoon.length,
+      hint: `${licSoon.length} w ciągu 30 dni`,
+      items: licSoon.slice(0, 8).map(v => ({
+        label: v.name, meta: v.daysToRenewal === 0 ? 'dziś' : `za ${v.daysToRenewal} dni`
+      }))
+    });
+  }
+
+  // 4. Prośby o dostęp/sprzęt w onboardingu (TiL) czekające na przyznanie.
+  if (tilRequested > 0) {
+    alerts.push({
+      key: 'til-requested', severity: 'danger', view: 'onboarding',
+      title: 'Prośby o dostęp (onboarding)',
+      count: tilRequested,
+      hint: `${tilRequested} ${plProsby(tilRequested)} czeka na przyznanie`,
+      items: []
+    });
+  }
+
+  // 5. Osoby w trakcie onboardingu (postęp < 100%).
+  if (onbPeople.length) {
+    const stepsTotal = await db.collection(collections.onboardingSteps).countDocuments({ isActive: { $ne: false } });
+    const emails = onbPeople.map(p => p.email);
+    const progress = emails.length
+      ? await db.collection(collections.onboardingProgress).find({ userEmail: { $in: emails } }).toArray()
+      : [];
+    const steps = await db.collection(collections.onboardingSteps)
+      .find({ isActive: { $ne: false } }, { projection: { owner: 1 } }).toArray();
+    const byUser = new Map();
+    for (const p of progress) {
+      if (!byUser.has(p.userEmail)) byUser.set(p.userEmail, new Map());
+      byUser.get(p.userEmail).set(String(p.stepId), p);
+    }
+    const rows = onbPeople.map(u => {
+      const prog = byUser.get(u.email) || new Map();
+      const done = steps.filter(s => onboardingStepComplete({ owner: s.owner === 'til' ? 'til' : 'self' }, prog.get(String(s._id)))).length;
+      const pct = stepsTotal ? Math.round((done / stepsTotal) * 100) : 0;
+      return { fullName: u.fullName || u.email, pct };
+    }).filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct);
+    if (rows.length) {
+      alerts.push({
+        key: 'onboarding', severity: 'warn', view: 'onboarding',
+        title: 'Onboarding w toku',
+        count: rows.length,
+        hint: `${rows.length} ${plOsoby(rows.length)} nie zakończyło`,
+        items: rows.slice(0, 8).map(r => ({ label: r.fullName, meta: `${r.pct}%` }))
+      });
+    }
+  }
+
+  // 6. Wnioski o wypożyczenie/zakup oczekujące na decyzję.
+  if (pendingReqCount > 0) {
+    alerts.push({
+      key: 'requests', severity: 'warn', view: 'skrzynka',
+      title: 'Wnioski oczekujące',
+      count: pendingReqCount,
+      hint: `${pendingReqCount} ${plWnioski(pendingReqCount)} do rozpatrzenia`,
+      items: []
+    });
+  }
+
+  // 7. Gwarancje wygasające (≤30 dni, w tym już wygasłe).
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const warranty = warrantyDocs
+    .map(doc => {
+      const parsed = new Date(doc.warrantyUntil);
+      if (Number.isNaN(parsed.getTime())) return null;
+      const target = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+      const daysLeft = Math.round((target - today) / dayMs);
+      return { itemCode: doc.itemCode, name: doc.name || '', daysLeft };
+    })
+    .filter(Boolean).filter(e => e.daysLeft < 30).sort((a, b) => a.daysLeft - b.daysLeft);
+  if (warranty.length) {
+    alerts.push({
+      key: 'warranty', severity: 'warn', view: 'admin',
+      title: 'Gwarancje wygasające',
+      count: warranty.length,
+      hint: `${warranty.length} w ciągu 30 dni`,
+      items: warranty.slice(0, 8).map(e => ({
+        label: `${e.itemCode} · ${e.name}`,
+        meta: e.daysLeft < 0 ? `${Math.abs(e.daysLeft)} dni po terminie` : (e.daysLeft === 0 ? 'dziś' : `za ${e.daysLeft} dni`)
+      }))
+    });
+  }
+
+  res.json({ generatedAt: now.toISOString(), total: alerts.reduce((s, a) => s + a.count, 0), alerts });
+});
+
 // ===== Zarządzanie użytkownikami (tylko admin) =====
 
 app.get('/admin/users', requireAuth, requireAdmin, async (_req, res) => {
   const db = await getDb();
 
   const users = await db.collection(collections.users)
-    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1, googleId: 1 } })
+    .find({}, { projection: { email: 1, fullName: 1, role: 1, managerEmail: 1, isActive: 1, googleId: 1, offboardedAt: 1 } })
     .sort({ fullName: 1 })
     .toArray();
 
   // Brak googleId → konto utworzone z góry, jeszcze bez pierwszego logowania.
-  res.json(users.map(({ googleId, ...u }) => ({ ...u, pendingFirstLogin: !googleId })));
+  res.json(users.map(({ googleId, ...u }) => ({
+    ...u,
+    pendingFirstLogin: !googleId,
+    offboarded: u.isActive === false || !!u.offboardedAt
+  })));
 });
 
 // Utworzenie użytkownika „z góry" (przed pierwszym logowaniem) — np. by przypisać
@@ -3254,6 +3406,159 @@ app.delete('/admin/users/:email', requireAuth, requireAdmin, async (req, res) =>
   });
 
   res.json({ message: 'Usunięto użytkownika' });
+});
+
+// ===================== OFF-BOARDING =====================
+// Odejście pracownika: konto Google jest kasowane z Workspace zewnętrznie, więc nie
+// blokujemy tu logowania — off-boarding służy do UPORZĄDKOWANIA tego, co osoba wciąż
+// „trzyma" w systemie (sprzęt, licencje, przyznane dostępy TiL) i do dezaktywacji
+// konta, żeby zniknęło z list wyboru (kierownik/przypisania) i z paneli onboardingu.
+
+// Zbiera wszystko, co jest powiązane z odchodzącą osobą. Czyste odczyty — używane
+// zarówno przez podgląd (GET) jak i do policzenia zakresu sprzątania przy „Zakończ".
+async function collectOffboardingHoldings(db, email) {
+  const [loans, licensesAll, accessProg] = await Promise.all([
+    db.collection(collections.loans)
+      .find({ userEmail: email, status: 'active' }, { projection: { itemCode: 1, itemName: 1, quantity: 1, borrowedAt: 1 } })
+      .sort({ borrowedAt: -1 }).toArray(),
+    db.collection(collections.licenses).find({ isActive: { $ne: false } }).toArray(),
+    db.collection(collections.onboardingProgress)
+      .find({ userEmail: email, state: { $in: ['granted', 'confirmed'] } }).toArray()
+  ]);
+
+  const loanCodes = new Set(loans.map(l => String(l.itemCode || '').trim().toUpperCase()).filter(Boolean));
+
+  // Uzupełnij nazwy sprzętu dla wypożyczeń bez itemName (legacy).
+  const codesForNames = [...new Set(loans.map(l => l.itemCode).filter(Boolean))];
+  const nameByCode = new Map();
+  if (codesForNames.length) {
+    const its = await db.collection(collections.items)
+      .find({ itemCode: { $in: codesForNames } }, { projection: { itemCode: 1, name: 1 } }).toArray();
+    for (const it of its) nameByCode.set(it.itemCode, it.name || '');
+  }
+
+  // Pozycje przypisane „na sztywno" (assignedToEmail — np. import Excela) bez aktywnego
+  // wypożyczenia tej osoby — żeby nie dublować tego, co już jest na liście wypożyczeń.
+  const legacyRaw = await db.collection(collections.items)
+    .find({ assignedToEmail: email, isActive: { $ne: false } }, { projection: { itemCode: 1, name: 1 } }).toArray();
+  const legacyItems = legacyRaw.filter(it => !loanCodes.has(String(it.itemCode || '').trim().toUpperCase()));
+
+  const em = email.toLowerCase();
+  const seats = licensesAll.filter(l => (Array.isArray(l.assignedTo) ? l.assignedTo : [])
+    .some(a => String(a || '').trim().toLowerCase() === em));
+  const owned = licensesAll.filter(l => String(l.ownerEmail || '').toLowerCase() === em);
+
+  const stepIds = accessProg.map(p => p.stepId).filter(Boolean);
+  const steps = stepIds.length
+    ? await db.collection(collections.onboardingSteps)
+        .find({ _id: { $in: stepIds.map(id => { try { return new ObjectId(id); } catch { return null; } }).filter(Boolean) } },
+          { projection: { title: 1 } }).toArray()
+    : [];
+  const titleById = new Map(steps.map(s => [String(s._id), s.title || '']));
+  const accesses = accessProg.map(p => ({ stepId: String(p.stepId), title: titleById.get(String(p.stepId)) || '(krok)', state: p.state }));
+
+  return {
+    loans: loans.map(l => ({ id: String(l._id), itemCode: l.itemCode, itemName: l.itemName || nameByCode.get(l.itemCode) || '', quantity: Number(l.quantity) || 1, borrowedAt: l.borrowedAt || null })),
+    legacyItems: legacyItems.map(it => ({ itemCode: it.itemCode, name: it.name || '' })),
+    seats: seats.map(l => ({ id: String(l._id), name: l.name || '' })),
+    owned: owned.map(l => ({ id: String(l._id), name: l.name || '' })),
+    accesses
+  };
+}
+
+app.get('/admin/offboarding/:email', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+  const user = await db.collection(collections.users).findOne(
+    { email },
+    { projection: { email: 1, fullName: 1, role: 1, isActive: 1, offboardedAt: 1, onboardingStatus: 1 } }
+  );
+  if (!user) return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+  const holdings = await collectOffboardingHoldings(db, email);
+  res.json({
+    user: {
+      email: user.email, fullName: user.fullName || user.email, role: user.role || 'user',
+      isActive: user.isActive !== false, offboardedAt: user.offboardedAt || null,
+      onboardingStatus: user.onboardingStatus || null
+    },
+    ...holdings,
+    total: holdings.loans.length + holdings.legacyItems.length + holdings.seats.length + holdings.owned.length + holdings.accesses.length
+  });
+});
+
+// „Zakończ off-boarding": oddaje cały sprzęt do magazynu, zdejmuje osobę z licencji
+// (miejsca + zwolnienie właściciela), cofa przyznane dostępy TiL do stanu wyjściowego,
+// odpina bezpośrednich podwładnych i dezaktywuje konto. Idempotentne dla części, które
+// są już czyste. Nie można off-boardować samego siebie.
+app.post('/admin/offboarding/:email/finish', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb();
+  const email = String(req.params.email || '').trim().toLowerCase();
+  if (email === req.user.email) return res.status(400).json({ message: 'Nie możesz off-boardować własnego konta' });
+  const user = await db.collection(collections.users).findOne({ email });
+  if (!user) return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
+
+  const returnLocation = String(req.body?.returnLocation || 'Magazyn').trim() || 'Magazyn';
+  const now = new Date();
+  const holdings = await collectOffboardingHoldings(db, email);
+
+  // 1. Oddaj wszystkie aktywne wypożyczenia do magazynu (ta sama logika co zwrot).
+  for (const loan of holdings.loans) {
+    await db.collection(collections.loans).updateOne(
+      { _id: new ObjectId(loan.id), status: 'active' },
+      { $set: { status: 'returned', returnedAt: now, returnLocation, returnNote: 'Off-boarding', closedByEmail: req.user.email } }
+    );
+    const code = String(loan.itemCode || '').trim().toUpperCase();
+    if (code) await syncItemAssignment(db, code, { defaultLocation: returnLocation });
+  }
+
+  // 2. Odepnij pozycje przypisane „na sztywno" i przelicz przypisanie.
+  for (const it of holdings.legacyItems) {
+    await db.collection(collections.items).updateOne(
+      { itemCode: it.itemCode }, { $set: { assignedToEmail: null, assignedToName: null, updatedAt: now } }
+    );
+    await syncItemAssignment(db, String(it.itemCode).trim().toUpperCase(), { defaultLocation: returnLocation });
+  }
+
+  // 3. Zdejmij osobę z miejsc licencji i zwolnij licencje, których była właścicielem.
+  await db.collection(collections.licenses).updateMany(
+    { assignedTo: { $exists: true } },
+    { $pull: { assignedTo: { $in: [email, email.toLowerCase()] } }, $set: { updatedAt: now } }
+  );
+  if (holdings.owned.length) {
+    await db.collection(collections.licenses).updateMany(
+      { _id: { $in: holdings.owned.map(l => new ObjectId(l.id)) } },
+      { $set: { ownerEmail: null, ownerName: '', updatedAt: now } }
+    );
+  }
+
+  // 4. Cofnij przyznane dostępy TiL do stanu wyjściowego (pending).
+  if (holdings.accesses.length) {
+    await db.collection(collections.onboardingProgress).updateMany(
+      { userEmail: email, state: { $in: ['granted', 'confirmed'] } },
+      { $set: { state: 'pending', updatedAt: now } }
+    );
+  }
+
+  // 5. Odepnij bezpośrednich podwładnych (routing wniosków) i dezaktywuj konto.
+  await db.collection(collections.users).updateMany({ managerEmail: email }, { $set: { managerEmail: null } });
+  await db.collection(collections.users).updateOne(
+    { email },
+    { $set: { isActive: false, onboardingStatus: 'offboarded', offboardedAt: now, offboardedByEmail: req.user.email, updatedAt: now } }
+  );
+
+  const summary = {
+    loansReturned: holdings.loans.length,
+    itemsUnassigned: holdings.legacyItems.length,
+    licenseSeatsRemoved: holdings.seats.length,
+    licensesOwnershipCleared: holdings.owned.length,
+    accessesRevoked: holdings.accesses.length
+  };
+  await db.collection(collections.auditLogs).insertOne({
+    actorEmail: req.user.email, actionType: 'user_offboarded', entityType: 'user', entityId: email,
+    payload: { email, fullName: user.fullName || null, ...summary }, createdAt: now
+  });
+
+  res.json({ message: 'Zakończono off-boarding', summary });
 });
 
 app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
@@ -4459,757 +4764,18 @@ app.get('/admin/audit-logs', requireAuth, requireAdmin, async (req, res) => {
   res.json(logs);
 });
 
-// === Turbo Weekend: API =====================================================
-
-// Jednorazowy (per proces) seed startowej listy pakowania, gdy kolekcja pusta.
-// Middleware bootujący biegnie po trasach, więc seedujemy leniwie z endpointów.
-let packingSeedPromise = null;
-function ensurePackingSeed(db) {
-  if (!packingSeedPromise) {
-    packingSeedPromise = (async () => {
-      const count = await db.collection(collections.packingItems).countDocuments({});
-      if (count > 0) return;
-      const now = new Date();
-      await db.collection(collections.packingItems).insertMany(
-        DEFAULT_PACKING_ITEMS.map((it, i) => ({
-          name: it.name,
-          unit: it.unit || 'szt.',
-          mode: it.mode,
-          perPerson: it.mode === 'per_person' ? it.value : null,
-          fixed: it.mode === 'fixed' ? it.value : null,
-          roundUpTo: it.roundUpTo || 1,
-          category: it.category || 'Materiały',
-          sortOrder: i,
-          isActive: true,
-          createdAt: now,
-          updatedAt: now
-        }))
-      );
-    })().catch((err) => { packingSeedPromise = null; throw err; });
-  }
-  return packingSeedPromise;
-}
-
-// Normalizacja pozycji listy pakowania z body (create/update).
-function normalizePackingBody(body) {
-  const mode = body?.mode === 'fixed' ? 'fixed' : 'per_person';
-  const doc = {
-    name: String(body?.name || '').trim(),
-    unit: String(body?.unit || 'szt.').trim() || 'szt.',
-    mode,
-    perPerson: mode === 'per_person' ? Math.max(0, Number(body?.perPerson) || 0) : null,
-    fixed: mode === 'fixed' ? Math.max(0, Math.round(Number(body?.fixed) || 0)) : null,
-    roundUpTo: Math.max(1, Math.round(Number(body?.roundUpTo) || 1)),
-    category: String(body?.category || 'Materiały').trim() || 'Materiały',
-    // Opcjonalny link do produktu Magazynu (itemCode). Tylko pozycje z linkiem
-    // ruszają stan magazynowy przy pakowaniu/powrocie.
-    itemCode: body?.itemCode ? normalizeItemCode(body.itemCode) : null
-  };
-  return doc;
-}
-
 // ===================== LICENCJE / SUBSKRYPCJE =====================
-// Rekord licencji: koszty (mies./rok), stanowiska, odnowienia, dostępy.
-// UWAGA bezpieczeństwo: NIE przechowujemy haseł — tylko login, URL panelu i
-// notatkę „gdzie jest hasło" (np. 1Password). Odczyt: kierownik/admin. Zapis: admin.
-const LICENSE_STATUSES = ['active', 'trial', 'cancelled'];
-const DAY_MS_LIC = 24 * 60 * 60 * 1000;
-
-function normalizeAssigned(v) {
-  const arr = Array.isArray(v) ? v : String(v || '').split(',');
-  return arr.map(x => String(x || '').trim()).filter(Boolean).slice(0, 100);
-}
-
-function licenseView(l, now = new Date()) {
-  const amount = Math.max(0, Number(l.costAmount) || 0);
-  const cycle = l.costCycle === 'yearly' ? 'yearly' : 'monthly';
-  const monthlyCost = cycle === 'yearly' ? Math.round((amount / 12) * 100) / 100 : amount;
-  const yearlyCost = cycle === 'yearly' ? amount : Math.round(amount * 12 * 100) / 100;
-  const renewal = l.renewalDate ? new Date(l.renewalDate) : null;
-  const daysToRenewal = renewal && !Number.isNaN(renewal.getTime())
-    ? Math.floor((renewal.getTime() - now.getTime()) / DAY_MS_LIC) : null;
-  return {
-    id: String(l._id),
-    name: l.name || '',
-    vendor: l.vendor || '',
-    category: l.category || '',
-    costAmount: amount,
-    costCycle: cycle,
-    monthlyCost,
-    yearlyCost,
-    seats: l.seats == null ? null : Math.max(0, Number(l.seats) || 0),
-    renewalDate: l.renewalDate || null,
-    daysToRenewal,
-    status: LICENSE_STATUSES.includes(l.status) ? l.status : 'active',
-    ownerEmail: l.ownerEmail || null,
-    ownerName: l.ownerName || '',
-    assignedTo: Array.isArray(l.assignedTo) ? l.assignedTo : [],
-    loginUsername: l.loginUsername || '',
-    panelUrl: l.panelUrl || '',
-    passwordLocation: l.passwordLocation || '',
-    notes: l.notes || ''
-  };
-}
-
-// Buduje dokument licencji z body (create/patch współdzielą walidację pól).
-async function licenseDocFromBody(db, body, base = {}) {
-  const doc = { ...base };
-  if (body.name !== undefined) doc.name = String(body.name || '').trim();
-  if (body.vendor !== undefined) doc.vendor = String(body.vendor || '').trim();
-  if (body.category !== undefined) doc.category = String(body.category || '').trim();
-  if (body.costAmount !== undefined) doc.costAmount = Math.max(0, Number(body.costAmount) || 0);
-  if (body.costCycle !== undefined) doc.costCycle = body.costCycle === 'yearly' ? 'yearly' : 'monthly';
-  if (body.seats !== undefined) doc.seats = body.seats === '' || body.seats == null ? null : Math.max(0, Number(body.seats) || 0);
-  if (body.renewalDate !== undefined) doc.renewalDate = body.renewalDate ? String(body.renewalDate) : null;
-  if (body.status !== undefined) doc.status = LICENSE_STATUSES.includes(body.status) ? body.status : 'active';
-  if (body.ownerEmail !== undefined) {
-    const email = String(body.ownerEmail || '').trim().toLowerCase();
-    doc.ownerEmail = email || null;
-    if (email) {
-      const u = await db.collection(collections.users).findOne({ email }, { projection: { fullName: 1 } });
-      doc.ownerName = u?.fullName || email;
-    } else doc.ownerName = '';
-  }
-  if (body.assignedTo !== undefined) doc.assignedTo = normalizeAssigned(body.assignedTo);
-  if (body.loginUsername !== undefined) doc.loginUsername = String(body.loginUsername || '').trim();
-  if (body.panelUrl !== undefined) doc.panelUrl = String(body.panelUrl || '').trim();
-  if (body.passwordLocation !== undefined) doc.passwordLocation = String(body.passwordLocation || '').trim();
-  if (body.notes !== undefined) doc.notes = String(body.notes || '').trim();
-  return doc;
-}
-
-app.get('/licenses', requireAuth, requireManager, async (_req, res) => {
-  const db = await getDb();
-  const now = new Date();
-  const list = await db.collection(collections.licenses)
-    .find({ isActive: { $ne: false } }).sort({ name: 1 }).toArray();
-  res.json(list.map(l => licenseView(l, now)));
-});
-
-app.get('/licenses/summary', requireAuth, requireManager, async (_req, res) => {
-  const db = await getDb();
-  const now = new Date();
-  const list = await db.collection(collections.licenses)
-    .find({ isActive: { $ne: false } }).toArray();
-  const views = list.map(l => licenseView(l, now));
-  const live = views.filter(v => v.status !== 'cancelled');
-  const monthlyTotal = Math.round(live.reduce((s, v) => s + v.monthlyCost, 0) * 100) / 100;
-  const upcoming = live.filter(v => v.daysToRenewal != null && v.daysToRenewal >= 0 && v.daysToRenewal <= 30).length;
-  const overdue = live.filter(v => v.daysToRenewal != null && v.daysToRenewal < 0).length;
-  res.json({
-    count: views.length,
-    activeCount: live.length,
-    monthlyTotal,
-    yearlyTotal: Math.round(monthlyTotal * 12 * 100) / 100,
-    upcomingCount: upcoming,
-    overdueCount: overdue
-  });
-});
-
-app.post('/licenses', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const name = String(req.body.name || '').trim();
-  if (!name) return res.status(400).json({ message: 'Podaj nazwę licencji' });
-  const now = new Date();
-  const doc = await licenseDocFromBody(db, req.body, {
-    name, costAmount: 0, costCycle: 'monthly', status: 'active', assignedTo: [],
-    isActive: true, createdByEmail: req.user.email, createdAt: now, updatedAt: now
-  });
-  const { insertedId } = await db.collection(collections.licenses).insertOne(doc);
-  res.status(201).json({ id: String(insertedId), ...licenseView({ ...doc, _id: insertedId }) });
-});
-
-app.patch('/licenses/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  if (req.body.name !== undefined && !String(req.body.name).trim()) {
-    return res.status(400).json({ message: 'Nazwa nie może być pusta' });
-  }
-  const update = await licenseDocFromBody(db, req.body, { updatedAt: new Date() });
-  const r = await db.collection(collections.licenses).updateOne({ _id: id }, { $set: update });
-  if (!r.matchedCount) return res.status(404).json({ message: 'Licencja nie istnieje' });
-  res.json({ message: 'Zapisano' });
-});
-
-app.delete('/licenses/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  await db.collection(collections.licenses).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
-  res.json({ message: 'Usunięto' });
-});
+// Logika domenowa → src/lib/licenses.js; trasy → src/routes/licenses.js.
+registerLicenseRoutes(app);
 
 // ===================== ONBOARDING =====================
-// Osobisty checklist: globalna lista kroków (admin edytuje) + postęp per
-// użytkownik (kolekcja onboardingProgress). Każdy zalogowany widzi swoją listę
-// i odhacza kroki; edycja listy kroków — tylko admin.
-function onboardingStepView(s) {
-  return {
-    id: String(s._id),
-    title: s.title || '',
-    description: s.description || '',
-    category: s.category || 'Ogólne',
-    url: s.url || '',
-    // owner: 'self' = pracownik odhacza sam; 'til' = dostęp/sprzęt (pracownik prosi,
-    // TiL przyznaje, pracownik potwierdza — krok 3-stanowy).
-    owner: s.owner === 'til' ? 'til' : 'self',
-    sortOrder: Number(s.sortOrder) || 0
-  };
-}
-
-// Czy krok jest ukończony dla danego wpisu postępu (self → done; til → confirmed).
-function onboardingStepComplete(step, progress) {
-  if ((step.owner === 'til')) return progress?.state === 'confirmed';
-  return !!(progress && progress.done);
-}
-
-app.get('/onboarding', requireAuth, async (req, res) => {
-  const db = await getDb();
-  const steps = await db.collection(collections.onboardingSteps)
-    .find({ isActive: { $ne: false } }).sort({ sortOrder: 1, createdAt: 1 }).toArray();
-  const progress = await db.collection(collections.onboardingProgress)
-    .find({ userEmail: req.user.email }).toArray();
-  const byStep = new Map(progress.map(p => [String(p.stepId), p]));
-  res.json(steps.map(s => {
-    const p = byStep.get(String(s._id));
-    const owner = s.owner === 'til' ? 'til' : 'self';
-    const state = owner === 'til' ? (p?.state || 'pending') : null;
-    return {
-      ...onboardingStepView(s),
-      done: onboardingStepComplete({ owner }, p),
-      state,
-      completedAt: (p && p.completedAt) || null
-    };
-  }));
-});
-
-app.get('/onboarding/summary', requireAuth, async (req, res) => {
-  const db = await getDb();
-  const steps = await db.collection(collections.onboardingSteps)
-    .find({ isActive: { $ne: false } }, { projection: { owner: 1 } }).toArray();
-  const total = steps.length;
-  const progress = await db.collection(collections.onboardingProgress)
-    .find({ userEmail: req.user.email }).toArray();
-  const byStep = new Map(progress.map(p => [String(p.stepId), p]));
-  const done = steps.filter(s => onboardingStepComplete({ owner: s.owner === 'til' ? 'til' : 'self' }, byStep.get(String(s._id)))).length;
-  res.json({ total, done, pct: total ? Math.round((done / total) * 100) : 0 });
-});
-
-// Akcja pracownika na kroku. self: {done} (odhaczenie). til: {action:'request'|'confirm'}
-// (pending→requested→[TiL przyznaje granted]→confirmed). „granted" ustawia tylko TiL
-// (endpoint admina) — pracownik nie może sam potwierdzić bez przyznania.
-app.post('/onboarding/:stepId/toggle', requireAuth, async (req, res) => {
-  const db = await getDb();
-  let stepId;
-  try { stepId = new ObjectId(req.params.stepId); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  const step = await db.collection(collections.onboardingSteps).findOne({ _id: stepId });
-  if (!step) return res.status(404).json({ message: 'Krok nie istnieje' });
-  const filter = { userEmail: req.user.email, stepId: String(stepId) };
-  const now = new Date();
-
-  if (step.owner === 'til') {
-    const current = (await db.collection(collections.onboardingProgress).findOne(filter))?.state || 'pending';
-    const action = req.body.action;
-    let state;
-    if (action === 'request' && current === 'pending') state = 'requested';
-    else if (action === 'confirm' && current === 'granted') state = 'confirmed';
-    else if (action === 'unconfirm' && current === 'confirmed') state = 'granted';
-    else return res.status(400).json({ message: 'Niedozwolone przejście dla tego kroku' });
-    await db.collection(collections.onboardingProgress).updateOne(
-      filter,
-      { $set: { state, completedAt: state === 'confirmed' ? now : null, updatedAt: now } },
-      { upsert: true }
-    );
-    return res.json({ message: 'Zapisano', state });
-  }
-
-  const done = req.body.done !== false;
-  await db.collection(collections.onboardingProgress).updateOne(
-    filter,
-    { $set: { done, completedAt: done ? now : null, updatedAt: now } },
-    { upsert: true }
-  );
-  res.json({ message: done ? 'Odhaczono' : 'Cofnięto', done });
-});
-
-// --- Admin: zarządzanie krokami onboardingu ---
-app.post('/onboarding/steps', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const title = String(req.body.title || '').trim();
-  if (!title) return res.status(400).json({ message: 'Podaj tytuł kroku' });
-  const now = new Date();
-  const doc = {
-    title,
-    description: String(req.body.description || '').trim(),
-    category: String(req.body.category || 'Ogólne').trim() || 'Ogólne',
-    url: String(req.body.url || '').trim(),
-    owner: req.body.owner === 'til' ? 'til' : 'self',
-    sortOrder: Number(req.body.sortOrder) || 0,
-    isActive: true,
-    createdByEmail: req.user.email,
-    createdAt: now,
-    updatedAt: now
-  };
-  const { insertedId } = await db.collection(collections.onboardingSteps).insertOne(doc);
-  res.status(201).json({ id: String(insertedId), ...onboardingStepView({ ...doc, _id: insertedId }) });
-});
-
-app.patch('/onboarding/steps/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  const update = { updatedAt: new Date() };
-  if (req.body.title !== undefined) {
-    const t = String(req.body.title || '').trim();
-    if (!t) return res.status(400).json({ message: 'Tytuł nie może być pusty' });
-    update.title = t;
-  }
-  if (req.body.description !== undefined) update.description = String(req.body.description || '').trim();
-  if (req.body.category !== undefined) update.category = String(req.body.category || 'Ogólne').trim() || 'Ogólne';
-  if (req.body.url !== undefined) update.url = String(req.body.url || '').trim();
-  if (req.body.owner !== undefined) update.owner = req.body.owner === 'til' ? 'til' : 'self';
-  if (req.body.sortOrder !== undefined) update.sortOrder = Number(req.body.sortOrder) || 0;
-  const r = await db.collection(collections.onboardingSteps).updateOne({ _id: id }, { $set: update });
-  if (!r.matchedCount) return res.status(404).json({ message: 'Krok nie istnieje' });
-  res.json({ message: 'Zapisano' });
-});
-
-app.delete('/onboarding/steps/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Niepoprawny identyfikator' }); }
-  await db.collection(collections.onboardingSteps).updateOne({ _id: id }, { $set: { isActive: false, updatedAt: new Date() } });
-  res.json({ message: 'Usunięto' });
-});
-
-// --- Admin/TiL: panel postępu onboardingu osób ---
-// Podmiotem są osoby z onboardingStatus='in_progress' (admin je startuje). Istniejący
-// użytkownicy bez tego statusu = poza panelem (zaliczony/nie dotyczy).
-app.get('/admin/onboarding', requireAuth, requireAdmin, async (_req, res) => {
-  const db = await getDb();
-  const steps = await db.collection(collections.onboardingSteps)
-    .find({ isActive: { $ne: false } }).sort({ sortOrder: 1, createdAt: 1 }).toArray();
-  const stepViews = steps.map(onboardingStepView);
-  const people = await db.collection(collections.users)
-    .find({ onboardingStatus: 'in_progress' }, { projection: { email: 1, fullName: 1, onboardingStartedAt: 1 } })
-    .sort({ onboardingStartedAt: 1, fullName: 1 }).toArray();
-  const emails = people.map(p => p.email);
-  const progress = emails.length
-    ? await db.collection(collections.onboardingProgress).find({ userEmail: { $in: emails } }).toArray()
-    : [];
-  const byUser = new Map();
-  for (const p of progress) {
-    if (!byUser.has(p.userEmail)) byUser.set(p.userEmail, new Map());
-    byUser.get(p.userEmail).set(String(p.stepId), p);
-  }
-  res.json({
-    steps: stepViews,
-    people: people.map(u => {
-      const prog = byUser.get(u.email) || new Map();
-      const stepStates = steps.map(s => {
-        const p = prog.get(String(s._id));
-        const owner = s.owner === 'til' ? 'til' : 'self';
-        return { stepId: String(s._id), owner, state: owner === 'til' ? (p?.state || 'pending') : null, done: onboardingStepComplete({ owner }, p) };
-      });
-      const done = stepStates.filter(s => s.done).length;
-      const total = steps.length;
-      return {
-        email: u.email, fullName: u.fullName || u.email,
-        startedAt: u.onboardingStartedAt || null,
-        total, done, pct: total ? Math.round((done / total) * 100) : 0,
-        steps: stepStates
-      };
-    })
-  });
-});
-
-app.post('/admin/onboarding/start', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  if (!email) return res.status(400).json({ message: 'Podaj e-mail osoby' });
-  const r = await db.collection(collections.users).updateOne(
-    { email },
-    { $set: { onboardingStatus: 'in_progress', onboardingStartedAt: new Date(), updatedAt: new Date() } }
-  );
-  if (!r.matchedCount) return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
-  res.json({ message: 'Rozpoczęto onboarding' });
-});
-
-app.post('/admin/onboarding/finish', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  if (!email) return res.status(400).json({ message: 'Podaj e-mail osoby' });
-  await db.collection(collections.users).updateOne(
-    { email },
-    { $set: { onboardingStatus: 'done', onboardingFinishedAt: new Date(), updatedAt: new Date() } }
-  );
-  res.json({ message: 'Zakończono onboarding' });
-});
-
-// TiL przyznaje/cofa krok dostępowo-sprzętowy dla konkretnej osoby.
-app.post('/admin/onboarding/grant', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  let stepId;
-  try { stepId = new ObjectId(req.body.stepId); } catch { return res.status(400).json({ message: 'Niepoprawny krok' }); }
-  const step = await db.collection(collections.onboardingSteps).findOne({ _id: stepId });
-  if (!step) return res.status(404).json({ message: 'Krok nie istnieje' });
-  if (step.owner !== 'til') return res.status(400).json({ message: 'To nie jest krok TiL (dostęp/sprzęt)' });
-  const filter = { userEmail: email, stepId: String(stepId) };
-  const current = (await db.collection(collections.onboardingProgress).findOne(filter))?.state || 'pending';
-  const action = req.body.action === 'revoke' ? 'revoke' : 'grant';
-  let state;
-  if (action === 'grant' && (current === 'pending' || current === 'requested')) state = 'granted';
-  else if (action === 'revoke' && (current === 'granted' || current === 'confirmed')) state = 'requested';
-  else return res.status(400).json({ message: 'Niedozwolone przejście' });
-  await db.collection(collections.onboardingProgress).updateOne(
-    filter, { $set: { state, updatedAt: new Date() } }, { upsert: true }
-  );
-  res.json({ message: action === 'grant' ? 'Oznaczono jako przyznane' : 'Cofnięto przyznanie', state });
-});
+// Logika domenowa → src/lib/onboarding.js; trasy → src/routes/onboarding.js.
+registerOnboardingRoutes(app);
 
 // Lista eventów TW (dla mapy i listy busów).
-app.get('/tw', requireAuth, async (_req, res) => {
-  const db = await getDb();
-  const list = await db.collection(collections.turboWeekends)
-    .find({ isActive: { $ne: false } })
-    .sort({ eventDate: 1, city: 1 })
-    .toArray();
-  res.json(list);
-});
-
-// Wyliczenie listy pakowania dla konkretnego TW (wg liczby uczestników).
-app.get('/tw/:id/packing', requireAuth, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const tw = await db.collection(collections.turboWeekends).findOne({ _id: id });
-  if (!tw) return res.status(404).json({ message: 'Nie znaleziono Turbo Weekendu' });
-
-  await ensurePackingSeed(db);
-  const participants = Math.max(0, Number(tw.participants) || 0);
-  const items = await db.collection(collections.packingItems)
-    .find({ isActive: { $ne: false } })
-    .sort({ sortOrder: 1, name: 1 })
-    .toArray();
-
-  // Stan spakowania/powrotu tego wyjazdu + stan magazynu produktów z linkiem.
-  const progressDocs = await db.collection(collections.packingProgress)
-    .find({ turboWeekendId: String(id) })
-    .toArray();
-  const progressByItem = new Map(progressDocs.map(p => [String(p.packingItemId), p]));
-
-  const linkedCodes = [...new Set(items.map(it => it.itemCode).filter(Boolean))];
-  const stockByCode = new Map();
-  if (linkedCodes.length) {
-    const prods = await db.collection(collections.items)
-      .find({ itemCode: { $in: linkedCodes } }, { projection: { itemCode: 1, quantity: 1, name: 1 } })
-      .toArray();
-    for (const p of prods) stockByCode.set(p.itemCode, { quantity: Number(p.quantity) || 0, name: p.name });
-  }
-
-  const packing = items.map(it => {
-    const needed = computePackingQuantity(it, participants);
-    const prog = progressByItem.get(String(it._id));
-    const packedQty = prog ? Number(prog.packedQty) || 0 : 0;
-    const returnedQty = prog ? Number(prog.returnedQty) || 0 : 0;
-    const status = packedQty <= 0 ? 'todo' : (returnedQty > 0 ? 'returned' : 'packed');
-    const stock = it.itemCode ? stockByCode.get(it.itemCode) : null;
-    return {
-      _id: it._id,
-      name: it.name,
-      unit: it.unit || 'szt.',
-      mode: it.mode,
-      perPerson: it.perPerson,
-      fixed: it.fixed,
-      roundUpTo: it.roundUpTo || 1,
-      category: it.category || 'Materiały',
-      itemCode: it.itemCode || null,
-      stockOnHand: stock ? stock.quantity : null,
-      quantity: needed,
-      packedQty,
-      returnedQty,
-      consumedQty: Math.max(0, packedQty - returnedQty),
-      status
-    };
-  });
-
-  res.json({
-    turboWeekend: {
-      _id: tw._id, eventType: tw.eventType || 'Turbo Weekend', city: tw.city,
-      region: tw.region || '', eventDate: tw.eventDate || '',
-      participants, bus: tw.bus || '', notes: tw.notes || ''
-    },
-    participants,
-    items: packing
-  });
-});
-
-// Lokalizacje magazynowe do ruchów pakowania: WH/Stock (źródło) i VIRT/Customers
-// (wydania „na wyjazd"). Zwraca { stockId, tripId } albo null gdy brak drzewa.
-async function tripStockLocations(db) {
-  const [stock, trip] = await Promise.all([
-    db.collection(collections.locations).findOne({ code: 'WH/Stock' }, { projection: { _id: 1 } }),
-    db.collection(collections.locations).findOne({ code: 'VIRT/Customers' }, { projection: { _id: 1 } })
-  ]);
-  if (!stock || !trip) return null;
-  return { stockId: String(stock._id), tripId: String(trip._id) };
-}
-
-// Ruch stanu dla pakowania/powrotu: 'out' = Magazyn→wydania (odjęcie stanu),
-// 'in' = wydania→Magazyn (zwrot na stan). Aktualizuje quanty i cache items.quantity.
-async function moveTripStock(db, { itemCode, qty, direction, actorEmail, note }) {
-  const quantity = Math.max(0, Number(qty) || 0);
-  if (!itemCode || quantity <= 0) return;
-  const locs = await tripStockLocations(db);
-  if (!locs) return; // brak drzewa lokalizacji — pomijamy ruch, checklist działa dalej
-  const out = direction === 'out';
-  await applyMove(db, {
-    itemCode,
-    fromLocationId: out ? locs.stockId : locs.tripId,
-    toLocationId: out ? locs.tripId : locs.stockId,
-    quantity,
-    kind: out ? 'delivery' : 'receipt',
-    actorEmail: actorEmail || null,
-    note: note || ''
-  });
-  await refreshItemCache(db, itemCode);
-}
-
-// Oznacz pozycję jako spakowaną (odejmij stan produktu z linkiem).
-app.post('/tw/:id/packing/:packingItemId/pack', requireAuth, async (req, res) => {
-  const db = await getDb();
-  let twId, itemId;
-  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
-  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId });
-  const item = await db.collection(collections.packingItems).findOne({ _id: itemId });
-  if (!tw || !item) return res.status(404).json({ message: 'Nie znaleziono wyjazdu lub pozycji' });
-
-  const needed = computePackingQuantity(item, Math.max(0, Number(tw.participants) || 0));
-  const existing = await db.collection(collections.packingProgress)
-    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
-
-  const alreadyPacked = existing ? Number(existing.packedQty) || 0 : 0;
-  const delta = needed - alreadyPacked; // zwykle całość; obsługuje też zmianę liczby osób
-  const now = new Date();
-
-  if (item.itemCode && delta > 0) {
-    await moveTripStock(db, {
-      itemCode: item.itemCode, qty: delta, direction: 'out',
-      actorEmail: req.user.email, note: `Wyjazd ${tw.city}: spakowano „${item.name}"`
-    });
-  } else if (item.itemCode && delta < 0) {
-    await moveTripStock(db, {
-      itemCode: item.itemCode, qty: -delta, direction: 'in',
-      actorEmail: req.user.email, note: `Wyjazd ${tw.city}: korekta spakowania „${item.name}"`
-    });
-  }
-
-  await db.collection(collections.packingProgress).updateOne(
-    { turboWeekendId: String(twId), packingItemId: String(itemId) },
-    {
-      $set: {
-        turboWeekendId: String(twId), packingItemId: String(itemId),
-        itemCode: item.itemCode || null, name: item.name, unit: item.unit || 'szt.',
-        neededQty: needed, packedQty: needed, packedAt: now, packedByEmail: req.user.email,
-        returnedQty: existing?.returnedQty || 0, updatedAt: now
-      }
-    },
-    { upsert: true }
-  );
-
-  res.json({ message: 'Spakowane', packedQty: needed });
-});
-
-// Cofnij spakowanie (pomyłka) — oddaj cały spakowany stan z powrotem.
-app.post('/tw/:id/packing/:packingItemId/unpack', requireAuth, async (req, res) => {
-  const db = await getDb();
-  let twId, itemId;
-  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
-  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const prog = await db.collection(collections.packingProgress)
-    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
-  if (!prog || (Number(prog.packedQty) || 0) <= 0) {
-    return res.json({ message: 'Nic do cofnięcia' });
-  }
-
-  // Oddaj na stan to, co jeszcze nie wróciło (packed − returned).
-  const toReturn = Math.max(0, (Number(prog.packedQty) || 0) - (Number(prog.returnedQty) || 0));
-  if (prog.itemCode && toReturn > 0) {
-    const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId }, { projection: { city: 1 } });
-    await moveTripStock(db, {
-      itemCode: prog.itemCode, qty: toReturn, direction: 'in',
-      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: cofnięto spakowanie „${prog.name}"`
-    });
-  }
-  await db.collection(collections.packingProgress).deleteOne({ _id: prog._id });
-  res.json({ message: 'Cofnięto spakowanie' });
-});
-
-// Powrót busa: ile danej pozycji wróciło → przyjęcie na stan. consumed = packed − returned.
-app.post('/tw/:id/packing/:packingItemId/return', requireAuth, async (req, res) => {
-  const db = await getDb();
-  let twId, itemId;
-  try { twId = new ObjectId(req.params.id); itemId = new ObjectId(req.params.packingItemId); }
-  catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const prog = await db.collection(collections.packingProgress)
-    .findOne({ turboWeekendId: String(twId), packingItemId: String(itemId) });
-  if (!prog || (Number(prog.packedQty) || 0) <= 0) {
-    return res.status(400).json({ message: 'Ta pozycja nie została spakowana' });
-  }
-
-  const packed = Number(prog.packedQty) || 0;
-  const wantReturned = Math.max(0, Math.round(Number(req.body?.returnedQty) || 0));
-  const clamped = Math.min(packed, wantReturned);
-  const prevReturned = Number(prog.returnedQty) || 0;
-  const delta = clamped - prevReturned; // dodatnie → dodaj na stan, ujemne → zdejmij
-
-  const tw = await db.collection(collections.turboWeekends).findOne({ _id: twId }, { projection: { city: 1 } });
-  if (prog.itemCode && delta > 0) {
-    await moveTripStock(db, {
-      itemCode: prog.itemCode, qty: delta, direction: 'in',
-      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: powrót „${prog.name}" (${clamped} szt.)`
-    });
-  } else if (prog.itemCode && delta < 0) {
-    await moveTripStock(db, {
-      itemCode: prog.itemCode, qty: -delta, direction: 'out',
-      actorEmail: req.user.email, note: `Wyjazd ${tw?.city || ''}: korekta powrotu „${prog.name}"`
-    });
-  }
-
-  await db.collection(collections.packingProgress).updateOne(
-    { _id: prog._id },
-    { $set: { returnedQty: clamped, returnedAt: new Date(), returnedByEmail: req.user.email, updatedAt: new Date() } }
-  );
-  res.json({ message: 'Zapisano powrót', returnedQty: clamped, consumedQty: Math.max(0, packed - clamped) });
-});
-
-// Produkty Magazynu do podpięcia pod pozycje listy pakowania (datalist).
-app.get('/packing-products', requireAuth, async (_req, res) => {
-  const db = await getDb();
-  const prods = await db.collection(collections.items)
-    .find(
-      { isActive: { $ne: false }, $expr: { $in: [{ $toLower: { $ifNull: ['$category', ''] } }, WAREHOUSE_ONLY_CATEGORIES] } },
-      { projection: { itemCode: 1, name: 1, category: 1, quantity: 1 } }
-    )
-    .sort({ name: 1 })
-    .toArray();
-  res.json(prods);
-});
-
-// --- Admin: eventy TW ---
-app.post('/admin/tw', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const { city, region = '', eventDate = '', participants, lat, lng, bus = '', notes = '', eventType = '' } = req.body || {};
-  if (!String(city || '').trim()) return res.status(400).json({ message: 'Miasto jest wymagane' });
-
-  const now = new Date();
-  const doc = {
-    eventType: String(eventType || '').trim() || 'Turbo Weekend',
-    city: String(city).trim(),
-    region: String(region || '').trim(),
-    eventDate: String(eventDate || '').trim(),
-    participants: Math.max(0, Math.round(Number(participants) || 0)),
-    lat: lat != null && lat !== '' ? Number(lat) : null,
-    lng: lng != null && lng !== '' ? Number(lng) : null,
-    bus: String(bus || '').trim(),
-    notes: String(notes || '').trim(),
-    isActive: true,
-    createdAt: now,
-    updatedAt: now
-  };
-  const result = await db.collection(collections.turboWeekends).insertOne(doc);
-  res.status(201).json({ _id: result.insertedId, ...doc });
-});
-
-app.patch('/admin/tw/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const b = req.body || {};
-  const update = { updatedAt: new Date() };
-  if (b.eventType !== undefined) update.eventType = String(b.eventType || '').trim() || 'Turbo Weekend';
-  if (b.city !== undefined) update.city = String(b.city || '').trim();
-  if (b.region !== undefined) update.region = String(b.region || '').trim();
-  if (b.eventDate !== undefined) update.eventDate = String(b.eventDate || '').trim();
-  if (b.participants !== undefined) update.participants = Math.max(0, Math.round(Number(b.participants) || 0));
-  if (b.lat !== undefined) update.lat = b.lat === '' || b.lat == null ? null : Number(b.lat);
-  if (b.lng !== undefined) update.lng = b.lng === '' || b.lng == null ? null : Number(b.lng);
-  if (b.bus !== undefined) update.bus = String(b.bus || '').trim();
-  if (b.notes !== undefined) update.notes = String(b.notes || '').trim();
-
-  const result = await db.collection(collections.turboWeekends).findOneAndUpdate(
-    { _id: id }, { $set: update }, { returnDocument: 'after' }
-  );
-  const doc = result?.value || result;
-  if (!doc) return res.status(404).json({ message: 'Nie znaleziono Turbo Weekendu' });
-  res.json(doc);
-});
-
-app.delete('/admin/tw/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-  await db.collection(collections.turboWeekends).deleteOne({ _id: id });
-  res.json({ message: 'Usunięto' });
-});
-
-// --- Lista pakowania ---
-app.get('/packing-items', requireAuth, async (_req, res) => {
-  const db = await getDb();
-  await ensurePackingSeed(db);
-  const items = await db.collection(collections.packingItems)
-    .find({ isActive: { $ne: false } })
-    .sort({ sortOrder: 1, name: 1 })
-    .toArray();
-  res.json(items);
-});
-
-app.post('/admin/packing-items', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  const doc = normalizePackingBody(req.body);
-  if (!doc.name) return res.status(400).json({ message: 'Nazwa jest wymagana' });
-
-  const now = new Date();
-  const last = await db.collection(collections.packingItems).find({}).sort({ sortOrder: -1 }).limit(1).toArray();
-  const sortOrder = (last[0]?.sortOrder ?? -1) + 1;
-
-  const result = await db.collection(collections.packingItems).insertOne({
-    ...doc, sortOrder, isActive: true, createdAt: now, updatedAt: now
-  });
-  res.status(201).json({ _id: result.insertedId, ...doc, sortOrder });
-});
-
-app.patch('/admin/packing-items/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-
-  const doc = normalizePackingBody(req.body);
-  if (!doc.name) return res.status(400).json({ message: 'Nazwa jest wymagana' });
-
-  const result = await db.collection(collections.packingItems).findOneAndUpdate(
-    { _id: id }, { $set: { ...doc, updatedAt: new Date() } }, { returnDocument: 'after' }
-  );
-  const updated = result?.value || result;
-  if (!updated) return res.status(404).json({ message: 'Nie znaleziono pozycji' });
-  res.json(updated);
-});
-
-app.delete('/admin/packing-items/:id', requireAuth, requireAdmin, async (req, res) => {
-  const db = await getDb();
-  let id;
-  try { id = new ObjectId(req.params.id); } catch { return res.status(400).json({ message: 'Zły identyfikator' }); }
-  await db.collection(collections.packingItems).deleteOne({ _id: id });
-  res.json({ message: 'Usunięto' });
-});
+// ===================== WYJAZDY (Turbo Weekend / pakowanie) =====================
+// Logika i trasy → src/routes/turbo-weekends.js.
+registerTurboWeekendRoutes(app);
 
 let bootPromise = null;
 
