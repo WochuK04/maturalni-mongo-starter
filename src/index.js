@@ -20,6 +20,7 @@ import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { normalizeItemCode } from './lib/item-code.js';
 import { WAREHOUSE_ONLY_CATEGORIES, isWarehouseCategory } from './lib/categories.js';
 import { registerTurboWeekendRoutes } from './routes/turbo-weekends.js';
+import { extractPdfText, extractItemsFromText } from './invoice-extract.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -35,7 +36,14 @@ setupPassport();
 
 app.set('trust proxy', 1);
 
-app.use(express.json());
+// Globalny limit body 100 kb (domyślny). Trasa importu faktury dostaje własny,
+// większy parser (base64 PDF), więc pomijamy dla niej globalny — inaczej 100 kb
+// odrzuciłoby plik, zanim dojdzie do parsera trasy.
+const globalJson = express.json();
+app.use((req, res, next) => {
+  if (req.path === '/admin/items/extract-invoice') return next();
+  return globalJson(req, res, next);
+});
 app.use(express.urlencoded({ extended: true }));
 
 console.log('ENV CHECK', {
@@ -3712,6 +3720,35 @@ app.post('/admin/items', requireAuth, requireAdmin, async (req, res) => {
 
 // Import zbiorczy sprzętu z CSV (Pakiet B). Body: { items: [{...}] }.
 // Waliduje pola wymagane oraz duplikaty kodów (w pliku i w bazie); zwraca raport.
+// Odczyt pozycji z faktury PDF (AI). Przeglądarka wysyła plik jako base64,
+// więc trzeba tu większy limit body niż globalne 100 kb (globalny zostaje bez zmian).
+app.post(
+  '/admin/items/extract-invoice',
+  requireAuth,
+  requireAdmin,
+  express.json({ limit: '12mb' }),
+  async (req, res) => {
+    try {
+      const { text, pages } = await extractPdfText(req.body?.fileBase64);
+      const result = await extractItemsFromText(text);
+      if (!result.items.length) {
+        return res.status(422).json({
+          message: 'Nie znaleziono żadnych pozycji sprzętu na fakturze.'
+        });
+      }
+      return res.json({ ...result, pages });
+    } catch (e) {
+      const status = Number(e?.status) || 500;
+      if (status >= 500) {
+        console.error('extract-invoice:', e?.message, e?.detail || e?.cause || '');
+      }
+      return res.status(status).json({
+        message: e?.message || 'Nie udało się odczytać faktury.'
+      });
+    }
+  }
+);
+
 app.post('/admin/items/bulk', requireAuth, requireAdmin, async (req, res) => {
   const db = await getDb();
 

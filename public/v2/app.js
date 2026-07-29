@@ -1074,6 +1074,41 @@
         invalidate(['available', 'mine']); loadAdminItems();
       }
     },
+    adminInvoice: {
+      eyebrow: 'Zarządzanie sprzętem', title: 'Wczytaj z faktury',
+      hint: 'Wybierz PDF faktury zakupowej — AI odczyta pozycje. Sprawdź i popraw je przed dodaniem.', cta: 'Dodaj zaznaczone',
+      fields: () => `
+        <label class="field"><span>Plik faktury (PDF) *</span><input type="file" accept="application/pdf,.pdf" data-invoice-file></label>
+        <div data-invoice-status class="hint" style="margin:-2px 0 4px;">Wybierz PDF z warstwą tekstową (nie skan).</div>
+        <div data-invoice-list></div>`,
+      submit: async (data, ctx) => {
+        const form = $('#sheetForm');
+        const rows = $$('[data-inv-row]', form);
+        if (!rows.length) throw new Error('Najpierw wczytaj plik PDF faktury.');
+        const picked = rows.filter((r) => { const c = $('[data-inv-pick]', r); return c && c.checked; });
+        if (!picked.length) throw new Error('Zaznacz przynajmniej jedną pozycję.');
+        const meta = (ctx && ctx.invoiceMeta) || {};
+        let ok = 0; const errs = [];
+        for (const r of picked) {
+          const item = {};
+          $$('[data-inv-f]', r).forEach((el) => { item[el.getAttribute('data-inv-f')] = el.value.trim ? el.value.trim() : el.value; });
+          item.quantity = Math.max(1, Number(item.quantity) || 1);
+          if (!item.category || !item.name) { errs.push('brak nazwy/kategorii'); continue; }
+          const price = r.getAttribute('data-inv-price');
+          const cur = r.getAttribute('data-inv-currency') || '';
+          const note = [];
+          if (meta.supplier) note.push('Dostawca: ' + meta.supplier);
+          if (meta.invoiceNumber) note.push('Faktura: ' + meta.invoiceNumber);
+          if (price && Number(price) > 0) note.push('Cena jedn.: ' + price + (cur ? ' ' + cur : ''));
+          if (note.length) item.notes = note.join(' · ');
+          try { await api('/admin/items', { method: 'POST', body: JSON.stringify(item) }); ok++; }
+          catch (e) { errs.push((item.name || 'poz.') + ': ' + (e.message || 'błąd')); }
+        }
+        if (!ok) throw new Error(errs[0] || 'Nie dodano żadnej pozycji.');
+        toast(`Dodano ${ok} poz.${errs.length ? `, błędów ${errs.length}` : ''}.`, errs.length > 0);
+        invalidate(['available', 'mine']); loadAdminItems();
+      }
+    },
     reorderRule: {
       eyebrow: 'Magazyn · Zapotrzebowanie', title: (ctx) => ctx.id ? 'Edytuj regułę' : 'Nowa reguła min-max',
       hint: 'Gdy dostępny stan spadnie poniżej minimum, pozycja trafi do braków. Dla reguły „Sprzęt” można od razu uzupełnić.', cta: 'Zapisz',
@@ -2754,7 +2789,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-user-offboard],[data-offb-finish],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-user-offboard],[data-offb-finish],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-invoice],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2762,6 +2797,7 @@
     if (t.hasAttribute('data-rr-del')) { delReorderRule(t.getAttribute('data-rr-del')); return; }
     if (t.hasAttribute('data-rr-replenish')) { replenishRule(t.getAttribute('data-rr-replenish')); return; }
 
+    if (t.hasAttribute('data-ai-invoice')) { openSheet('adminInvoice', {}); return; }
     if (t.hasAttribute('data-ai-new')) { openSheet('adminItem', {}); return; }
     if (t.hasAttribute('data-ai-edit')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-edit')); openSheet('adminItem', it || {}); return; }
     if (t.hasAttribute('data-ai-transfer')) { const it = (state.adminItems || []).find((x) => String(x._id) === t.getAttribute('data-ai-transfer')); openSheet('adminTransfer', { _id: t.getAttribute('data-ai-transfer'), name: it ? it.name : '' }); return; }
@@ -2864,6 +2900,74 @@
     if (t.hasAttribute('data-user-offboard')) { openOffboarding(t.getAttribute('data-user-offboard')); return; }
     if (t.hasAttribute('data-offb-finish')) { finishOffboarding(t.getAttribute('data-offb-finish')); return; }
   });
+
+  // Wybór pliku faktury w sheecie „Wczytaj z faktury” – czyta PDF jako base64,
+  // woła backend (AI) i renderuje edytowalną listę pozycji do zatwierdzenia.
+  document.addEventListener('change', (e) => {
+    const inp = e.target && e.target.closest ? e.target.closest('[data-invoice-file]') : null;
+    if (inp) onInvoiceFileChosen(inp);
+  });
+
+  function onInvoiceFileChosen(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const statusEl = $('#sheetForm [data-invoice-status]');
+    const listEl = $('#sheetForm [data-invoice-list]');
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+      if (statusEl) statusEl.textContent = 'To nie jest plik PDF.';
+      return;
+    }
+    if (listEl) listEl.innerHTML = '';
+    if (statusEl) statusEl.textContent = 'Czytam fakturę… to potrwa kilka sekund.';
+    const reader = new FileReader();
+    reader.onerror = () => { if (statusEl) statusEl.textContent = 'Nie udało się odczytać pliku.'; };
+    reader.onload = async () => {
+      try {
+        const res = await api('/admin/items/extract-invoice', {
+          method: 'POST',
+          body: JSON.stringify({ fileBase64: reader.result, fileName: file.name })
+        });
+        if (currentSheet && currentSheet.type === 'adminInvoice') {
+          currentSheet.ctx.invoiceMeta = { supplier: res.supplier, invoiceNumber: res.invoiceNumber, invoiceDate: res.invoiceDate };
+        }
+        renderInvoiceReview(res);
+      } catch (e) {
+        const s = $('#sheetForm [data-invoice-status]');
+        if (s) s.textContent = e.message || 'Nie udało się odczytać faktury.';
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function renderInvoiceReview(res) {
+    const listEl = $('#sheetForm [data-invoice-list]');
+    const statusEl = $('#sheetForm [data-invoice-status]');
+    const items = (res && res.items) || [];
+    if (statusEl) {
+      const bits = [res.supplier, res.invoiceNumber && ('faktura ' + res.invoiceNumber)].filter(Boolean).join(' · ');
+      statusEl.textContent = `Wykryto ${items.length} poz.${bits ? ' — ' + bits : ''}. Odznacz zbędne, popraw pola i kliknij „Dodaj zaznaczone”.`;
+    }
+    if (listEl) listEl.innerHTML = items.map(invoiceRowHTML).join('');
+  }
+
+  function invoiceRowHTML(it, i) {
+    const priceTag = it.unitPrice ? ` · ${esc(String(it.unitPrice))} ${esc(it.currency || '')}` : '';
+    return `<div data-inv-row data-inv-price="${esc(String(it.unitPrice || 0))}" data-inv-currency="${esc(it.currency || '')}" style="border:1px solid var(--line,#e2e6ea);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:6px;"><input type="checkbox" data-inv-pick checked> Pozycja ${i + 1}${priceTag}</label>
+      <div class="field-2">
+        <label class="field"><span>Kategoria *</span><input data-inv-f="category" value="${esc(it.category)}"></label>
+        <label class="field"><span>Nazwa *</span><input data-inv-f="name" value="${esc(it.name)}"></label>
+      </div>
+      <div class="field-2">
+        <label class="field"><span>Marka</span><input data-inv-f="brand" value="${esc(it.brand)}"></label>
+        <label class="field"><span>Model</span><input data-inv-f="model" value="${esc(it.model)}"></label>
+      </div>
+      <div class="field-2">
+        <label class="field"><span>Nr seryjny</span><input data-inv-f="serialNumber" value="${esc(it.serialNumber)}"></label>
+        <label class="field"><span>Ilość</span><input data-inv-f="quantity" type="number" min="1" step="1" value="${esc(String(it.quantity || 1))}"></label>
+      </div>
+    </div>`;
+  }
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closeSheet(); closeDrawer(); }
