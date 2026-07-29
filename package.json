@@ -20,8 +20,8 @@
     "mongodb": "^6.7.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "pdf-parse": "^2.4.5",
     "pdfkit": "^0.19.1",
+    "unpdf": "^1.8.0",
     "xlsx": "^0.18.5"
   }
 }

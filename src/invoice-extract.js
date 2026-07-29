@@ -5,12 +5,12 @@
 // -> zwracamy listę pozycji, którą admin przegląda przed zapisem.
 //
 // Perplexity jest OpenAI-kompatybilne, więc wołamy je zwykłym fetch-em (bez SDK).
+//
+// Do czytania PDF-a używamy `unpdf` (nie pdf-parse) — ma build pdf.js przeznaczony
+// dla środowisk serverless/Node, bez zależności od API przeglądarki (DOMMatrix),
+// które wywalało odczyt realnych faktur na Vercelu.
 
-import { createRequire } from 'module';
-
-// pdf-parse to pakiet CommonJS, który w trybie "main" próbuje otworzyć plik testowy.
-// createRequire ładuje samą bibliotekę, omijając ten debugowy fragment.
-const require = createRequire(import.meta.url);
+import { getDocumentProxy, extractText } from 'unpdf';
 
 const PERPLEXITY_URL = 'https://api.perplexity.ai/chat/completions';
 const PERPLEXITY_MODEL = process.env.PERPLEXITY_MODEL || 'sonar-pro';
@@ -104,22 +104,16 @@ export async function extractPdfText(fileBase64) {
     throw err;
   }
 
-  // pdf-parse v2: klasa PDFParse -> getText() zwraca { text, total }.
-  const { PDFParse } = require('pdf-parse');
+  // unpdf: getDocumentProxy + extractText -> { text, totalPages }.
   let parsed;
-  let parser;
   try {
-    parser = new PDFParse({ data: buffer });
-    parsed = await parser.getText();
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    parsed = await extractText(pdf, { mergePages: true });
   } catch (e) {
     const err = new Error('Nie udało się odczytać zawartości PDF-a.');
     err.status = 422;
     err.cause = e;
     throw err;
-  } finally {
-    if (parser && typeof parser.destroy === 'function') {
-      try { await parser.destroy(); } catch (_) { /* ignore */ }
-    }
   }
 
   const text = String(parsed.text || '').trim();
@@ -132,7 +126,7 @@ export async function extractPdfText(fileBase64) {
     throw err;
   }
 
-  return { text: text.slice(0, MAX_TEXT_CHARS), pages: parsed.total || null };
+  return { text: text.slice(0, MAX_TEXT_CHARS), pages: parsed.totalPages || null };
 }
 
 /**
