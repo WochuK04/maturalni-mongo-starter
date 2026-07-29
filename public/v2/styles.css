@@ -395,6 +395,8 @@ details.cmt[open]>summary{margin-bottom:8px;}
    ========================================================================== */
 .sheet-scrim{position:fixed;inset:0;z-index:60;background:rgba(12,28,68,.36);display:flex;align-items:flex-start;justify-content:center;padding:clamp(16px,6vh,72px) 16px;overflow:auto;animation:fadeIn .2s ease;}
 .sheet{width:100%;max-width:470px;background:var(--surface);border-radius:22px;padding:clamp(20px,4vw,30px);box-shadow:var(--shadow-modal);animation:popIn .28s cubic-bezier(.2,0,.2,1);}
+/* Sheet „Wczytaj z faktury" jest szerszy — mieści listę pozycji z polami dwukolumnowymi. */
+.sheet:has([data-invoice-list]){max-width:760px;}
 .sheet-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px;}
 .sheet-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--blue);}
 .sheet h3{margin:0 0 8px;font-size:22px;font-weight:600;letter-spacing:-0.8px;color:var(--heading);}
