@@ -1,4 +1,6 @@
 import { collections } from '../schema.js';
+import { CATEGORY, LOGIN_METHOD, CRITICALITY, MFA, CURRENCY, pickFromDict } from './access-dicts.js';
+import { toObjectIdOrNull } from './ids.js';
 
 // Logika domenowa licencji — współdzielona między trasami (src/routes/licenses.js)
 // a Pulpitem alertów (/admin/alerts w index.js), dlatego mieszka w osobnym module.
@@ -40,7 +42,16 @@ export function licenseView(l, now = new Date()) {
     loginUsername: l.loginUsername || '',
     panelUrl: l.panelUrl || '',
     passwordLocation: l.passwordLocation || '',
-    notes: l.notes || ''
+    notes: l.notes || '',
+    // === Mapa dostępów ===
+    identityId: l.identityId ? String(l.identityId) : null,
+    entityId: l.entityId ? String(l.entityId) : null,
+    loginMethod: l.loginMethod || '',
+    criticality: l.criticality || '',
+    mfa: l.mfa || '',
+    currency: CURRENCY.includes(l.currency) ? l.currency : 'PLN',
+    seatsUsed: l.seatsUsed == null ? null : Math.max(0, Number(l.seatsUsed) || 0),
+    externalId: l.externalId || null
   };
 }
 
@@ -49,7 +60,12 @@ export async function licenseDocFromBody(db, body, base = {}) {
   const doc = { ...base };
   if (body.name !== undefined) doc.name = String(body.name || '').trim();
   if (body.vendor !== undefined) doc.vendor = String(body.vendor || '').trim();
-  if (body.category !== undefined) doc.category = String(body.category || '').trim();
+  // Kategoria: słownik (patrz access-dicts). Zachowujemy jednak stare, niesłownikowe
+  // wartości (fallback do surowej), żeby migracja UI na select nie wyzerowała danych.
+  if (body.category !== undefined) {
+    const raw = String(body.category || '').trim();
+    doc.category = pickFromDict(CATEGORY, raw, raw);
+  }
   if (body.costAmount !== undefined) doc.costAmount = Math.max(0, Number(body.costAmount) || 0);
   if (body.costCycle !== undefined) doc.costCycle = body.costCycle === 'yearly' ? 'yearly' : 'monthly';
   if (body.seats !== undefined) doc.seats = body.seats === '' || body.seats == null ? null : Math.max(0, Number(body.seats) || 0);
@@ -68,5 +84,18 @@ export async function licenseDocFromBody(db, body, base = {}) {
   if (body.panelUrl !== undefined) doc.panelUrl = String(body.panelUrl || '').trim();
   if (body.passwordLocation !== undefined) doc.passwordLocation = String(body.passwordLocation || '').trim();
   if (body.notes !== undefined) doc.notes = String(body.notes || '').trim();
+  // === Mapa dostępów ===
+  // Referencje przez identyfikator (nie nazwę) — przetrwają zmianę nazwy konta/marki.
+  if (body.identityId !== undefined) doc.identityId = toObjectIdOrNull(body.identityId);
+  if (body.entityId !== undefined) doc.entityId = toObjectIdOrNull(body.entityId);
+  if (body.loginMethod !== undefined) doc.loginMethod = pickFromDict(LOGIN_METHOD, body.loginMethod, '');
+  if (body.criticality !== undefined) doc.criticality = pickFromDict(CRITICALITY, body.criticality, '');
+  if (body.mfa !== undefined) doc.mfa = pickFromDict(MFA, body.mfa, '');
+  if (body.currency !== undefined) doc.currency = CURRENCY.includes(body.currency) ? body.currency : 'PLN';
+  if (body.seatsUsed !== undefined) doc.seatsUsed = body.seatsUsed === '' || body.seatsUsed == null ? null : Math.max(0, Number(body.seatsUsed) || 0);
+  if (body.externalId !== undefined) {
+    const ext = String(body.externalId || '').trim();
+    doc.externalId = ext || null;
+  }
   return doc;
 }
