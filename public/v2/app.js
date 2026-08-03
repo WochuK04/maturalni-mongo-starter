@@ -838,30 +838,48 @@
     license: {
       eyebrow: 'Licencje', title: (ctx) => ctx.id ? 'Edytuj licencję' : 'Nowa licencja',
       hint: 'Nie zapisujemy haseł — tylko login, URL panelu i notatkę „gdzie jest hasło”.', cta: 'Zapisz',
-      onOpen: async (ctx) => { if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } } },
+      onOpen: async (ctx) => {
+        if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } }
+        await ensureAccRefs();
+      },
       fields: (ctx) => {
         const owner = '<option value="">— brak —</option>' + (state.users || []).map((u) => `<option value="${esc(u.email)}"${u.email === ctx.ownerEmail ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const idn = '<option value="">— brak —</option>' + (state.identities || []).map((i) => `<option value="${esc(i.id)}"${i.id === ctx.identityId ? ' selected' : ''}>${esc(i.address)}${i.provider ? ' · ' + esc(i.provider) : ''}</option>`).join('');
+        const ent = '<option value="">— brak —</option>' + (state.entities || []).map((e2) => `<option value="${esc(e2.id)}"${e2.id === ctx.entityId ? ' selected' : ''}>${esc(e2.name)}</option>`).join('');
         const cyc = (v) => `<option value="monthly"${(ctx.costCycle || 'monthly') === 'monthly' ? ' selected' : ''}>miesięcznie</option><option value="yearly"${ctx.costCycle === 'yearly' ? ' selected' : ''}>rocznie</option>`;
         const st = (v) => ['active', 'trial', 'cancelled'].map((s) => `<option value="${s}"${(ctx.status || 'active') === s ? ' selected' : ''}>${({ active: 'Aktywna', trial: 'Trial', cancelled: 'Anulowana' })[s]}</option>`).join('');
         return `
         <label class="field"><span>Nazwa *</span><input name="name" value="${esc(ctx.name || '')}" placeholder="np. Figma Organization"></label>
         <div class="field-2">
           <label class="field"><span>Dostawca</span><input name="vendor" value="${esc(ctx.vendor || '')}" placeholder="np. Figma Inc."></label>
-          <label class="field"><span>Kategoria</span><input name="category" value="${esc(ctx.category || '')}" placeholder="np. Design"></label>
+          <label class="field"><span>Kategoria</span><select name="category">${opts(DICT.CATEGORY, ctx.category, '— wybierz —')}</select></label>
         </div>
         <div class="field-2">
-          <label class="field"><span>Koszt (zł)</span><input name="costAmount" type="number" min="0" step="0.01" value="${ctx.costAmount != null ? ctx.costAmount : ''}" placeholder="0,00"></label>
+          <label class="field"><span>Tożsamość (konto logowania)</span><select name="identityId">${idn}</select></label>
+          <label class="field"><span>Podmiot (właściciel biznesowy)</span><select name="entityId">${ent}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Koszt</span><input name="costAmount" type="number" min="0" step="0.01" value="${ctx.costAmount != null ? ctx.costAmount : ''}" placeholder="0,00"></label>
+          <label class="field"><span>Waluta</span><select name="currency">${opts(DICT.CURRENCY, ctx.currency || 'PLN')}</select></label>
+        </div>
+        <div class="field-2">
           <label class="field"><span>Cykl</span><select name="costCycle">${cyc()}</select></label>
-        </div>
-        <div class="field-2">
-          <label class="field"><span>Stanowiska</span><input name="seats" type="number" min="0" step="1" value="${ctx.seats != null ? ctx.seats : ''}" placeholder="np. 5"></label>
           <label class="field"><span>Data odnowienia</span><input name="renewalDate" type="date" value="${esc((ctx.renewalDate || '').slice(0, 10))}"></label>
         </div>
         <div class="field-2">
-          <label class="field"><span>Status</span><select name="status">${st()}</select></label>
-          <label class="field"><span>Właściciel</span><select name="ownerEmail">${owner}</select></label>
+          <label class="field"><span>Stanowiska (wykupione)</span><input name="seats" type="number" min="0" step="1" value="${ctx.seats != null ? ctx.seats : ''}" placeholder="np. 5"></label>
+          <label class="field"><span>Stanowiska (używane)</span><input name="seatsUsed" type="number" min="0" step="1" value="${ctx.seatsUsed != null ? ctx.seatsUsed : ''}" placeholder="np. 3"></label>
         </div>
-        <label class="field"><span>Używają (osoby/zespół, po przecinku)</span><input name="assignedTo" value="${esc((ctx.assignedTo || []).join(', '))}" placeholder="np. Kinga, Michał, Design"></label>
+        <div class="field-2">
+          <label class="field"><span>Krytyczność</span><select name="criticality">${opts(DICT.CRITICALITY, ctx.criticality, '— nie ustawiono —')}</select></label>
+          <label class="field"><span>MFA</span><select name="mfa">${opts(DICT.MFA, ctx.mfa, '— nie ustawiono —')}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Status</span><select name="status">${st()}</select></label>
+          <label class="field"><span>Metoda logowania</span><select name="loginMethod">${opts(DICT.LOGIN_METHOD, ctx.loginMethod, '— nie ustawiono —')}</select></label>
+        </div>
+        <label class="field"><span>Właściciel biznesowy</span><select name="ownerEmail">${owner}</select></label>
+        <p class="hint" style="margin:2px 0 0;">Kto ma dostęp — zarządzasz w zakładce „Dostępy", nie tutaj.</p>
         <div class="field-2">
           <label class="field"><span>Login</span><input name="loginUsername" value="${esc(ctx.loginUsername || '')}" placeholder="np. billing@firma.pl"></label>
           <label class="field"><span>URL panelu</span><input name="panelUrl" value="${esc(ctx.panelUrl || '')}" placeholder="https://…"></label>
@@ -874,6 +892,79 @@
         if (ctx.id) await api('/licenses/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
         else await api('/licenses', { method: 'POST', body: JSON.stringify(data) });
         toast('Zapisano licencję.'); state.lic = null; loadLicencje(); refreshLicenseCounts();
+      }
+    },
+    identity: {
+      eyebrow: 'Mapa dostępów', title: (ctx) => ctx.id ? 'Edytuj tożsamość' : 'Nowa tożsamość',
+      hint: 'Konto, KTÓRYM się logujemy. Nie zapisujemy sekretów — tylko lokalizację kodów i flagi.', cta: 'Zapisz',
+      onOpen: async (ctx) => {
+        if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } }
+        if (!state.entities) { try { state.entities = await api('/entities'); } catch (_) { state.entities = []; } }
+      },
+      fields: (ctx) => {
+        const owner = '<option value="">— brak —</option>' + (state.users || []).map((u) => `<option value="${esc(u.email)}"${u.email === ctx.ownerEmail ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const ent = '<option value="">— brak —</option>' + (state.entities || []).map((e2) => `<option value="${esc(e2.id)}"${e2.id === ctx.entityId ? ' selected' : ''}>${esc(e2.name)}</option>`).join('');
+        const boolSel = (name, val) => `<select name="${name}"><option value=""${val ? '' : ' selected'}>Nie</option><option value="true"${val ? ' selected' : ''}>Tak</option></select>`;
+        return `
+        <label class="field"><span>Adres / login *</span><input name="address" value="${esc(ctx.address || '')}" placeholder="np. biuro@maturalni.com"></label>
+        <div class="field-2">
+          <label class="field"><span>Dostawca</span><select name="provider">${opts(DICT.PROVIDER, ctx.provider, '— wybierz —')}</select></label>
+          <label class="field"><span>Typ</span><select name="type">${opts(DICT.IDENTITY_TYPE, ctx.type, '— wybierz —')}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Właściciel</span><select name="ownerEmail">${owner}</select></label>
+          <label class="field"><span>Podmiot</span><select name="entityId">${ent}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>MFA</span><select name="mfa">${opts(DICT.MFA, ctx.mfa, '— nie ustawiono —')}</select></label>
+          <label class="field"><span>Krytyczność</span><select name="criticality">${opts(DICT.CRITICALITY, ctx.criticality, '— nie ustawiono —')}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>MFA wymuszone?</span>${boolSel('mfaEnforced', ctx.mfaEnforced)}</label>
+          <label class="field"><span>Ustawiono telefon odzyskiwania?</span>${boolSel('recoveryPhoneSet', ctx.recoveryPhoneSet)}</label>
+        </div>
+        <label class="field"><span>E-mail odzyskiwania</span><input name="recoveryEmail" value="${esc(ctx.recoveryEmail || '')}" placeholder="np. it@maturalni.com"></label>
+        <label class="field"><span>Gdzie są kody zapasowe</span><input name="backupCodesAt" value="${esc(ctx.backupCodesAt || '')}" placeholder="np. 1Password › Zespół (NIE same kody)"></label>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.address) throw new Error('Podaj adres / login tożsamości.');
+        if (ctx.id) await api('/identities/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/identities', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano tożsamość.'); state.identities = null; loadTozsamosci(); refreshLicenseCounts();
+      }
+    },
+    access: {
+      eyebrow: 'Mapa dostępów', title: (ctx) => ctx.id ? 'Edytuj dostęp' : 'Nowy dostęp',
+      hint: 'Kto i w jakiej roli korzysta z licencji.', cta: 'Zapisz',
+      onOpen: async (ctx) => {
+        if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } }
+        if (!state.lic) { try { state.lic = await api('/licenses'); } catch (_) { state.lic = []; } }
+      },
+      fields: (ctx) => {
+        const person = '<option value="">— wybierz —</option>' + (state.users || []).map((u) => `<option value="${esc(u.email)}"${u.email === ctx.personEmail ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+        const lic = '<option value="">— wybierz —</option>' + (state.lic || []).map((l) => `<option value="${esc(l.id)}"${l.id === ctx.licenseId ? ' selected' : ''}>${esc(l.name)}</option>`).join('');
+        return `
+        <div class="field-2">
+          <label class="field"><span>Osoba *</span><select name="personEmail">${person}</select></label>
+          <label class="field"><span>Licencja *</span><select name="licenseId">${lic}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Rola</span><select name="role">${opts(DICT.ACCESS_ROLE, ctx.role || 'Nie wiem')}</select></label>
+          <label class="field"><span>Status</span><select name="status">${opts(DICT.ACCESS_STATUS, ctx.status || 'Do weryfikacji')}</select></label>
+        </div>
+        <div class="field-2">
+          <label class="field"><span>Metoda logowania</span><select name="loginMethod">${opts(DICT.LOGIN_METHOD, ctx.loginMethod, '— nie ustawiono —')}</select></label>
+          <label class="field"><span>Nadano dnia</span><input name="grantedAt" type="date" value="${esc((ctx.grantedAt || '').slice(0, 10))}"></label>
+        </div>
+        <label class="field"><span>Notatka</span><input name="notes" value="${esc(ctx.notes || '')}" placeholder="opcjonalnie"></label>`;
+      },
+      submit: async (data, ctx) => {
+        if (!data.personEmail) throw new Error('Wskaż osobę.');
+        if (!data.licenseId) throw new Error('Wskaż licencję.');
+        if (ctx.id) await api('/accesses/' + encodeURIComponent(ctx.id), { method: 'PATCH', body: JSON.stringify(data) });
+        else await api('/accesses', { method: 'POST', body: JSON.stringify(data) });
+        toast('Zapisano dostęp.'); state.accesses = null; loadDostepy(); refreshLicenseCounts();
       }
     },
     onbStep: {
@@ -1250,25 +1341,80 @@
     return '';
   }
 
+  // ---- Mapa dostępów: słowniki (lustro src/lib/access-dicts.js) i pomocnicy ----
+  const DICT = {
+    PROVIDER: ['Google', 'Microsoft', 'Apple', 'GitHub', 'Facebook / Meta', 'SSO własne', 'E-mail + hasło', 'Inny'],
+    IDENTITY_TYPE: ['Osobowa', 'Współdzielona', 'Serwisowa / techniczna', 'Rola (alias)', 'Domena / tenant'],
+    MFA: ['Brak', 'Aplikacja TOTP', 'Klucz sprzętowy', 'Passkey', 'SMS', 'E-mail', 'Nie wiem'],
+    LOGIN_METHOD: ['Hasło', 'SSO Google', 'SSO Microsoft', 'SSO Apple', 'SSO GitHub', 'Passkey', 'Magic link', 'Klucz API', 'Nie wiem'],
+    CATEGORY: ['Poczta i produktywność', 'Marketing i social', 'Reklama płatna', 'Analityka', 'Domena / DNS / hosting', 'Dev i infrastruktura', 'Design', 'Finanse i księgowość', 'Płatności', 'HR i rekrutacja', 'Sprzedaż i CRM', 'Nauka / treści', 'AI i narzędzia', 'Automatyzacja wewnętrzna', 'Inne'],
+    CRITICALITY: ['1 – Krytyczna', '2 – Ważna', '3 – Pomocnicza'],
+    ACCESS_ROLE: ['Owner / Właściciel', 'Admin', 'Edytor', 'Członek', 'Tylko podgląd', 'Rozliczenia', 'Nie wiem'],
+    ACCESS_STATUS: ['Aktywny', 'Do odebrania', 'Do przeniesienia', 'Odebrany', 'Do weryfikacji'],
+    CURRENCY: ['PLN', 'EUR', 'USD', 'GBP']
+  };
+  // Opcje <select>; `blank` dodaje pustą pozycję „— …" na początku.
+  function opts(arr, sel, blank) {
+    const head = blank ? `<option value="">${esc(blank)}</option>` : '';
+    return head + arr.map((v) => `<option value="${esc(v)}"${String(v) === String(sel == null ? '' : sel) ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  }
+  const critChip = (c) => { const n = String(c || '').charAt(0); return n === '1' ? 'chip chip-red' : n === '2' ? 'chip chip-orange' : 'chip chip-grey'; };
+
+  // Wczytuje (raz) tożsamości i podmioty — do list wyboru w formularzach i do
+  // rozwiązywania nazw w szczegółach licencji.
+  async function ensureAccRefs() {
+    if (!state.entities) { try { state.entities = await api('/entities'); } catch (_) { state.entities = []; } }
+    if (!state.identities) { try { state.identities = await api('/identities'); } catch (_) { state.identities = []; } }
+  }
+  const identityById = (id) => (state.identities || []).find((x) => x.id === id) || null;
+  const entityById = (id) => (state.entities || []).find((x) => x.id === id) || null;
+
+  // Przełącznik zakładek „Mapy dostępów" (Licencje / Tożsamości) — wzór jak setOnbTab.
+  function setAccTab(tab) {
+    state.accTab = tab;
+    $$('[data-acc-tab]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-acc-tab') === tab));
+    $$('[data-acc-panel]').forEach((p) => (p.hidden = p.getAttribute('data-acc-panel') !== tab));
+    $$('[data-acc-add]').forEach((b) => b.classList.toggle('hidden', b.getAttribute('data-acc-add') !== tab));
+    if (tab === 'tozsamosci') loadTozsamosci();
+    if (tab === 'dostepy') loadDostepy();
+  }
+
+  const ACC_STATUS_CHIP = {
+    'Aktywny': 'chip chip-new', 'Do odebrania': 'chip chip-orange', 'Do przeniesienia': 'chip chip-blue',
+    'Odebrany': 'chip chip-grey', 'Do weryfikacji': 'chip chip-red'
+  };
+  const accStatusChip = (s) => ACC_STATUS_CHIP[s] || 'chip chip-grey';
+
   async function loadLicencje() {
+    ensureAccRefs();
     const list = $('[data-lic-list]'); const statsEl = $('[data-lic-stats]'); const sub = $('[data-lic-subtitle]');
     const render = () => {
       const items = state.lic || [];
       const live = items.filter((l) => l.status !== 'cancelled');
-      const monthly = live.reduce((s, l) => s + (l.monthlyCost || 0), 0);
       const upcoming = live.filter((l) => l.daysToRenewal != null && l.daysToRenewal >= 0 && l.daysToRenewal <= 30).length;
       const overdue = live.filter((l) => l.daysToRenewal != null && l.daysToRenewal < 0).length;
-      if (sub) sub.textContent = `${items.length} ${plural(items.length, 'licencja', 'licencje', 'licencji')} · ${fmtMoney(monthly)}/mies · ${upcoming} ${plural(upcoming, 'odnowienie', 'odnowienia', 'odnowień')} ≤30 dni`;
+      const sm = state.accSummary || {};
+      // Koszt liczony po walutach z przelicznikiem na PLN (patrz /access-map/summary);
+      // fallback do naiwnej sumy monthlyCost, gdy podsumowanie jeszcze nie dotarło.
+      const monthlyPln = sm.monthlyTotalPln != null ? sm.monthlyTotalPln : live.reduce((s, l) => s + (l.monthlyCost || 0), 0);
+      const yearlyPln = sm.yearlyTotalPln != null ? sm.yearlyTotalPln : monthlyPln * 12;
+      const curNote = sm.byCurrency ? Object.entries(sm.byCurrency).map(([c, v]) => `${fmtInt(v.count)}×${c}`).join(' · ') : `${live.length} aktywnych`;
+      const noIdn = sm.licensesWithoutIdentity || 0;
+      const toRevoke = sm.accessesToRevoke || 0;
+      const critNoMfa = sm.criticalWithoutMfa || 0;
+      if (sub) sub.textContent = `${items.length} ${plural(items.length, 'licencja', 'licencje', 'licencji')} · ${fmtMoney(yearlyPln)}/rok (PLN) · ${upcoming} ${plural(upcoming, 'odnowienie', 'odnowienia', 'odnowień')} ≤30 dni`;
       if (statsEl) statsEl.innerHTML = `<div class="stat-row">
-        <div class="stat"><div class="k">Koszt miesięczny</div><div class="v" style="color:#1B7A4F;">${esc(fmtMoney(monthly))}</div><div class="s">${live.length} aktywnych</div></div>
-        <div class="stat"><div class="k">Koszt roczny</div><div class="v">${esc(fmtMoney(monthly * 12))}</div><div class="s">szacunkowo</div></div>
+        <div class="stat"><div class="k">Koszt roczny (PLN)</div><div class="v" style="color:#1B7A4F;">${esc(fmtMoney(yearlyPln))}</div><div class="s">${esc(curNote)}</div></div>
+        <div class="stat"><div class="k">Koszt miesięczny (PLN)</div><div class="v">${esc(fmtMoney(monthlyPln))}</div><div class="s">po przeliczeniu</div></div>
         <div class="stat"><div class="k">Odnowienia ≤30 dni</div><div class="v" style="color:${upcoming ? '#E57200' : '#0C1C44'};">${fmtInt(upcoming)}</div><div class="s">${overdue ? overdue + ' po terminie' : 'na czas'}</div></div>
-        <div class="stat"><div class="k">Wszystkich</div><div class="v">${fmtInt(items.length)}</div><div class="s">w rejestrze</div></div>
+        <div class="stat"><div class="k">Licencje bez tożsamości</div><div class="v" style="color:${noIdn ? '#C0392B' : '#0C1C44'};">${fmtInt(noIdn)}</div><div class="s">brak konta logowania</div></div>
+        <div class="stat"><div class="k">Dostępy „Do odebrania”</div><div class="v" style="color:${toRevoke ? '#E57200' : '#0C1C44'};">${fmtInt(toRevoke)}</div><div class="s">do rozliczenia</div></div>
+        <div class="stat"><div class="k">Krytyczne bez MFA</div><div class="v" style="color:${critNoMfa ? '#C0392B' : '#0C1C44'};">${fmtInt(critNoMfa)}</div><div class="s">ryzyko przejęcia</div></div>
       </div>`;
       if (!items.length) { list.innerHTML = emptyBlock('Brak licencji', 'Dodaj pierwszą subskrypcję przyciskiem „Dodaj licencję”.'); return; }
       list.innerHTML = items.map((l) => {
         const sub2 = [l.vendor, l.category].filter(Boolean).join(' · ');
-        const cost = `${fmtMoney(l.costAmount)} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}`;
+        const cost = `${fmtCur(l.costAmount, l.currency)} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}`;
         return `<div class="row-card">
           <span class="row-mono" style="background:#E7F6EF;color:#1B7A4F;">${esc(initials(l.name))}</span>
           <div class="row-main"><div class="n">${esc(l.name)}</div><div class="s">${esc(sub2 || '—')}</div></div>
@@ -1283,9 +1429,12 @@
           </div></div>`;
       }).join('');
     };
-    if (state.lic) { render(); return; }
+    // Podsumowanie (koszty PLN + liczniki ryzyka) pobieramy zawsze świeże, bo zmienia
+    // się przy edycji dostępów/tożsamości w innych zakładkach. render() jest idempotentny.
+    const loadSummary = () => api('/access-map/summary').then((s) => { state.accSummary = s; render(); }).catch(() => {});
+    if (state.lic) { render(); loadSummary(); return; }
     list.innerHTML = '<div class="loading">Ładowanie…</div>';
-    try { state.lic = await api('/licenses'); render(); }
+    try { state.lic = await api('/licenses'); render(); loadSummary(); }
     catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
   }
 
@@ -1293,7 +1442,8 @@
     const l = (state.lic || []).find((x) => x.id === id); if (!l) return;
     const wrap = $('#drawer-wrap'); const box = $('#drawer');
     wrap.classList.remove('hidden');
-    const assigned = (l.assignedTo || []).map((a) => `<span class="chip chip-blue">${esc(a)}</span>`).join('') || '<span class="eq-sub">—</span>';
+    const identity = identityById(l.identityId);
+    const entity = entityById(l.entityId);
     const link = l.panelUrl ? `<a href="${esc(l.panelUrl)}" target="_blank" rel="noopener" style="color:#3F5FBE;word-break:break-all;">${esc(l.panelUrl)}</a>` : '—';
     box.innerHTML = `
       <div class="drawer-head"><div class="tags"><span class="${licStatusChip(l.status)}">${esc(LIC_STATUS[l.status] || l.status)}</span>${l.category ? `<span class="chip chip-grey">${esc(l.category)}</span>` : ''}</div>
@@ -1302,8 +1452,8 @@
         <h2>${esc(l.name)}</h2>
         <p class="sub">${esc(l.vendor || '—')}</p>
         <div class="kv-grid">
-          <div class="kv"><div class="k">Koszt</div><div class="v">${esc(fmtMoney(l.costAmount))} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}</div></div>
-          <div class="kv"><div class="k">Miesięcznie</div><div class="v">${esc(fmtMoney(l.monthlyCost))}</div></div>
+          <div class="kv"><div class="k">Koszt</div><div class="v">${esc(fmtCur(l.costAmount, l.currency))} / ${l.costCycle === 'yearly' ? 'rok' : 'mies'}</div></div>
+          <div class="kv"><div class="k">Miesięcznie</div><div class="v">${esc(fmtCur(l.monthlyCost, l.currency))}</div></div>
           <div class="kv"><div class="k">Stanowiska</div><div class="v">${l.seats != null ? fmtInt(l.seats) : '—'}</div></div>
           <div class="kv"><div class="k">Odnowienie</div><div class="v">${esc(fmtDay(l.renewalDate) || '—')}</div></div>
         </div>
@@ -1312,10 +1462,13 @@
         <div class="kv" style="margin-bottom:10px;"><div class="k">Login</div><div class="v" style="font-family:ui-monospace,monospace;">${esc(l.loginUsername || '—')}</div></div>
         <div class="kv" style="margin-bottom:10px;"><div class="k">Panel</div><div class="v">${link}</div></div>
         <div class="kv" style="margin-bottom:18px;"><div class="k">Gdzie hasło</div><div class="v">${esc(l.passwordLocation || '—')}</div></div>
-        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Właściciel</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Mapa dostępów</div>
+        <div class="kv" style="margin-bottom:10px;"><div class="k">Tożsamość</div><div class="v">${esc(identity ? identity.address : '—')}</div></div>
+        <div class="kv" style="margin-bottom:10px;"><div class="k">Podmiot</div><div class="v">${esc(entity ? entity.name : '—')}</div></div>
+        <div class="kv" style="margin-bottom:10px;"><div class="k">Krytyczność</div><div class="v">${l.criticality ? `<span class="${critChip(l.criticality)}">${esc(l.criticality)}</span>` : '—'}</div></div>
+        <div class="kv" style="margin-bottom:18px;"><div class="k">MFA</div><div class="v">${esc(l.mfa || '—')}</div></div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Właściciel biznesowy</div>
         <p class="sub" style="margin-bottom:14px;">${esc(l.ownerName || l.ownerEmail || '—')}</p>
-        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Używają</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">${assigned}</div>
         ${l.notes ? `<div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:6px;">Notatka</div><p class="sub">${esc(l.notes)}</p>` : ''}
       </div>
       <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-lic-edit="${esc(l.id)}">Edytuj</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
@@ -1324,6 +1477,136 @@
   function delLicense(id) {
     if (!confirm('Usunąć licencję z rejestru?')) return;
     api('/licenses/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.lic = null; loadLicencje(); refreshLicenseCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Tożsamości
+  async function loadTozsamosci() {
+    const list = $('[data-idn-list]'); if (!list) return;
+    if (!state.identities) list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      await ensureAccRefs();
+      const items = state.identities || [];
+      if (!items.length) { list.innerHTML = emptyBlock('Brak tożsamości', 'Dodaj pierwsze konto logowania przyciskiem „Dodaj tożsamość”.'); return; }
+      list.innerHTML = items.map((i) => {
+        const meta = [i.provider, i.type, entityById(i.entityId) && entityById(i.entityId).name].filter(Boolean).join(' · ');
+        const dep = i.dependentLicenses || 0;
+        return `<div class="row-card">
+          <span class="row-mono" style="background:#EFE9FB;color:#5B3FBE;">${esc(initials(i.address))}</span>
+          <div class="row-main"><div class="n">${esc(i.address)}</div><div class="s">${esc(meta || '—')}${i.ownerName ? ' · właściciel: ' + esc(i.ownerName) : ''}</div></div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:130px;">
+            <span style="font-size:14px;font-weight:600;color:var(--ink);">${dep} ${plural(dep, 'licencja', 'licencje', 'licencji')}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">${i.criticality ? `<span class="${critChip(i.criticality)}">${esc(i.criticality)}</span>` : ''}${i.mfa && i.mfa !== 'Brak' ? '' : '<span class="chip chip-red">Bez MFA</span>'}</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-ghost btn-sm" data-idn-detail="${esc(i.id)}">Zasięg awarii</button>
+            <button class="btn btn-ghost btn-sm" data-idn-edit="${esc(i.id)}">Edytuj</button>
+            <button class="btn btn-danger-ghost btn-sm" data-idn-del="${esc(i.id)}">Usuń</button>
+          </div></div>`;
+      }).join('');
+    } catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  // „Co przestanie działać, gdy padnie to konto" — licencje zależne + osoby z dostępem.
+  async function openIdentityDetail(id) {
+    const wrap = $('#drawer-wrap'); const box = $('#drawer');
+    wrap.classList.remove('hidden');
+    box.innerHTML = '<div class="drawer-body"><div class="loading">Ładowanie…</div></div>';
+    let d;
+    try { d = await api('/identities/' + encodeURIComponent(id) + '/blast-radius'); }
+    catch (e) { box.innerHTML = `<div class="drawer-body">${emptyBlock('Nie udało się wczytać', e.message || '')}</div>`; return; }
+    const i = d.identity;
+    const licRows = d.licenses.length
+      ? d.licenses.map((l) => `<div class="row-card"><div class="row-main"><div class="n">${esc(l.name)}</div><div class="s">${esc([l.vendor, l.category].filter(Boolean).join(' · ') || '—')}</div></div>${l.criticality ? `<span class="${critChip(l.criticality)}">${esc(l.criticality)}</span>` : ''}</div>`).join('')
+      : '<p class="sub">Żadna licencja nie zależy od tej tożsamości.</p>';
+    const people = d.accesses.length
+      ? '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + [...new Map(d.accesses.map((a) => [a.personEmail, a])).values()].map((a) => `<span class="chip chip-blue">${esc(a.personName || a.personEmail)}</span>`).join('') + '</div>'
+      : '<p class="sub">—</p>';
+    box.innerHTML = `
+      <div class="drawer-head"><div class="tags">${i.criticality ? `<span class="${critChip(i.criticality)}">${esc(i.criticality)}</span>` : ''}${i.provider ? `<span class="chip chip-grey">${esc(i.provider)}</span>` : ''}</div>
+        <button class="x-btn" data-close-drawer><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="drawer-body">
+        <h2>${esc(i.address)}</h2>
+        <p class="sub">${esc([i.type, entityById(i.entityId) && entityById(i.entityId).name].filter(Boolean).join(' · ') || '—')}</p>
+        <div class="kv-grid">
+          <div class="kv"><div class="k">Właściciel</div><div class="v">${esc(i.ownerName || i.ownerEmail || '—')}</div></div>
+          <div class="kv"><div class="k">MFA</div><div class="v">${esc(i.mfa || '—')}${i.mfaEnforced ? ' (wymuszone)' : ''}</div></div>
+          <div class="kv"><div class="k">Kody zapasowe</div><div class="v">${esc(i.backupCodesAt || '—')}</div></div>
+          <div class="kv"><div class="k">Telefon odzysk.</div><div class="v">${i.recoveryPhoneSet ? 'ustawiony' : '—'}</div></div>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin:4px 0 8px;">Zależne licencje (${d.licenseCount})</div>
+        <div class="stack" style="margin-bottom:16px;">${licRows}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Osoby z dostępem (${d.peopleCount})</div>
+        ${people}
+        ${i.notes ? `<div style="font-size:13px;font-weight:600;color:var(--ink);margin:16px 0 6px;">Notatka</div><p class="sub">${esc(i.notes)}</p>` : ''}
+      </div>
+      <div class="drawer-foot"><button class="btn btn-primary" style="flex:1;" data-idn-edit="${esc(i.id)}">Edytuj</button><button class="btn btn-ghost" data-close-drawer>Zamknij</button></div>`;
+  }
+
+  function delIdentity(id) {
+    if (!confirm('Usunąć tożsamość?')) return;
+    api('/identities/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.identities = null; loadTozsamosci(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
+  }
+
+  // -------------------------------------------------------------- Dostępy
+  state.accFilters = state.accFilters || { personEmail: '', licenseId: '', status: '' };
+
+  async function loadDostepy() {
+    const filtersEl = $('[data-acc-filters]'); const list = $('[data-acc-list]');
+    if (!list) return;
+    list.innerHTML = '<div class="loading">Ładowanie…</div>';
+    try {
+      if (!state.users) { try { state.users = await api('/users'); } catch (_) { state.users = []; } }
+      if (!state.lic) { try { state.lic = await api('/licenses'); } catch (_) { state.lic = []; } }
+      const f = state.accFilters;
+      const qs = new URLSearchParams();
+      if (f.personEmail) qs.set('personEmail', f.personEmail);
+      if (f.licenseId) qs.set('licenseId', f.licenseId);
+      if (f.status) qs.set('status', f.status);
+      const items = await api('/accesses' + (qs.toString() ? '?' + qs.toString() : ''));
+      state.accesses = items;
+
+      const personOpts = '<option value="">Wszystkie osoby</option>' + (state.users || []).map((u) => `<option value="${esc(u.email)}"${u.email === f.personEmail ? ' selected' : ''}>${esc(u.fullName)}</option>`).join('');
+      const licOpts = '<option value="">Wszystkie licencje</option>' + (state.lic || []).map((l) => `<option value="${esc(l.id)}"${l.id === f.licenseId ? ' selected' : ''}>${esc(l.name)}</option>`).join('');
+      filtersEl.innerHTML = `<div class="acc-toolbar" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:16px;">
+        <label class="field" style="min-width:180px;"><span>Osoba</span><select data-acc-filter="personEmail">${personOpts}</select></label>
+        <label class="field" style="min-width:180px;"><span>Licencja</span><select data-acc-filter="licenseId">${licOpts}</select></label>
+        <label class="field" style="min-width:160px;"><span>Status</span><select data-acc-filter="status">${opts(DICT.ACCESS_STATUS, f.status, 'Wszystkie statusy')}</select></label>
+        <div style="flex:1;"></div>
+        <div class="acc-bulk" style="display:flex;gap:8px;align-items:end;">
+          <label class="field" style="min-width:170px;"><span>Akcja masowa (zaznaczone)</span><select data-acc-bulk-status>${opts(DICT.ACCESS_STATUS, '', 'Ustaw status…')}</select></label>
+          <button class="btn btn-ghost" data-acc-bulk-apply>Zastosuj</button>
+        </div>
+      </div>`;
+
+      if (!items.length) { list.innerHTML = emptyBlock('Brak dostępów', 'Dodaj dostęp przyciskiem „Dodaj dostęp” albo zmień filtry.'); return; }
+      list.innerHTML = `<div class="row-card" style="background:transparent;border:none;padding:4px 14px;">
+          <label class="acc-check" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);"><input type="checkbox" data-acc-selall> Zaznacz wszystkie (${items.length})</label>
+        </div>` + items.map((a) => `<div class="row-card">
+          <input type="checkbox" data-acc-check="${esc(a.id)}" style="width:17px;height:17px;flex:none;">
+          <div class="row-main"><div class="n">${esc(a.personName || a.personEmail)}</div><div class="s">${esc(a.licenseName || '—')}${a.role ? ' · ' + esc(a.role) : ''}</div></div>
+          <span class="${accStatusChip(a.status)}">${esc(a.status)}</span>
+          <div class="row-actions">
+            <button class="btn btn-ghost btn-sm" data-acc-edit="${esc(a.id)}">Edytuj</button>
+            <button class="btn btn-danger-ghost btn-sm" data-acc-del="${esc(a.id)}">Usuń</button>
+          </div></div>`).join('');
+    } catch (e) { list.innerHTML = emptyBlock('Nie udało się wczytać', e.message || ''); }
+  }
+
+  async function applyAccBulk() {
+    const status = ($('[data-acc-bulk-status]') || {}).value || '';
+    if (!status) { toast('Wybierz status akcji masowej.', true); return; }
+    const ids = $$('[data-acc-check]:checked').map((el) => el.getAttribute('data-acc-check'));
+    if (!ids.length) { toast('Zaznacz co najmniej jeden dostęp.', true); return; }
+    try {
+      const r = await api('/accesses/bulk-status', { method: 'POST', body: JSON.stringify({ ids, status }) });
+      toast(`Zmieniono ${r.modified} ${plural(r.modified, 'dostęp', 'dostępy', 'dostępów')}.`);
+      state.accesses = null; loadDostepy(); refreshLicenseCounts();
+    } catch (e) { toast(e.message || 'Nie udało się.', true); }
+  }
+
+  function delAccess(id) {
+    if (!confirm('Usunąć dostęp?')) return;
+    api('/accesses/' + encodeURIComponent(id), { method: 'DELETE' }).then(() => { toast('Usunięto.'); state.accesses = null; loadDostepy(); refreshLicenseCounts(); }).catch((e) => toast(e.message || 'Nie udało się.', true));
   }
 
   // -------------------------------------------------------------- Onboarding
@@ -1577,6 +1860,13 @@
   }
   function fmtInt(n) { return Number(n || 0).toLocaleString('pl-PL'); }
   function fmtMoney(n) { return Number(n || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' zł'; }
+  // Kwota w walucie licencji (PLN → „zł", inne → kod waluty). Kafle zbiorcze używają
+  // fmtMoney (są już w PLN po przeliczeniu); pojedyncza licencja — swojej waluty.
+  function fmtCur(n, cur) {
+    const c = cur || 'PLN';
+    if (c === 'PLN') return fmtMoney(n);
+    return Number(n || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + c;
+  }
   function fmtDay(v) {
     if (!v) return '';
     const d = new Date(v); if (isNaN(d)) return '';
@@ -2307,11 +2597,26 @@
     box.innerHTML = '<div class="loading">Ładowanie…</div>';
     api('/admin/offboarding/' + encodeURIComponent(email)).then((d) => {
       const row = (label, meta) => `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);"><span style="color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span><span style="color:var(--muted);flex-shrink:0;">${esc(meta || '')}</span></div>`;
+      // Checklista realnych dostępów (osoba × licencja): odhaczenie zmienia status
+      // pojedynczego dostępu na „Odebrany" (PATCH), niezależnie od finalnego „Zakończ".
+      const mapAcc = d.mapAccesses || [];
+      const accChecklist = mapAcc.length ? `<div style="margin-bottom:18px;">
+        <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:8px;">Dostępy do odebrania <span class="eq-sub">(${mapAcc.length})</span></div>
+        <div style="display:flex;flex-direction:column;gap:2px;">${mapAcc.map((a) => {
+          const done = a.status === 'Odebrany';
+          return `<label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line);cursor:${done ? 'default' : 'pointer'};">
+            <input type="checkbox" data-offb-acc="${esc(a.id)}" ${done ? 'checked disabled' : ''} style="width:16px;height:16px;flex:none;">
+            <span style="flex:1;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.licenseName || '—')} <span class="eq-sub">· ${esc(a.role || 'Nie wiem')}</span></span>
+            <span class="${accStatusChip(a.status)}" data-offb-acc-chip="${esc(a.id)}">${esc(a.status)}</span>
+          </label>`;
+        }).join('')}</div></div>` : '';
       const sections = [
         offbSection('Sprzęt (wypożyczenia)', d.loans, (l) => row(`${l.itemCode} · ${l.itemName || ''}`, `${l.quantity} szt.`)),
         offbSection('Sprzęt przypisany na sztywno', d.legacyItems, (it) => row(`${it.itemCode} · ${it.name || ''}`, '')),
         offbSection('Licencje (miejsca)', d.seats, (l) => row(l.name, '')),
-        offbSection('Licencje (właściciel)', d.owned, (l) => row(l.name, 'zwolnimy właściciela')),
+        offbSection('Licencje (właściciel biznesowy)', d.owned, (l) => row(l.name, 'zwolnimy właściciela')),
+        accChecklist,
+        offbSection('Tożsamości — przenieś własność', d.ownedIdentities || [], (i) => row(i.address, 'wymaga przeniesienia')),
         offbSection('Przyznane dostępy (onboarding)', d.accesses, (a) => row(a.title, a.state === 'confirmed' ? 'potwierdzony' : 'przyznany'))
       ].filter(Boolean).join('');
       const clean = d.total === 0;
@@ -2325,7 +2630,7 @@
           <p class="sub">${esc(d.user.email)} · ${esc(ROLE_LABELS[d.user.role] || d.user.role)}</p>
           ${clean
             ? emptyBlock('Nic do uporządkowania', 'Ta osoba nie trzyma sprzętu, licencji ani dostępów.')
-            : `<p style="font-size:13px;color:var(--muted);margin:0 0 16px;">Zakończenie odda sprzęt do magazynu, zdejmie osobę z licencji, cofnie dostępy i dezaktywuje konto.</p>${sections}`}
+            : `<p style="font-size:13px;color:var(--muted);margin:0 0 16px;">Zakończenie odda sprzęt do magazynu, zdejmie osobę z licencji, oznaczy dostępy jako „Odebrany" i dezaktywuje konto. Tożsamości, których jest właścicielem, wymagają ręcznego przeniesienia własności — nie są usuwane.</p>${sections}`}
         </div>
         <div class="drawer-foot">
           <button class="btn btn-danger" style="flex:1;" data-offb-finish="${esc(d.user.email)}">Zakończ off-boarding</button>
@@ -2338,7 +2643,8 @@
     api('/admin/offboarding/' + encodeURIComponent(email) + '/finish', { method: 'POST', body: JSON.stringify({}) })
       .then((r) => {
         const s = (r && r.summary) || {};
-        toast(`Off-boarding zakończony (oddano ${s.loansReturned || 0} szt., cofnięto ${s.accessesRevoked || 0} dostępów).`);
+        const idn = s.identitiesToTransfer || 0;
+        toast(`Off-boarding zakończony (oddano ${s.loansReturned || 0} szt., odebrano ${s.mapAccessesRevoked || 0} dostępów${idn ? `, ${idn} tożsamości do przeniesienia` : ''}).`);
         closeDrawer(); loadUsers();
       })
       .catch((e) => toast(e.message || 'Nie udało się.', true));
@@ -2789,7 +3095,7 @@
 
   // -------------------------------------------------------------- global events
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-user-offboard],[data-offb-finish],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-invoice],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
+    const t = e.target.closest('[data-go],[data-view],[data-sheet],[data-detail],[data-request],[data-transfer],[data-report],[data-return],[data-req-act],[data-req-cancel],[data-cmt-send],[data-notif-resolve],[data-sec-toggle],[data-rej-tab],[data-rej-csv],[data-user-new],[data-user-del],[data-user-offboard],[data-offb-finish],[data-close-drawer],[data-close-sheet],[data-soon],#sheetSubmit,[data-stop],[data-mag-tab],[data-mag-optab],[data-mag-report],[data-mag-op],[data-mag-csv],[data-mag-new-op],[data-mag-config-add],[data-op-addline],[data-op-delline],[data-op-save],[data-op-validate],[data-op-cancel],[data-op-reverse],[data-sup-edit],[data-sup-del],[data-loc-edit],[data-loc-del],[data-lic-new],[data-lic-detail],[data-lic-edit],[data-lic-del],[data-acc-tab],[data-acc-new],[data-acc-edit],[data-acc-del],[data-acc-bulk-apply],[data-idn-new],[data-idn-detail],[data-idn-edit],[data-idn-del],[data-onb-new],[data-onb-toggle],[data-onb-edit],[data-onb-del],[data-onb-tab],[data-onb-request],[data-onb-confirm],[data-onb-unconfirm],[data-onb-grant],[data-onb-revoke],[data-onb-start],[data-onb-finish],[data-theme-opt],[data-pref-toggle],[data-tw-new],[data-tw-edit],[data-tw-del],[data-twp-new],[data-twp-edit],[data-twp-del],[data-tw-return-mode],[data-ai-invoice],[data-ai-new],[data-ai-edit],[data-ai-transfer],[data-ai-discard],[data-ai-import],[data-ai-export],[data-rr-new],[data-rr-edit],[data-rr-del],[data-rr-replenish],[data-prod-new],[data-prod-edit],[data-prod-import],[data-batch-add],[data-batch-del],[data-prod-save],[data-health-recompute],[data-op-pdf],[data-dst-edit],[data-dst-del],[data-period-apply],[data-period-csv]');
     if (!t) return;
 
     if (t.hasAttribute('data-rr-new')) { openSheet('reorderRule', {}); return; }
@@ -2820,6 +3126,15 @@
     if (t.hasAttribute('data-lic-detail')) { openLicenseDetail(t.getAttribute('data-lic-detail')); return; }
     if (t.hasAttribute('data-lic-edit')) { const l = (state.lic || []).find((x) => x.id === t.getAttribute('data-lic-edit')); openSheet('license', l || {}); return; }
     if (t.hasAttribute('data-lic-del')) { delLicense(t.getAttribute('data-lic-del')); return; }
+    if (t.hasAttribute('data-acc-tab')) { setAccTab(t.getAttribute('data-acc-tab')); return; }
+    if (t.hasAttribute('data-acc-new')) { openSheet('access', {}); return; }
+    if (t.hasAttribute('data-acc-edit')) { const a = (state.accesses || []).find((x) => x.id === t.getAttribute('data-acc-edit')); openSheet('access', a || {}); return; }
+    if (t.hasAttribute('data-acc-del')) { delAccess(t.getAttribute('data-acc-del')); return; }
+    if (t.hasAttribute('data-acc-bulk-apply')) { applyAccBulk(); return; }
+    if (t.hasAttribute('data-idn-new')) { openSheet('identity', {}); return; }
+    if (t.hasAttribute('data-idn-detail')) { openIdentityDetail(t.getAttribute('data-idn-detail')); return; }
+    if (t.hasAttribute('data-idn-edit')) { const i = (state.identities || []).find((x) => x.id === t.getAttribute('data-idn-edit')); openSheet('identity', i || {}); return; }
+    if (t.hasAttribute('data-idn-del')) { delIdentity(t.getAttribute('data-idn-del')); return; }
     if (t.hasAttribute('data-onb-new')) { openSheet('onbStep', {}); return; }
     if (t.hasAttribute('data-onb-toggle')) { toggleStep(t.getAttribute('data-onb-toggle'), t.getAttribute('data-done') === '1'); return; }
     if (t.hasAttribute('data-onb-edit')) { const s = (state.onb || []).find((x) => x.id === t.getAttribute('data-onb-edit')); openSheet('onbStep', s || {}); return; }
@@ -2906,6 +3221,27 @@
   document.addEventListener('change', (e) => {
     const inp = e.target && e.target.closest ? e.target.closest('[data-invoice-file]') : null;
     if (inp) onInvoiceFileChosen(inp);
+
+    // Filtry tabeli Dostępów → aktualizuj stan i przeładuj.
+    const filt = e.target && e.target.closest ? e.target.closest('[data-acc-filter]') : null;
+    if (filt) { state.accFilters[filt.getAttribute('data-acc-filter')] = filt.value; loadDostepy(); return; }
+    // Zaznacz/odznacz wszystkie w tabeli Dostępów.
+    const selall = e.target && e.target.closest ? e.target.closest('[data-acc-selall]') : null;
+    if (selall) { $$('[data-acc-check]').forEach((c) => (c.checked = selall.checked)); }
+
+    // Checklista off-boardingu: odhaczenie dostępu → status „Odebrany".
+    const offbAcc = e.target && e.target.closest ? e.target.closest('[data-offb-acc]') : null;
+    if (offbAcc && offbAcc.checked) {
+      const id = offbAcc.getAttribute('data-offb-acc');
+      offbAcc.disabled = true;
+      api('/accesses/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ status: 'Odebrany' }) })
+        .then(() => {
+          const chip = $(`[data-offb-acc-chip="${id}"]`);
+          if (chip) { chip.className = accStatusChip('Odebrany'); chip.textContent = 'Odebrany'; }
+          state.accesses = null; refreshLicenseCounts();
+        })
+        .catch((err) => { offbAcc.checked = false; offbAcc.disabled = false; toast(err.message || 'Nie udało się.', true); });
+    }
   });
 
   function onInvoiceFileChosen(input) {

@@ -341,13 +341,29 @@
           </div>
         </div>
         <div class="mag-hero" style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-          <div><h1>Licencje</h1><p data-lic-subtitle>Ładowanie…</p></div>
-          <button class="btn btn-primary" data-lic-new><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Dodaj licencję</button>
+          <div><h1>Mapa dostępów</h1><p data-lic-subtitle>Ładowanie…</p></div>
+          <button class="btn btn-primary" data-acc-add="licencje" data-lic-new><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Dodaj licencję</button>
+          <button class="btn btn-primary hidden" data-acc-add="dostepy" data-acc-new><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Dodaj dostęp</button>
+          <button class="btn btn-primary hidden" data-acc-add="tozsamosci" data-idn-new><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>Dodaj tożsamość</button>
         </div>
       </div>
       <div class="mag-body">
-        <div data-lic-stats></div>
-        <div class="stack" data-lic-list><div class="loading">Ładowanie…</div></div>
+        <div class="op-subtabs" style="margin-bottom:18px;">
+          <button class="op-subtab active" data-acc-tab="licencje">Licencje</button>
+          <button class="op-subtab" data-acc-tab="dostepy">Dostępy</button>
+          <button class="op-subtab" data-acc-tab="tozsamosci">Tożsamości</button>
+        </div>
+        <div data-acc-panel="licencje">
+          <div data-lic-stats></div>
+          <div class="stack" data-lic-list><div class="loading">Ładowanie…</div></div>
+        </div>
+        <div data-acc-panel="dostepy" hidden>
+          <div data-acc-filters></div>
+          <div class="stack" data-acc-list><div class="loading">Ładowanie…</div></div>
+        </div>
+        <div data-acc-panel="tozsamosci" hidden>
+          <div class="stack" data-idn-list><div class="loading">Ładowanie…</div></div>
+        </div>
       </div>
     </div>
   </section>

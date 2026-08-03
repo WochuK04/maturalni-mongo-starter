@@ -8,6 +8,8 @@
     "import:excel": "node scripts/import-excel.js",
     "backfill:emails": "node scripts/backfill-person-emails.js",
     "rename:codes": "node scripts/rename-product-codes.js",
+    "migrate:uzywaja": "node scripts/migrate-uzywaja.js",
+    "import:csv": "node scripts/import-csv.js",
     "test": "node --test --test-force-exit",
     "test:unit": "node --test test/stock.*.test.js",
     "test:int": "node --test --test-force-exit test/warehouse.*.int.test.js"

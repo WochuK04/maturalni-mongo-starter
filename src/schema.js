@@ -30,6 +30,18 @@ export const collections = {
   // (login + URL + notatka „gdzie hasło" — haseł NIE trzymamy w bazie).
   licenses: 'licenses',
 
+  // === Mapa dostępów ===
+  // Podmioty / marki (maturalni.com, korki.pl, …) — właściciel biznesowy licencji.
+  entities: 'entities',
+  // Tożsamości: konta, KTÓRYMI się logujemy (nie usługi, DO których). Brakujące
+  // ogniwo modelu — odpowiada na „co przestanie działać, gdy padnie to konto".
+  // NIE trzymamy sekretów: `backupCodesAt` to lokalizacja, `recoveryPhoneSet` to flaga.
+  identities: 'identities',
+  // Dostępy: tabela łącząca użytkownik (email) × licencja. Zastępuje pole „Używają".
+  accesses: 'accesses',
+  // Konfiguracja modułu (m.in. kursy walut → PLN). Jeden dokument na klucz.
+  settings: 'settings',
+
   // Onboarding: globalna lista kroków (edytowana przez admina) + postęp
   // per użytkownik (jeden dokument na parę user+krok).
   onboardingSteps: 'onboardingSteps',
@@ -71,7 +83,9 @@ export const itemShape = {
 
 export async function ensureIndexes(db) {
   await db.collection(collections.users).createIndexes([
-    { key: { email: 1 }, unique: true, name: 'uniq_user_email' }
+    { key: { email: 1 }, unique: true, name: 'uniq_user_email' },
+    // `externalId` (OS-001…) — dopasowanie przy idempotentnym imporcie z CSV.
+    { key: { externalId: 1 }, unique: true, sparse: true, name: 'uniq_user_external' }
   ]);
 
   await db.collection(collections.items).createIndexes([
@@ -189,7 +203,36 @@ export async function ensureIndexes(db) {
   // === Licencje ===
   await db.collection(collections.licenses).createIndexes([
     { key: { isActive: 1, name: 1 }, name: 'idx_licenses_active_name' },
-    { key: { renewalDate: 1 }, name: 'idx_licenses_renewal' }
+    { key: { renewalDate: 1 }, name: 'idx_licenses_renewal' },
+    // Mapa dostępów: „co zależy od tej tożsamości / podmiotu" + import po externalId.
+    { key: { identityId: 1 }, name: 'idx_licenses_identity' },
+    { key: { entityId: 1 }, name: 'idx_licenses_entity' },
+    { key: { externalId: 1 }, unique: true, sparse: true, name: 'uniq_license_external' }
+  ]);
+
+  // === Mapa dostępów ===
+
+  // Podmioty / marki. `externalId` (PD-01…) do idempotentnego importu z CSV.
+  await db.collection(collections.entities).createIndexes([
+    { key: { name: 1 }, unique: true, name: 'uniq_entity_name' },
+    { key: { externalId: 1 }, unique: true, sparse: true, name: 'uniq_entity_external' }
+  ]);
+
+  // Tożsamości (konta logowania). `address` = adres/login konta (biuro@…), unikalny.
+  await db.collection(collections.identities).createIndexes([
+    { key: { address: 1 }, unique: true, name: 'uniq_identity_address' },
+    { key: { externalId: 1 }, unique: true, sparse: true, name: 'uniq_identity_external' },
+    { key: { entityId: 1 }, name: 'idx_identity_entity' },
+    { key: { ownerEmail: 1 }, name: 'idx_identity_owner' },
+    { key: { criticality: 1 }, name: 'idx_identity_criticality' }
+  ]);
+
+  // Dostępy: para (osoba, licencja) unikalna — jedna osoba ma jeden dostęp do usługi.
+  await db.collection(collections.accesses).createIndexes([
+    { key: { personEmail: 1, licenseId: 1 }, unique: true, name: 'uniq_access_person_license' },
+    { key: { status: 1 }, name: 'idx_access_status' },
+    { key: { licenseId: 1 }, name: 'idx_access_license' },
+    { key: { externalId: 1 }, unique: true, sparse: true, name: 'uniq_access_external' }
   ]);
 
   // === Onboarding ===

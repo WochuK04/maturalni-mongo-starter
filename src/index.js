@@ -20,6 +20,11 @@ import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { normalizeItemCode } from './lib/item-code.js';
 import { WAREHOUSE_ONLY_CATEGORIES, isWarehouseCategory } from './lib/categories.js';
 import { registerTurboWeekendRoutes } from './routes/turbo-weekends.js';
+import { registerEntityRoutes } from './routes/entities.js';
+import { registerIdentityRoutes } from './routes/identities.js';
+import { registerAccessRoutes } from './routes/accesses.js';
+import { personAccessHoldings } from './lib/access-queries.js';
+import { seedAccessMapDefaults } from './lib/access-seed.js';
 import { extractPdfText, extractItemsFromText } from './invoice-extract.js';
 
 const app = express();
@@ -3465,12 +3470,19 @@ async function collectOffboardingHoldings(db, email) {
   const titleById = new Map(steps.map(s => [String(s._id), s.title || '']));
   const accesses = accessProg.map(p => ({ stepId: String(p.stepId), title: titleById.get(String(p.stepId)) || '(krok)', state: p.state }));
 
+  // === Mapa dostępów ===
+  // Realne dostępy (osoba × licencja) do cofnięcia oraz tożsamości, których osoba
+  // jest właścicielem — te wymagają PRZENIESIENIA własności, nie odebrania.
+  const { accesses: mapAccesses, ownedIdentities } = await personAccessHoldings(db, email);
+
   return {
     loans: loans.map(l => ({ id: String(l._id), itemCode: l.itemCode, itemName: l.itemName || nameByCode.get(l.itemCode) || '', quantity: Number(l.quantity) || 1, borrowedAt: l.borrowedAt || null })),
     legacyItems: legacyItems.map(it => ({ itemCode: it.itemCode, name: it.name || '' })),
     seats: seats.map(l => ({ id: String(l._id), name: l.name || '' })),
     owned: owned.map(l => ({ id: String(l._id), name: l.name || '' })),
-    accesses
+    accesses,
+    mapAccesses,
+    ownedIdentities
   };
 }
 
@@ -3490,7 +3502,8 @@ app.get('/admin/offboarding/:email', requireAuth, requireAdmin, async (req, res)
       onboardingStatus: user.onboardingStatus || null
     },
     ...holdings,
-    total: holdings.loans.length + holdings.legacyItems.length + holdings.seats.length + holdings.owned.length + holdings.accesses.length
+    total: holdings.loans.length + holdings.legacyItems.length + holdings.seats.length + holdings.owned.length
+      + holdings.accesses.length + holdings.mapAccesses.length + holdings.ownedIdentities.length
   });
 });
 
@@ -3547,6 +3560,16 @@ app.post('/admin/offboarding/:email/finish', requireAuth, requireAdmin, async (r
     );
   }
 
+  // 4b. Mapa dostępów: oznacz realne dostępy osoby jako „Odebrany". Tożsamości,
+  // których jest właścicielem, ŚWIADOMIE zostawiamy — wymagają przeniesienia
+  // własności (ręcznie), nie odebrania; raportujemy je tylko w podsumowaniu.
+  if (holdings.mapAccesses.length) {
+    await db.collection(collections.accesses).updateMany(
+      { personEmail: email, status: { $ne: 'Odebrany' } },
+      { $set: { status: 'Odebrany', reviewedAt: now, updatedAt: now } }
+    );
+  }
+
   // 5. Odepnij bezpośrednich podwładnych (routing wniosków) i dezaktywuj konto.
   await db.collection(collections.users).updateMany({ managerEmail: email }, { $set: { managerEmail: null } });
   await db.collection(collections.users).updateOne(
@@ -3559,7 +3582,9 @@ app.post('/admin/offboarding/:email/finish', requireAuth, requireAdmin, async (r
     itemsUnassigned: holdings.legacyItems.length,
     licenseSeatsRemoved: holdings.seats.length,
     licensesOwnershipCleared: holdings.owned.length,
-    accessesRevoked: holdings.accesses.length
+    accessesRevoked: holdings.accesses.length,
+    mapAccessesRevoked: holdings.mapAccesses.length,
+    identitiesToTransfer: holdings.ownedIdentities.length
   };
   await db.collection(collections.auditLogs).insertOne({
     actorEmail: req.user.email, actionType: 'user_offboarded', entityType: 'user', entityId: email,
@@ -4814,6 +4839,13 @@ registerOnboardingRoutes(app);
 // Logika i trasy → src/routes/turbo-weekends.js.
 registerTurboWeekendRoutes(app);
 
+// ===================== MAPA DOSTĘPÓW =====================
+// Podmioty / tożsamości / dostępy + zapytania (zasięg awarii, bus factor, koszt,
+// sieroty). Logika → src/lib/{entities,identities,accesses,access-queries}.js.
+registerEntityRoutes(app);
+registerIdentityRoutes(app);
+registerAccessRoutes(app);
+
 let bootPromise = null;
 
 function ensureBoot() {
@@ -4821,6 +4853,10 @@ function ensureBoot() {
     bootPromise = (async () => {
       const db = await getDb();
       await ensureIndexes(db);
+
+      // Mapa dostępów: zasilenie startowe podmiotów + domyślnych kursów walut
+      // (idempotentne — tylko $setOnInsert).
+      await seedAccessMapDefaults(db);
 
       // Migracja zaszłości: wnioski sprzed dwuetapowej akceptacji ('pending')
       // traktujemy jak gotowe do realizacji przez administrację.

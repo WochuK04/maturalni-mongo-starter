@@ -1,1 +1,3 @@
 .env
+scripts/migrate-uzywaja.report.json
+qa-harness.mjs
